@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+pass() { echo "[PASS] $1"; }
+warn() { echo "[WARN] $1"; }
+fail() { echo "[FAIL] $1"; }
+
+check_cmd() {
+  local cmd="$1"
+  local label="$2"
+  if command -v "$cmd" >/dev/null 2>&1; then
+    pass "$label found ($(command -v "$cmd"))"
+    return 0
+  fi
+  fail "$label missing ($cmd)"
+  return 1
+}
+
+run_selfcheck() {
+  local ok=0
+
+  check_cmd git "Git" || ok=1
+  check_cmd xcodebuild "Xcode build tools" || ok=1
+  check_cmd xcrun "Xcode runtime tools" || ok=1
+  check_cmd swift "Swift toolchain" || ok=1
+
+  if xcodebuild -version >/dev/null 2>&1; then
+    pass "xcodebuild responds"
+  else
+    fail "xcodebuild not ready (open Xcode once and accept prompts/license)"
+    ok=1
+  fi
+
+  if xcrun --sdk macosx metal -v >/dev/null 2>&1; then
+    pass "Metal toolchain available via xcrun"
+  else
+    fail "Metal toolchain missing (run ./run setup)"
+    ok=1
+  fi
+
+  if [[ -f "/Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild" ]]; then
+    local active_dev_dir
+    active_dev_dir="$(xcode-select -p 2>/dev/null || true)"
+    if [[ "$active_dev_dir" == "/Applications/Xcode.app/Contents/Developer" ]]; then
+      pass "xcode-select points to full Xcode"
+    else
+      warn "xcode-select is '$active_dev_dir' (recommend: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer)"
+    fi
+  fi
+
+  if command -v brew >/dev/null 2>&1; then
+    pass "Homebrew found"
+  else
+    warn "Homebrew not found (optional, but recommended for project tooling)"
+  fi
+
+  if [[ $ok -ne 0 ]]; then
+    echo
+    fail "Selfcheck failed. Resolve FAIL items and rerun ./run selfcheck"
+    return 1
+  fi
+
+  echo
+  pass "Selfcheck complete"
+}
+
+subcmd="${1:-help}"
+shift || true
+
+case "$subcmd" in
+  setup)
+    echo "Running utility setup for machine provisioning..."
+    echo "Downloading Metal toolchain component (run this on M1.2 setup as requested)."
+    xcodebuild -downloadComponent MetalToolchain
+    ;;
+  selfcheck)
+    run_selfcheck
+    ;;
+  help|-h|--help)
+    cat <<'HELP'
+Utility subgroup commands:
+  ./run util setup
+  ./run util selfcheck
+  ./run util help
+
+Top-level aliases:
+  ./run setup
+  ./run selfcheck
+HELP
+    ;;
+  *)
+    echo "Unknown util subcommand: $subcmd" >&2
+    exit 1
+    ;;
+esac

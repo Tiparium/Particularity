@@ -1,0 +1,28 @@
+{
+    "window.title": "Physics_Sim",
+    "workbench.colorCustomizations": {
+        "activityBar.activeBorder": "#27B07B",
+        "activityBar.activeFocusBorder": "#27B07B",
+        "tab.activeBorderTop": "#27B07B",
+        "tab.activeBorder": "#27B07B",
+        "tab.unfocusedActiveBorderTop": "#27B07B99",
+        "tab.unfocusedActiveBorder": "#27B07B99",
+        "tab.activeModifiedBorder": "#27B07BCC",
+        "panelTitle.activeBorder": "#27B07B",
+        "sideBarSectionHeader.border": "#27B07B",
+        "sideBarTitle.border": "#27B07B",
+        "activityBarBadge.background": "#27B07B",
+        "activityBarBadge.foreground": "#FFFFFF",
+        "notificationCenterHeader.background": "#27B07B",
+        "notificationCenterHeader.foreground": "#FFFFFF",
+        "notificationLink.foreground": "#27B07B",
+        "notifications.background": "#27B07B14",
+        "notifications.border": "#27B07B66",
+        "statusBar.background": "#197250",
+        "statusBar.foreground": "#FFFFFF",
+        "statusBar.debuggingBackground": "#27B07B",
+        "statusBar.debuggingForeground": "#FFFFFF",
+        "statusBarItem.hoverBackground": "#27B07BD9",
+        "statusBar.noFolderBackground": "#197250"
+    }
+}

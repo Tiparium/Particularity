@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+subcmd="${1:-help}"
+shift || true
+
+case "$subcmd" in
+  hello_world)
+    printf "\n\n"
+    cat <<'ART'
+        ______
+       /_____/\
+      / o   o\  \
+      \  --- \  /
+       \_____\/   Crouton, The First Particle
+ART
+    printf "\n\n"
+    ;;
+  help|-h|--help)
+    cat <<'HELP'
+Core subgroup commands:
+  ./run core hello_world
+  ./run core help
+HELP
+    ;;
+  *)
+    echo "Unknown core subcommand: $subcmd" >&2
+    exit 1
+    ;;
+esac
