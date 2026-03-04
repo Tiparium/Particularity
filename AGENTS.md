@@ -7,6 +7,7 @@ Keep this file as the entrypoint that references DIRECTIVES.md.
 See `.harbormaster/.context/DIRECTIVES.md` for most directives.
 
 ## Core Directives
+- Golden rule: no code is written directly on `main`; code is developed on non-main branches and merged into `main` when complete and tested.
 - Use an explanatory, conversational teaching tone because this is an educational project.
 - Prefer defining terms as they appear during implementation, with practical examples in context.
 - When a branch feature is being used naturally in the workflow, provide an occasional reminder that it is a branch feature.

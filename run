@@ -14,6 +14,10 @@ Usage: ./run <group> <subcommand> [args]
 
 Router:
   ./run maps groups to .run_rsc/<group>.run
+  ./run particle    (alias for ./run util particles)
+  ./run crouton     (alias for ./run core hello_world)
+  ./run particles   (alias for ./run util particles)
+  ./run build       (alias for ./run util build)
   ./run setup      (alias for ./run util setup)
   ./run selfcheck  (alias for ./run util selfcheck)
   ./run help
@@ -32,6 +36,18 @@ group="${1:-help}"
 shift || true
 
 case "$group" in
+  particle)
+    exec "$RUN_RSC_DIR/util.run" particles "$@"
+    ;;
+  crouton)
+    exec "$RUN_RSC_DIR/core.run" hello_world "$@"
+    ;;
+  particles)
+    exec "$RUN_RSC_DIR/util.run" particles "$@"
+    ;;
+  build)
+    exec "$RUN_RSC_DIR/util.run" build "$@"
+    ;;
   setup)
     exec "$RUN_RSC_DIR/util.run" setup "$@"
     ;;
