@@ -12,7 +12,7 @@ case "$subcmd" in
        /_____/\
       / o   o\  \
       \  --- \  /
-       \_____\/   Crouton, The First Particle
+       \_____\/   Crouton, The First Particle, Bids You Welcome
 ART
     printf "\n\n"
     ;;

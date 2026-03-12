@@ -1,0 +1,44 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:Physics_Sim}",
+            "name": "Debug Physics_Sim",
+            "target": "Physics_Sim",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug Physics_Sim"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:Physics_Sim}",
+            "name": "Release Physics_Sim",
+            "target": "Physics_Sim",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release Physics_Sim"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:Physics_Sim}",
+            "name": "Debug Particularity",
+            "target": "Particularity",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug Particularity"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:Physics_Sim}",
+            "name": "Release Particularity",
+            "target": "Particularity",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release Particularity"
+        }
+    ]
+}

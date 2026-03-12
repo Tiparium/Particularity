@@ -1,1 +1,3 @@
 .harbormaster/
+.build/
+.home/

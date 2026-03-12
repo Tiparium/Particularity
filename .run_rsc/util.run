@@ -1,9 +1,60 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
 pass() { echo "[PASS] $1"; }
 warn() { echo "[WARN] $1"; }
 fail() { echo "[FAIL] $1"; }
+
+spinner_until_pattern_or_exit() {
+  local pid="$1"
+  local logfile="$2"
+  local pattern="$3"
+  local label="$4"
+  local i=0
+  local frames=('|' '/' '-' '\\')
+  local use_animated=0
+  if [[ -t 1 ]]; then
+    use_animated=1
+  fi
+
+  while kill -0 "$pid" 2>/dev/null; do
+    if grep -q "$pattern" "$logfile" 2>/dev/null; then
+      if [[ "$use_animated" -eq 1 ]]; then
+        printf "\r[PASS] %s%*s\n" "$label" 20 ""
+      else
+        printf "[PASS] %s\n" "$label"
+      fi
+      return 0
+    fi
+    if [[ "$use_animated" -eq 1 ]]; then
+      local frame="${frames[$((i % ${#frames[@]}))]}"
+      printf "\r[%s] %s" "$frame" "$label"
+      i=$((i + 1))
+    elif [[ "$i" -eq 0 ]]; then
+      printf "[....] %s\n" "$label"
+      i=1
+    fi
+    sleep 0.08
+  done
+
+  if grep -q "$pattern" "$logfile" 2>/dev/null; then
+    if [[ "$use_animated" -eq 1 ]]; then
+      printf "\r[PASS] %s%*s\n" "$label" 20 ""
+    else
+      printf "[PASS] %s\n" "$label"
+    fi
+    return 0
+  fi
+
+  if [[ "$use_animated" -eq 1 ]]; then
+    printf "\r[WARN] %s (process exited before ready signal)%*s\n" "$label" 10 ""
+  else
+    printf "[WARN] %s (process exited before ready signal)\n" "$label"
+  fi
+  return 1
+}
 
 check_cmd() {
   local cmd="$1"
@@ -68,6 +119,51 @@ subcmd="${1:-help}"
 shift || true
 
 case "$subcmd" in
+  particles)
+    mode="${1:-ui}"
+    if [[ "$mode" == "headless" ]]; then
+      shift || true
+      echo "[INFO] Headless mode: build-only smoke check (no GUI launch)."
+      swift build "$@"
+      pass "Headless smoke check complete"
+      exit 0
+    fi
+
+    swift build "$@"
+    tmp_log="$(mktemp)"
+    app_pid=""
+    cleanup_particles() {
+      local sig="${1:-}"
+      if [[ -n "${app_pid:-}" ]] && kill -0 "$app_pid" 2>/dev/null; then
+        kill "$app_pid" 2>/dev/null || true
+        wait "$app_pid" 2>/dev/null || true
+      fi
+      rm -f "$tmp_log"
+      trap - INT TERM HUP EXIT
+      if [[ -n "$sig" ]]; then
+        case "$sig" in
+          INT) exit 130 ;;
+          TERM|HUP) exit 143 ;;
+        esac
+      fi
+    }
+    trap 'cleanup_particles INT' INT
+    trap 'cleanup_particles TERM' TERM
+    trap 'cleanup_particles HUP' HUP
+    trap 'cleanup_particles' EXIT
+
+    "$ROOT_DIR/.build/debug/Particularity" > >(tee "$tmp_log") 2>&1 &
+    app_pid=$!
+    spinner_until_pattern_or_exit "$app_pid" "$tmp_log" "APP_READY" "Starting Physics Sim window"
+    wait "$app_pid"
+    status=$?
+    trap - INT TERM HUP EXIT
+    rm -f "$tmp_log"
+    exit "$status"
+    ;;
+  build)
+    swift build "$@"
+    ;;
   setup)
     echo "Running utility setup for machine provisioning..."
     echo "Downloading Metal toolchain component (run this on M1.2 setup as requested)."
@@ -79,11 +175,16 @@ case "$subcmd" in
   help|-h|--help)
     cat <<'HELP'
 Utility subgroup commands:
+  ./run util particles
+  ./run util particles headless
+  ./run util build
   ./run util setup
   ./run util selfcheck
   ./run util help
 
 Top-level aliases:
+  ./run particles
+  ./run build
   ./run setup
   ./run selfcheck
 HELP
