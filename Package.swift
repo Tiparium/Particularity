@@ -4,13 +4,14 @@
 import PackageDescription
 
 let package = Package(
-    name: "Physics_Sim",
+    name: "Particularity",
     platforms: [
         .macOS(.v14),
     ],
     targets: [
         .executableTarget(
-            name: "Physics_Sim",
+            name: "Particularity",
+            path: "Sources/Physics_Sim",
             linkerSettings: [
                 .linkedFramework("SwiftUI"),
                 .linkedFramework("AppKit"),

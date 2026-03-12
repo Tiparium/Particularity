@@ -49,7 +49,30 @@ private enum DockPanelType: String, CaseIterable, Codable {
         switch self {
         case .moduleSlots: return "Module Slots"
         case .fileView: return "File View"
-        case .inspector: return "Inspector"
+        case .inspector: return "Debug Inspector"
+        }
+    }
+
+    var subtype: DockPanelSubtype {
+        switch self {
+        case .moduleSlots, .fileView:
+            return .core
+        case .inspector:
+            return .diagnostics
+        }
+    }
+}
+
+private enum DockPanelSubtype: String, CaseIterable, Identifiable {
+    case core
+    case diagnostics
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .core: return "Core"
+        case .diagnostics: return "Diagnostics"
         }
     }
 }
@@ -73,9 +96,76 @@ private struct ModuleFile: Identifiable {
     let url: URL
 }
 
+private enum HeaderControlVariant {
+    case neutral
+    case accent
+    case destructive
+}
+
+private struct HeaderControlSurface: View {
+    let iconName: String
+    let variant: HeaderControlVariant
+    let isHovered: Bool
+
+    var body: some View {
+        Image(systemName: iconName)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(foregroundColor)
+            .frame(width: 36, height: 32)
+            .background(
+                RoundedRectangle(cornerRadius: 7)
+                    .fill(backgroundColor)
+            )
+    }
+
+    private var foregroundColor: Color {
+        switch variant {
+        case .neutral:
+            return isHovered ? .primary : .secondary
+        case .accent:
+            return isHovered ? .primary : .secondary
+        case .destructive:
+            return isHovered ? Color.red.opacity(0.95) : .secondary
+        }
+    }
+
+    private var backgroundColor: Color {
+        switch variant {
+        case .neutral:
+            return Color(nsColor: .quaternaryLabelColor).opacity(isHovered ? 0.24 : 0.16)
+        case .accent:
+            return isHovered ? Color.accentColor.opacity(0.18) : Color(nsColor: .quaternaryLabelColor).opacity(0.16)
+        case .destructive:
+            return isHovered ? Color.red.opacity(0.30) : Color(nsColor: .quaternaryLabelColor).opacity(0.16)
+        }
+    }
+}
+
+private struct HeaderControlButton: View {
+    let iconName: String
+    let variant: HeaderControlVariant
+    let isHovered: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HeaderControlSurface(iconName: iconName, variant: variant, isHovered: isHovered)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 private struct DockLayoutState: Codable {
     let panels: [DockPanel]
     let collapsedPanelIDs: [UUID]
+}
+
+private struct PanelDragSession {
+    let panelID: UUID
+    let mode: ProgramSettingsStore.UIPanelDragInputMode
+    var pointerInRoot: CGPoint
+    var hoveredZone: DockZone?
+    var insertionIndexByZone: [DockZone: Int]
 }
 
 private struct DockPanelFramesPreferenceKey: PreferenceKey {
@@ -92,45 +182,61 @@ private struct DockPanelFramesPreferenceKey: PreferenceKey {
     }
 }
 
+private struct DockZoneFramesPreferenceKey: PreferenceKey {
+    static let defaultValue: [DockZone: CGRect] = [:]
+
+    static func reduce(value: inout [DockZone: CGRect], nextValue: () -> [DockZone: CGRect]) {
+        for (zone, frame) in nextValue() {
+            value[zone] = frame
+        }
+    }
+}
+
 private struct DockPanelDropDelegate: DropDelegate {
     let zone: DockZone
     let isHorizontal: Bool
     let panelIDsInOrder: [UUID]
     let panelFrames: [UUID: CGRect]
-    @Binding var currentlyDraggingPanelID: UUID?
-    @Binding var dropHighlights: [DockZone: Bool]
-    @Binding var previewInsertionIndex: [DockZone: Int]
+    @Binding var panelDragSession: PanelDragSession?
     let movePanel: (UUID, DockZone, Int?) -> Void
+    let resetDragState: () -> Void
 
     func validateDrop(info: DropInfo) -> Bool {
         info.hasItemsConforming(to: [.text])
     }
 
     func dropEntered(info: DropInfo) {
-        dropHighlights[zone] = true
-        previewInsertionIndex[zone] = insertionIndex(for: info.location)
+        guard var session = panelDragSession else { return }
+        session.hoveredZone = zone
+        session.insertionIndexByZone[zone] = insertionIndex(for: info.location)
+        panelDragSession = session
     }
 
     func dropUpdated(info: DropInfo) -> DropProposal? {
-        dropHighlights[zone] = true
-        previewInsertionIndex[zone] = insertionIndex(for: info.location)
+        guard var session = panelDragSession else { return nil }
+        session.hoveredZone = zone
+        session.insertionIndexByZone[zone] = insertionIndex(for: info.location)
+        panelDragSession = session
         return DropProposal(operation: .move)
     }
 
     func dropExited(info: DropInfo) {
-        dropHighlights[zone] = false
-        previewInsertionIndex[zone] = nil
+        guard var session = panelDragSession else { return }
+        if session.hoveredZone == zone {
+            session.hoveredZone = nil
+        }
+        session.insertionIndexByZone[zone] = nil
+        panelDragSession = session
     }
 
     func performDrop(info: DropInfo) -> Bool {
         defer {
-            currentlyDraggingPanelID = nil
-            dropHighlights[zone] = false
-            previewInsertionIndex[zone] = nil
+            resetDragState()
         }
 
-        guard let dragID = currentlyDraggingPanelID else { return false }
-        movePanel(dragID, zone, previewInsertionIndex[zone] ?? insertionIndex(for: info.location))
+        guard let session = panelDragSession else { return false }
+        let index = session.insertionIndexByZone[zone] ?? insertionIndex(for: info.location)
+        movePanel(session.panelID, zone, index)
         return true
     }
 
@@ -164,14 +270,15 @@ struct ContentView: View {
     @State private var selectedFileID: String?
     @State private var isImporterPresented = false
     @State private var importerTargetKind: ModuleKind = .physics
+    @State private var hoveredCollapsePanelID: UUID?
     @State private var hoveredGrabPanelID: UUID?
-    @State private var dropHighlights: [DockZone: Bool] = [:]
-    @State private var currentlyDraggingPanelID: UUID?
-    @State private var previewInsertionIndex: [DockZone: Int] = [:]
+    @State private var hoveredClosePanelID: UUID?
+    @State private var panelDragSession: PanelDragSession?
     @State private var collapsedPanelIDs: Set<UUID> = []
     @State private var menuInsertionType: DockPanelType?
     @State private var menuHoverZone: DockZone?
     @State private var panelFramesByZone: [DockZone: [UUID: CGRect]] = [:]
+    @State private var zoneFramesInRoot: [DockZone: CGRect] = [:]
 
     private let projectRootURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
 
@@ -194,6 +301,38 @@ struct ContentView: View {
                         .frame(width: sideWidth)
                 }
                 .padding(12)
+
+                if ProgramSettingsStore.uiPanelDragInputMode == .clickThenDrag,
+                   panelDragSession?.mode == .clickThenDrag,
+                   let draggingPanel = currentlyDraggingPanel {
+                    dragPreview(for: draggingPanel)
+                        .position(
+                            x: (panelDragSession?.pointerInRoot.x ?? 0) + 120,
+                            y: (panelDragSession?.pointerInRoot.y ?? 0) + 22
+                        )
+                        .allowsHitTesting(false)
+                        .zIndex(1000)
+                }
+
+                if panelDragSession?.mode == .clickThenDrag {
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            handleClickThenDragTap()
+                        }
+                        .zIndex(999)
+                }
+            }
+            .coordinateSpace(name: "root-space")
+            .onContinuousHover { phase in
+                guard var session = panelDragSession else { return }
+                if case let .active(location) = phase {
+                    session.pointerInRoot = location
+                    panelDragSession = session
+                    if session.mode == .clickThenDrag {
+                        updateClickThenDragHover(at: location)
+                    }
+                }
             }
             .simultaneousGesture(
                 TapGesture().onEnded {
@@ -223,11 +362,17 @@ struct ContentView: View {
             menuInsertionType = type
             menuHoverZone = nil
         }
-        .onReceive(NotificationCenter.default.publisher(for: .cancelAddDockPanel)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .cancelInProgressOperation)) { _ in
             cancelMenuInsertionMode()
+            if panelDragSession != nil {
+                resetDragState()
+            }
         }
         .onExitCommand {
             cancelMenuInsertionMode()
+            if panelDragSession != nil {
+                resetDragState()
+            }
         }
         .fileImporter(
             isPresented: $isImporterPresented,
@@ -243,7 +388,7 @@ struct ContentView: View {
     private var centerColumn: some View {
         VStack(spacing: 10) {
             HStack {
-                Text("Physics Sim")
+                Text("Simulation")
                     .font(.headline)
                 Spacer()
                 Text("Checkpoint 00: Orbit Cube")
@@ -281,17 +426,17 @@ struct ContentView: View {
     private func dropZoneSurface(for zone: DockZone, panels: [DockPanel]) -> some View {
         let previews = previewPanelsInZone(zone, fallback: panels)
         let isAddMode = menuInsertionType != nil
-        let isHoverTarget = menuHoverZone == zone
+        let isDragMode = panelDragSession != nil
+        let isDropTarget = isDragMode && panelDragSession?.hoveredZone == zone
         let zoneFrames = panelFramesByZone[zone] ?? [:]
         let dropDelegate = DockPanelDropDelegate(
             zone: zone,
             isHorizontal: zone == .center,
             panelIDsInOrder: panels.map(\.id),
             panelFrames: zoneFrames,
-            currentlyDraggingPanelID: $currentlyDraggingPanelID,
-            dropHighlights: $dropHighlights,
-            previewInsertionIndex: $previewInsertionIndex,
-            movePanel: movePanel
+            panelDragSession: $panelDragSession,
+            movePanel: movePanel,
+            resetDragState: resetDragState
         )
         return Group {
             if zone == .center {
@@ -368,11 +513,11 @@ struct ContentView: View {
         .scrollIndicators(.visible)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
         .overlay {
-            if dropHighlights[zone] == true || isAddMode {
+            if isDropTarget || isAddMode {
                 RoundedRectangle(cornerRadius: 12)
                     .fill(
                         Color.accentColor.opacity(
-                            isHoverTarget ? 0.14 : (isAddMode ? 0.07 : 0.10)
+                            isDropTarget ? 0.14 : (isAddMode ? 0.07 : 0.10)
                         )
                     )
                     .allowsHitTesting(false)
@@ -381,10 +526,10 @@ struct ContentView: View {
         .overlay(
             RoundedRectangle(cornerRadius: 12)
                 .stroke(
-                    dropHighlights[zone] == true || isAddMode
+                    isDropTarget || isAddMode
                         ? Color.accentColor.opacity(0.85)
                         : Color(nsColor: .separatorColor).opacity(0.45),
-                    lineWidth: (dropHighlights[zone] == true || isAddMode) ? 2 : 1
+                    lineWidth: (isDropTarget || isAddMode) ? 2 : 1
                 )
         )
         .contentShape(Rectangle())
@@ -392,26 +537,44 @@ struct ContentView: View {
         .onPreferenceChange(DockPanelFramesPreferenceKey.self) { framesByZone in
             panelFramesByZone.merge(framesByZone) { _, new in new }
         }
-        .onHover { hovering in
-            guard isAddMode else { return }
-            if hovering {
-                menuHoverZone = zone
-            } else if menuHoverZone == zone {
-                menuHoverZone = nil
+        .background {
+            GeometryReader { proxy in
+                Color.clear.preference(
+                    key: DockZoneFramesPreferenceKey.self,
+                    value: [zone: proxy.frame(in: .named("root-space"))]
+                )
             }
         }
-        .highPriorityGesture(
-            TapGesture().onEnded {
-                guard let insertionType = menuInsertionType else { return }
-                addPanel(type: insertionType, to: zone)
-                cancelMenuInsertionMode()
+        .onPreferenceChange(DockZoneFramesPreferenceKey.self) { framesByZone in
+            zoneFramesInRoot.merge(framesByZone) { _, new in new }
+        }
+        .onHover { hovering in
+            if isAddMode {
+                if hovering {
+                    menuHoverZone = zone
+                } else if menuHoverZone == zone {
+                    menuHoverZone = nil
+                }
             }
-        )
+        }
+        .overlay {
+            if isAddMode {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        if let insertionType = menuInsertionType {
+                            addPanel(type: insertionType, to: zone)
+                            cancelMenuInsertionMode()
+                        }
+                    }
+            }
+        }
         .onDrop(of: [.text], delegate: dropDelegate)
     }
 
     private func zoneHeader(for zone: DockZone) -> some View {
-        HStack {
+        let isPanelDragActive = panelDragSession != nil
+        return HStack {
             Text(zone.title)
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -420,105 +583,132 @@ struct ContentView: View {
             Spacer()
 
             Menu {
-                ForEach(DockPanelType.allCases, id: \.rawValue) { type in
-                    Button("Add \(type.title)") {
-                        addPanel(type: type, to: zone)
+                ForEach(DockPanelSubtype.allCases) { subtype in
+                    let panelTypes = DockPanelType.allCases.filter { $0.subtype == subtype }
+                    if !panelTypes.isEmpty {
+                        Menu(subtype.title) {
+                            ForEach(panelTypes, id: \.rawValue) { type in
+                                Button(type.title) {
+                                    addPanel(type: type, to: zone)
+                                }
+                            }
+                        }
                     }
                 }
             } label: {
-                Image(systemName: "plus")
-                    .font(.caption.weight(.semibold))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(
-                        RoundedRectangle(cornerRadius: 7)
-                            .fill(Color(nsColor: .quaternaryLabelColor).opacity(0.16))
-                    )
+                HeaderControlSurface(
+                    iconName: "plus",
+                    variant: .neutral,
+                    isHovered: false
+                )
             }
             .menuStyle(.borderlessButton)
             .help("Add panel")
+            .disabled(isPanelDragActive)
         }
+        .padding(.horizontal, 6)
+        .padding(.top, 6)
+        .padding(.bottom, 2)
     }
 
     private func panelCard(_ panel: DockPanel, isGhost: Bool = false, isShifted: Bool = false) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        let isPanelDragActive = panelDragSession != nil
+        return VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text(panel.type.title)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(isGhost ? .secondary : .primary)
                 Spacer()
                 if !isGhost {
-                    Button {
+                    HeaderControlButton(
+                        iconName: collapsedPanelIDs.contains(panel.id) ? "chevron.down" : "chevron.up",
+                        variant: .neutral,
+                        isHovered: hoveredCollapsePanelID == panel.id
+                    ) {
                         togglePanelCollapsed(panel.id)
-                    } label: {
-                        Image(systemName: collapsedPanelIDs.contains(panel.id) ? "chevron.down" : "chevron.up")
-                            .font(.caption.weight(.semibold))
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
                     .help(collapsedPanelIDs.contains(panel.id) ? "Expand panel" : "Collapse panel")
+                    .onHover { hovering in
+                        hoveredCollapsePanelID = hovering ? panel.id : (hoveredCollapsePanelID == panel.id ? nil : hoveredCollapsePanelID)
+                    }
+                    .disabled(isPanelDragActive)
                 }
-                HStack(spacing: 6) {
-                    Image(systemName: "hand.draw")
-                }
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(hoveredGrabPanelID == panel.id ? .primary : .secondary)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(
-                    RoundedRectangle(cornerRadius: 7)
-                        .fill(
-                            hoveredGrabPanelID == panel.id
-                                ? Color.accentColor.opacity(0.18)
-                                : Color(nsColor: .quaternaryLabelColor).opacity(0.16)
-                        )
+                HeaderControlSurface(
+                    iconName: "hand.draw",
+                    variant: .accent,
+                    isHovered: hoveredGrabPanelID == panel.id
                 )
                 .contentShape(Rectangle())
                 .opacity(isGhost ? 0.0 : 1.0)
                 .allowsHitTesting(!isGhost)
                 .overlay(alignment: .center) {
                     if !isGhost {
-                        Color.clear
-                            .contentShape(Rectangle())
-                            .onDrag {
-                                currentlyDraggingPanelID = panel.id
-                                return NSItemProvider(object: panel.id.uuidString as NSString)
-                            } preview: {
-                                dragPreview(for: panel)
-                            }
+                        let uiPanelDragMode = ProgramSettingsStore.uiPanelDragInputMode
+                        if uiPanelDragMode == .clickAndDrag {
+                            Color.clear
+                                .contentShape(Rectangle())
+                                .onDrag {
+                                    cancelMenuInsertionMode()
+                                    resetDragState()
+                                    panelDragSession = PanelDragSession(
+                                        panelID: panel.id,
+                                        mode: .clickAndDrag,
+                                        pointerInRoot: .zero,
+                                        hoveredZone: nil,
+                                        insertionIndexByZone: [:]
+                                    )
+                                    return NSItemProvider(object: panel.id.uuidString as NSString)
+                                } preview: {
+                                    dragPreview(for: panel)
+                                }
+                        } else {
+                            Color.clear
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    cancelMenuInsertionMode()
+                                    resetDragState()
+                                    panelDragSession = PanelDragSession(
+                                        panelID: panel.id,
+                                        mode: .clickThenDrag,
+                                        pointerInRoot: .zero,
+                                        hoveredZone: nil,
+                                        insertionIndexByZone: [:]
+                                    )
+                                }
+                        }
                     }
                 }
                 .onHover { hovering in
                     hoveredGrabPanelID = hovering ? panel.id : (hoveredGrabPanelID == panel.id ? nil : hoveredGrabPanelID)
                 }
                 if !isGhost {
-                    Button(role: .destructive) {
+                    HeaderControlButton(
+                        iconName: "xmark",
+                        variant: .destructive,
+                        isHovered: hoveredClosePanelID == panel.id
+                    ) {
                         removePanel(panel.id)
-                    } label: {
-                        Image(systemName: "xmark")
-                            .font(.caption.weight(.semibold))
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 6)
-                            .background(
-                                RoundedRectangle(cornerRadius: 7)
-                                    .fill(Color(nsColor: .quaternaryLabelColor).opacity(0.16))
-                            )
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
                     .help("Remove panel")
+                    .onHover { hovering in
+                        hoveredClosePanelID = hovering ? panel.id : (hoveredClosePanelID == panel.id ? nil : hoveredClosePanelID)
+                    }
+                    .disabled(isPanelDragActive)
                 }
             }
 
             if !collapsedPanelIDs.contains(panel.id) || isGhost {
-                switch panel.type {
-                case .moduleSlots:
-                    moduleSlotsBlock
-                case .fileView:
-                    fileViewBlock
-                case .inspector:
-                    inspectorBlock
+                Group {
+                    switch panel.type {
+                    case .moduleSlots:
+                        moduleSlotsBlock
+                    case .fileView:
+                        fileViewBlock
+                    case .inspector:
+                        inspectorBlock
+                    }
                 }
+                .allowsHitTesting(!isPanelDragActive || isGhost)
             }
         }
         .padding(10)
@@ -659,20 +849,45 @@ struct ContentView: View {
 
     private var inspectorBlock: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Assigned Modules")
+            Text("Session")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
 
-            ForEach(ModuleKind.allCases) { kind in
-                HStack {
-                    Text(kind.displayName)
-                        .font(.caption)
-                    Spacer()
-                    Text(assignedModules[kind]?.lastPathComponent ?? "Unassigned")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
+            HStack {
+                Text("Panels")
+                    .font(.caption)
+                Spacer()
+                Text("\(panels.count)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack {
+                Text("Collapsed")
+                    .font(.caption)
+                Spacer()
+                Text("\(collapsedPanelIDs.count)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack {
+                Text("Selected File")
+                    .font(.caption)
+                Spacer()
+                Text(selectedFile?.url.lastPathComponent ?? "None")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            HStack {
+                Text("Drag Active")
+                    .font(.caption)
+                Spacer()
+                Text(panelDragSession == nil ? "No" : "Yes")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
         }
     }
@@ -687,17 +902,12 @@ struct ContentView: View {
     }
 
     private var currentlyDraggingPanel: DockPanel? {
-        guard let currentlyDraggingPanelID else { return nil }
-        return panels.first(where: { $0.id == currentlyDraggingPanelID })
+        guard let draggingID = panelDragSession?.panelID else { return nil }
+        return panels.first(where: { $0.id == draggingID })
     }
 
     private func panelsInZone(_ zone: DockZone) -> [DockPanel] {
         panels.filter { $0.zone == zone }
-    }
-
-    private func movePanel(id: UUID, to zone: DockZone) {
-        guard let idx = panels.firstIndex(where: { $0.id == id }) else { return }
-        panels[idx].zone = zone
     }
 
     private func addPanel(type: DockPanelType, to zone: DockZone) {
@@ -707,8 +917,8 @@ struct ContentView: View {
     private func removePanel(_ id: UUID) {
         panels.removeAll { $0.id == id }
         collapsedPanelIDs.remove(id)
-        if currentlyDraggingPanelID == id {
-            currentlyDraggingPanelID = nil
+        if panelDragSession?.panelID == id {
+            resetDragState()
         }
     }
 
@@ -818,7 +1028,7 @@ struct ContentView: View {
             }
         }
 
-        guard dropHighlights[zone] == true, let dragID = currentlyDraggingPanelID else {
+        guard panelDragSession?.hoveredZone == zone, let dragID = panelDragSession?.panelID else {
             return fallback.map {
                 DockPanelPreview(id: $0.id, panel: $0, isGhost: false, isShifted: false)
             }
@@ -838,7 +1048,7 @@ struct ContentView: View {
             }
         }
         let insertionIndex = min(
-            max(previewInsertionIndex[zone] ?? defaultInsertionIndex, 0),
+            max(panelDragSession?.insertionIndexByZone[zone] ?? defaultInsertionIndex, 0),
             zonePanels.count
         )
 
@@ -857,24 +1067,60 @@ struct ContentView: View {
         }
     }
 
-    private func inferredInsertionIndex(for zone: DockZone) -> Int {
-        guard let draggingID = currentlyDraggingPanelID else {
-            return panels.filter { $0.zone == zone }.count
-        }
-        guard let draggedGlobalIndex = panels.firstIndex(where: { $0.id == draggingID }) else {
-            return panels.filter { $0.zone == zone }.count
-        }
-        return panels.enumerated().reduce(into: 0) { partial, pair in
-            let (idx, candidate) = pair
-            if idx < draggedGlobalIndex && candidate.zone == zone && candidate.id != draggingID {
-                partial += 1
-            }
-        }
-    }
-
     private func cancelMenuInsertionMode() {
         menuInsertionType = nil
         menuHoverZone = nil
+    }
+
+    private func resetDragState() {
+        panelDragSession = nil
+    }
+
+    private func insertionIndex(for zone: DockZone, at location: CGPoint) -> Int {
+        let panelIDsInOrder = panelsInZone(zone).map(\.id)
+        let panelFrames = panelFramesByZone[zone] ?? [:]
+        let isHorizontal = zone == .center
+
+        if panelIDsInOrder.isEmpty {
+            return 0
+        }
+
+        for (index, id) in panelIDsInOrder.enumerated() {
+            guard let frame = panelFrames[id] else { continue }
+            let threshold = isHorizontal ? frame.midX : frame.midY
+            let value = isHorizontal ? location.x : location.y
+            if value < threshold {
+                return index
+            }
+        }
+        return panelIDsInOrder.count
+    }
+
+    private func updateClickThenDragHover(at rootLocation: CGPoint) {
+        guard var session = panelDragSession, session.mode == .clickThenDrag else { return }
+
+        let hovered = DockZone.allCases.first { zone in
+            guard let frame = zoneFramesInRoot[zone] else { return false }
+            return frame.contains(rootLocation)
+        }
+        session.hoveredZone = hovered
+
+        if let zone = hovered, let frame = zoneFramesInRoot[zone] {
+            let local = CGPoint(x: rootLocation.x - frame.minX, y: rootLocation.y - frame.minY)
+            session.insertionIndexByZone[zone] = insertionIndex(for: zone, at: local)
+        } else {
+            session.insertionIndexByZone = [:]
+        }
+
+        panelDragSession = session
+    }
+
+    private func handleClickThenDragTap() {
+        guard let session = panelDragSession, session.mode == .clickThenDrag else { return }
+        if let zone = session.hoveredZone {
+            movePanel(id: session.panelID, to: zone, at: session.insertionIndexByZone[zone])
+        }
+        resetDragState()
     }
 
     private func persistDockLayoutState() {

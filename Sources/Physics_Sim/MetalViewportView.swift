@@ -6,31 +6,75 @@ private final class InputMTKView: MTKView {
     weak var inputDelegate: InputMTKViewDelegate?
     private var lastMousePoint: NSPoint = .zero
     private var isDraggingOrbit = false
+    private var clickThenDragOrbitActive = false
+    private var orbitDisarmWorkItem: DispatchWorkItem?
+    private var trackingAreaRef: NSTrackingArea?
 
     override var acceptsFirstResponder: Bool { true }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         window?.makeFirstResponder(self)
+        window?.acceptsMouseMovedEvents = true
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingAreaRef {
+            removeTrackingArea(trackingAreaRef)
+        }
+        let options: NSTrackingArea.Options = [.activeInKeyWindow, .mouseMoved, .mouseEnteredAndExited, .inVisibleRect]
+        let area = NSTrackingArea(rect: .zero, options: options, owner: self, userInfo: nil)
+        addTrackingArea(area)
+        trackingAreaRef = area
     }
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
-        isDraggingOrbit = true
-        lastMousePoint = convert(event.locationInWindow, from: nil)
+        let p = convert(event.locationInWindow, from: nil)
+        lastMousePoint = p
+
+        switch ProgramSettingsStore.orbitInputMode {
+        case .clickAndDrag:
+            isDraggingOrbit = true
+        case .clickThenDrag:
+            clickThenDragOrbitActive = true
+            armOrbitDisarmTimer()
+        }
     }
 
     override func mouseUp(with event: NSEvent) {
-        isDraggingOrbit = false
+        switch ProgramSettingsStore.orbitInputMode {
+        case .clickAndDrag:
+            isDraggingOrbit = false
+        case .clickThenDrag:
+            // Keep orbit active after click release; disable when touchpad motion ends.
+            armOrbitDisarmTimer()
+        }
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard isDraggingOrbit else { return }
+        guard shouldHandleOrbitMotion else { return }
         let p = convert(event.locationInWindow, from: nil)
         let dx = Float(p.x - lastMousePoint.x)
         let dy = Float(p.y - lastMousePoint.y)
         lastMousePoint = p
         inputDelegate?.didDrag(deltaX: dx, deltaY: dy)
+        armOrbitDisarmTimer()
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        guard ProgramSettingsStore.orbitInputMode == .clickThenDrag, clickThenDragOrbitActive else { return }
+        let p = convert(event.locationInWindow, from: nil)
+        let dx = Float(p.x - lastMousePoint.x)
+        let dy = Float(p.y - lastMousePoint.y)
+        lastMousePoint = p
+        inputDelegate?.didDrag(deltaX: dx, deltaY: dy)
+        armOrbitDisarmTimer()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        disarmOrbit()
     }
 
     override func scrollWheel(with event: NSEvent) {
@@ -54,6 +98,33 @@ private final class InputMTKView: MTKView {
     override func keyUp(with event: NSEvent) {
         guard let chars = event.charactersIgnoringModifiers else { return }
         inputDelegate?.didReleaseKey(chars)
+    }
+
+    private var shouldHandleOrbitMotion: Bool {
+        switch ProgramSettingsStore.orbitInputMode {
+        case .clickAndDrag:
+            return isDraggingOrbit
+        case .clickThenDrag:
+            return clickThenDragOrbitActive
+        }
+    }
+
+    private func armOrbitDisarmTimer() {
+        guard ProgramSettingsStore.orbitInputMode == .clickThenDrag else { return }
+        orbitDisarmWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.clickThenDragOrbitActive = false
+        }
+        orbitDisarmWorkItem = work
+        // No direct "finger lifted" callback exists here; inactivity is the practical stop signal.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.22, execute: work)
+    }
+
+    private func disarmOrbit() {
+        isDraggingOrbit = false
+        clickThenDragOrbitActive = false
+        orbitDisarmWorkItem?.cancel()
+        orbitDisarmWorkItem = nil
     }
 }
 
@@ -82,7 +153,8 @@ final class MetalViewportCoordinator: NSObject, InputMTKViewDelegate {
     }
 
     func didScroll(deltaY: Float) {
-        renderer?.dollyByScroll(deltaY: deltaY)
+        let direction: Float = ProgramSettingsStore.invertScrollZoom ? -1.0 : 1.0
+        renderer?.dollyByScroll(deltaY: deltaY * direction)
     }
 
     func didMagnify(_ magnification: Float) {
