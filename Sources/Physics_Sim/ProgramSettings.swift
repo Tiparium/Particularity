@@ -81,6 +81,7 @@ enum ProgramSettingsStore {
         static let invertScrollZoom = "settings.viewport.invertScrollZoom"
         static let orbitInputMode = "settings.viewport.orbitInputMode"
         static let uiPanelDragInputMode = "settings.ui.panelDragInputMode"
+        static let memoryBudgetPreset = "settings.sim.memoryBudgetPreset"
     }
 
     static var invertScrollZoom: Bool {
@@ -118,5 +119,17 @@ enum ProgramSettingsStore {
             return mode
         }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: Key.uiPanelDragInputMode) }
+    }
+
+    static var memoryBudgetPreset: MemoryBudgetPreset {
+        get {
+            let defaults = UserDefaults.standard
+            guard let raw = defaults.string(forKey: Key.memoryBudgetPreset),
+                  let preset = MemoryBudgetPreset(rawValue: raw) else {
+                return .m1Pro
+            }
+            return preset
+        }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: Key.memoryBudgetPreset) }
     }
 }
