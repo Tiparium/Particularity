@@ -1,0 +1,331 @@
+# Particularity Brainstorm Notes (Session 02)
+
+## Session Status
+- Closed (summary approved)
+
+## Brainstorm Session
+- Sprint 01 will implement the default `physics`, `optimization`, and `visual` modules as real production-valid fallback runtime modules, plus readable `DEV` placeholder UIs built through the existing UI module system.
+- Particle architecture is performance-first: `SoA` storage, stable `particleID`, leader particle = `particleID 0`, explicit module compatibility, empty-slot fallback to defaults, and startup failure with UI error logging for incompatible module combinations.
+- Default module behavior is now defined: slide-and-loop TSP physics, naive all-pairs optimization with leader debug communication, unlit sphere visual rendering with rainbow type slicing, plus engine-level particle-cap and memory-budget gating (`M1` 4 GB, `M1 Pro` 24 GB).
+
+## Brainstorm Session
+- Topic: `Defualt Modules`
+- Sprint linkage:
+  - This brainstorm defines the objective of the next sprint.
+  - The sprint objective is to create MVP default `physics`, `visual`, and `optimization` modules.
+  - These modules are both:
+    - defaults/fallbacks when a module slot in the UI is unpopulated
+    - testing modules used to validate architecture and integration
+- Delivery expectation:
+  - runtime behavior and UI integration are both part of scope
+  - current plan is:
+    - implement default modules and fallback behavior first
+    - build UI around them second
+
+## Build / environment policy
+- Placeholder UIs for default modules should exist during development.
+- Placeholder UIs do not need to be polished, but must be readable and controllable.
+- Placeholder UIs must be implemented within the existing UI module system.
+- Placeholder UI modules are marked `DEV`.
+- `DEV` features are included in `dev` and `debug` builds.
+- `prod` builds exclude `DEV` features.
+- `./run build` should accept:
+  - `dev`
+  - `prod`
+- `debug` should be dropped for now and reserved for another future use.
+
+## Module architecture framing
+- The mental model for the three main module types is roughly like three local microservices feeding each other data.
+- Canonical module categories remain:
+  - `PhysicsModule`
+  - `VisualModule`
+  - `OptimizationModule`
+- Responsibility split currently discussed as:
+  - `physics` defines what happens to particle state
+  - `optimization` defines how data is arranged, accessed, and processed efficiently
+  - `visual` defines how particle state and optional debug data are rendered
+
+## Performance direction
+- The simulator is intended to be extremely highly optimized.
+- Long-term target is GPU simulation so many particles can be processed in parallel.
+- Naive all-pairs interaction is not the long-term target, but is acceptable as the default optimization MVP.
+- The first/default simulation does not include inter-particle physics effects.
+- Architecture should still be designed so future GPU-heavy and optimization-heavy modules fit cleanly.
+
+## Particle identity and memory model
+- All modules should agree on the concept of a leader particle.
+- Initial user idea:
+  - the leader particle is the first particle in the first memory slot at startup
+- Refined architecture decision:
+  - leader should be identity-based, not slot-based
+  - every particle has a stable `particleID`
+  - the leader particle is the particle with `particleID = 0`
+  - memory position may change independently of identity
+- Reason:
+  - future optimization modules may reorder particles in memory
+  - defining leader by memory slot would make leader identity unstable
+
+## Buffer / indexing model
+- The preferred model is:
+  - stable `particleID`
+  - shared buffer index for current storage location
+  - optional lookup/indirection structures when needed
+- This is preferred over pointer-centric identity because:
+  - it keeps identity stable through reorder/compaction
+  - it fits GPU-oriented dense buffer processing better
+  - it keeps cross-module contracts clear
+
+## Particle storage layout decision
+- The preferred particle storage model is `SoA` rather than `AoS`.
+- `AoS` = array of structs.
+- `SoA` = struct of arrays.
+- Chosen direction:
+  - store particle fields in synchronized arrays/buffers
+  - one particle corresponds to the same index across all active arrays
+- Reordering rule:
+  - moving a particle in memory means moving that index consistently across all active buffers
+- Optimization modules may reorder particles by reordering indices across all active buffers.
+
+## Particle schema direction
+- A fully unfixed particle data type is likely a bad fit for the performance goal.
+- Preferred direction:
+  - fixed core particle schema
+  - bounded configurability
+  - optional/predeclared channels enabled per simulation run
+- Strong preference:
+  - select enabled channels at simulation startup
+  - treat schema as fixed for that run
+- Likely core fields:
+  - stable `particleID`
+  - position
+  - type
+  - active/alive state
+  - velocity is a likely universal primitive, though not fully locked yet
+
+## Default physics module
+- The first module to tackle is `physics`.
+- Reasoning:
+  - it defines the main simulation contract
+  - optimization and visual behavior build around it
+- Working MVP default physics module concept:
+  - slide-and-loop movement in TSP
+- TSP:
+  - TSP is the 3D cube in the center of the UI
+  - TSP is the hard boundary of the simulation
+  - all physics is calculated within TSP
+  - border behaviors may vary in future, but TSP defines the universe
+
+## Default physics module fields
+- `particleCount`
+  - `Int`
+  - UI slider
+  - range `1...10_000_000`
+  - discussion point remains whether this is engine cap vs UI-only cap
+- `randomDistribution`
+  - `Bool`
+  - `true`: particles spawn randomly in TSP
+  - `false`: particles spawn in a deterministic 3D lattice
+- `particleTypes`
+  - `Int`
+  - UI slider
+  - range `1...32`
+  - dynamic at runtime
+- `movement`
+  - enum
+  - default value is `slide`
+  - future movement modes may be added later
+- `movementDirection`
+  - vector
+  - normalized before use
+  - zero vector means no movement
+- `movementSpeed`
+  - unclamped for this module
+  - deliberate because user wants to observe very fast motion handling
+
+## Default physics behavior
+- All particles move at equal rate in the same direction.
+- Movement is defined by:
+  - normalized direction vector
+  - scalar speed multiplier
+- Particles wrap around TSP boundaries.
+- Wrapping mental model:
+  - TSP behaves like one cell in an infinite repeating grid
+  - wrap should preserve overflow, not snap abruptly
+- Particle types do not affect motion in this module.
+- Particle types are evenly distributed across particles.
+- Types are also intended to be consumed by the visual module.
+
+## Particle type policy
+- All modules will have a concept of `types`.
+- The initial working cap for type count is `32`.
+- Future experiments may replace discrete type with floating/gradient type, but not in MVP.
+- Particle types may change at runtime.
+- Even if no particles currently use some type slots, keeping the type array/model resident is acceptable.
+
+## Spawn / pool direction
+- Long-term engine support should include an unspawned particle pool.
+- Entering/leaving active TSP should ideally draw from and refill that pool.
+- Particles may still be created dynamically when needed.
+- The pool may shrink if active count stays low for a significant amount of time.
+- These are engine-level capabilities the simulation should support.
+- Sprint 01 MVP does not need to fully exercise this system.
+
+## Execution policy / scheduling direction
+- User wants strong control over how physics calculations happen under the hood.
+- Future execution models may include:
+  - full blocking synchronous physics
+  - chunked processing
+  - particle-by-particle handoff
+- Race conditions in particle interactions are not the primary concern by default.
+- This level of execution control is treated as a future responsibility of more robust optimization modules.
+- Current conclusion:
+  - do not overcomplicate the default optimization MVP with this yet
+  - other modules should still be designed to tolerate varying access/layout/execution contracts
+- Some optimization modules may need to lock certain settings at startup for performance.
+
+## Default optimization module
+- Default optimization behavior is naive all-pairs (`n^2`).
+- Every particle conceptually communicates with every other particle.
+- Self-interaction is included.
+- In the MVP, this communication does not yet affect physics behavior.
+- It mainly establishes the optimization contract and debug behavior.
+
+## Default optimization debug behavior
+- There is a toggle to print the leader particle's communication log.
+- When enabled:
+  - the leader particle logs its pings to every particle in TSP
+  - this includes the leader pinging itself
+  - self-ping appears as a different color in the log
+- The universal debug log MVP is:
+  - a text crawl
+  - displayed in the upper-right of the screen space surrounding TSP
+- Long-term direction:
+  - this debug log may later become a dockable module
+  - dockable debug-log module is not an MVP target
+
+## Debug data compatibility
+- Visual modules may optionally accept debug data.
+- This is especially useful when a visual module is paired with a specific physics and optimization module combination.
+- The goal is not universal compatibility across every possible debug stream.
+- Instead:
+  - specialized debug streams are allowed
+  - certain debug paradigms should become universal compatibility targets
+- Example universal compatibility goal:
+  - `Show all leader particle communication`
+
+## Default visual debug behavior
+- The default visual module accepts debug visuals from the default optimization module.
+- Specifically:
+  - when enabled, the leader particle briefly draws a line to the particle it is currently pinging
+
+## Default visual module
+- The default visual module renders each particle as an unlit sphere.
+- MVP rendering goal is explicitly unlit.
+- Longer-term direction:
+  - TSP should eventually support a fuller visual toolkit
+  - this may include post-processing shaders and more advanced rendering features
+  - those are not MVP requirements for the default visual module
+
+## Default visual type coloring
+- Particle types are represented as slices of the rainbow spectrum.
+- The rainbow slice ordering starts from right to left.
+- Example interpretation:
+  - `1` particle type -> red
+  - `2` particle types -> red, orange
+  - `3` particle types -> red, orange, yellow
+- The palette should wrap around the spectrum as needed.
+- The visual module includes an offset option that changes the starting point in the spectrum and loops around.
+- Sphere size should be exposed as a control in the default visual module.
+
+## Leader protection debug rule
+- For simulations where particles may load/unload from active TSP:
+  - there is a universal debug toggle to protect the leader from being unloaded
+  - this toggle is enabled by default
+- Intended meaning:
+  - `particleID = 0` should remain active when this protection is enabled
+- This control should live in a universal debug/settings layer rather than an individual module UI.
+
+## Fallback / compatibility behavior
+- If a module slot is empty, runtime should fall back to the default module for that slot.
+- Future work may add smart grouping behavior for required compatible module sets.
+- For now:
+  - if a selected module is incompatible with another selected module
+  - TSD should log an error in the UI scroll
+  - the simulation should fail to start
+
+## Runtime transport controls
+- The UI needs start/stop/pause/play controls.
+- Unity-inspired transport controls are acceptable.
+
+## Default module production status
+- The default runtime modules are production-valid.
+- Only placeholder/development UI elements are `DEV`.
+
+## Deferred for sprint workshop / later integration
+- Full production UI integration for module controls is not a priority right now.
+- Detailed build differences beyond basic `dev` vs `prod` handling can be worked out later.
+- Many smaller visual/debug polish questions should be resolved during the sprint rather than pre-locked here.
+
+## Simulation-wide time scaling
+- There should be a time scale slider that affects the entire simulation speed.
+- This should be treated as part of the physics-module surface area.
+- It should be assumed to be a value present in all physics modules.
+
+## Default optimization debug visuals
+- Self-ping special case uses a different color.
+- No additional special visual treatment is required for MVP.
+
+## Default visual / optimization compatibility UI
+- The visual module should expose a boolean toggle to show optimization information.
+- If the current visual module is not compatible with the current optimization module:
+  - the toggle should be present
+  - the toggle should be greyed out
+  - the toggle value should be `false`
+- Compatibility detection should not require the simulation to be running.
+
+## Debug log MVP placement
+- The universal debug log should simply exist in the upper-right area for now.
+- Fine tuning of its exact behavior can happen later.
+
+## Runtime type update behavior
+- If particle type count or assignment changes at runtime, the default visual module should immediately remap colors for active particles.
+
+## Compatibility metadata direction
+- Module compatibility should be explicitly declared.
+- This is especially important for specialized debug-data pairings.
+- A later goal is to build matching physics/visual/optimization sets that are mutually compatible for demos.
+- More specialized modules may rely on a matching set of three modules.
+- The internal API/metadata shape should still be considered mutable at this stage and not fully locked down yet.
+
+## Open design notes
+- Need to continue and define the default visual module in full.
+- Need to continue and define how default/fallback module resolution behaves in `prod` when `DEV` UI modules are absent.
+- Need to decide whether `particleCount` max of `10_000_000` should be:
+  - an engine-level hard cap
+  - or UI-only cap
+
+## Particle cap direction
+- Preferred direction is an engine-level hard cap with a single authoritative configuration value.
+- That cap should be easy to change centrally across the project.
+- The cap is treated as fixed during active simulation runtime.
+- Changing the cap is a between-runs/testing operation, not a live in-simulation mutation.
+- The system should support an internal particle-cap rebuild option that:
+  - keeps the app running
+  - tears down and recreates simulation resources
+  - applies the new cap to the next simulation session
+- This is primarily for testing and experimentation.
+- Internal reserved capacity should use power-of-two-friendly block allocation rather than requiring total reserved capacity to always be a pure power of two.
+- Goal:
+  - preserve structured, optimization-friendly allocation behavior
+  - avoid the waste of strict whole-capacity power-of-two jumps
+
+## Memory budget policy
+- The simulator should support a hard memory budget configuration.
+- If the requested simulation configuration could exceed the active memory budget, startup should be prevented.
+- This should be enforced before simulation start rather than allowing over-budget startup.
+- Current planned hardware profiles:
+  - `M1` with `4 GB` reserved simulation budget
+  - `M1 Pro` with `24 GB` reserved simulation budget
+- Naming update:
+  - use `M1 Pro` instead of `M1.5`
+- Particle-count validation should ultimately consider memory budget, not just raw count.
