@@ -138,15 +138,15 @@
   - vector
   - normalized before use
   - zero vector means no movement
-- `movementSpeed`
-  - unclamped for this module
-  - deliberate because user wants to observe very fast motion handling
+- `timeScale`
+  - affects overall simulation speed
+  - kept as the speed control surface for the default physics module
 
 ## Default physics behavior
 - All particles move at equal rate in the same direction.
 - Movement is defined by:
   - normalized direction vector
-  - scalar speed multiplier
+  - simulation-wide `timeScale`
 - Particles wrap around TSP boundaries.
 - Wrapping mental model:
   - TSP behaves like one cell in an infinite repeating grid
