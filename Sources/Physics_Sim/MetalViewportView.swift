@@ -279,8 +279,7 @@ final class MetalViewportCoordinator: NSObject, InputMTKViewDelegate {
 
 struct MetalViewportView: NSViewRepresentable {
     let metricsEnabled: Bool
-    let onMetricsUpdate: @MainActor (SimulationPerformanceMetrics) -> Void
-    let onErrorUpdate: @MainActor (String?) -> Void
+    @ObservedObject var diagnosticsStore: MainWindowDiagnosticsStore
 
     func makeCoordinator() -> MetalViewportCoordinator {
         MetalViewportCoordinator()
@@ -294,10 +293,12 @@ struct MetalViewportView: NSViewRepresentable {
         let session: SimulationSession
         let viewportStateStore: MainWindowViewportStateStore
         do {
-            session = try WindowSimulationSessionStore.shared.mainWindowSession(metricsSink: onMetricsUpdate)
+            session = try WindowSimulationSessionStore.shared.mainWindowSession(metricsSink: { [weak diagnosticsStore] metrics in
+                diagnosticsStore?.updatePerformanceMetrics(metrics)
+            })
             viewportStateStore = WindowSimulationSessionStore.shared.mainWindowViewportStateStore()
         } catch {
-            onErrorUpdate(error.localizedDescription)
+            diagnosticsStore.updateViewportRuntimeError(error.localizedDescription)
             return container
         }
 
@@ -328,14 +329,16 @@ struct MetalViewportView: NSViewRepresentable {
                 }
             )
         } catch {
-            onErrorUpdate(error.localizedDescription)
+            diagnosticsStore.updateViewportRuntimeError(error.localizedDescription)
             return container
         }
         context.coordinator.renderer = renderer
         context.coordinator.session = session
         context.coordinator.metalView = metalView
         context.coordinator.axisHostView = axisHostView
-        context.coordinator.errorSink = onErrorUpdate
+        context.coordinator.errorSink = { [weak diagnosticsStore] error in
+            diagnosticsStore?.updateViewportRuntimeError(error)
+        }
         renderer.setMetricsEnabled(metricsEnabled)
         metalView.delegate = renderer
         metalView.inputDelegate = context.coordinator

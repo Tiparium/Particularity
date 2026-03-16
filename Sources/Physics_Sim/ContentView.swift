@@ -282,8 +282,6 @@ struct ContentView: View {
     @State private var menuHoverZone: DockZone?
     @State private var panelFramesByZone: [DockZone: [UUID: CGRect]] = [:]
     @State private var zoneFramesInRoot: [DockZone: CGRect] = [:]
-    @State private var performanceMetrics = SimulationPerformanceMetrics()
-    @State private var viewportRuntimeError: String?
     @State private var viewportGeneration: Int = 0
     @State private var leftDockWidth = 280.0
     @State private var rightDockWidth = 280.0
@@ -296,11 +294,13 @@ struct ContentView: View {
     @ObservedObject private var editorSettingsStore: MainWindowEditorSettingsStore
     @ObservedObject private var moduleCatalogStore: MainWindowModuleCatalogStore
     @ObservedObject private var runtimeConfigCoordinator: SimulationRuntimeConfigCoordinator
+    @ObservedObject private var diagnosticsStore: MainWindowDiagnosticsStore
     @ObservedObject private var interactionSnapshotRecorder: InteractionSnapshotRecorder
+    @ObservedObject private var performanceReviewLogger: PerformanceReviewLogger
 
     init() {
         do {
-            let session = try WindowSimulationSessionStore.shared.mainWindowSession(metricsSink: { _ in })
+            let session = try WindowSimulationSessionStore.shared.mainWindowSession()
             self.session = session
             _editorSettingsStore = ObservedObject(
                 wrappedValue: WindowSimulationSessionStore.shared.mainWindowEditorSettingsStore()
@@ -311,8 +311,14 @@ struct ContentView: View {
             _runtimeConfigCoordinator = ObservedObject(
                 wrappedValue: try WindowSimulationSessionStore.shared.mainWindowRuntimeConfigCoordinator()
             )
+            _diagnosticsStore = ObservedObject(
+                wrappedValue: WindowSimulationSessionStore.shared.mainWindowDiagnosticsStore()
+            )
             _interactionSnapshotRecorder = ObservedObject(
                 wrappedValue: InteractionSnapshotRecorder.shared
+            )
+            _performanceReviewLogger = ObservedObject(
+                wrappedValue: PerformanceReviewLogger.shared
             )
         } catch {
             fatalError("Failed to create main window simulation session: \(error.localizedDescription)")
@@ -430,6 +436,10 @@ struct ContentView: View {
             loadDockLayoutState()
             moduleCatalogStore.refresh()
             syncSelectedFileSelection()
+            PerformanceReviewLogger.shared.configure(
+                runtimeConfigCoordinator: runtimeConfigCoordinator,
+                snapshotProvider: makePerformanceReviewSample
+            )
         }
         .onAppear {
             fputs("APP_READY\n", stderr)
@@ -459,8 +469,7 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .rebuildViewport)) { _ in
             viewportGeneration &+= 1
-            viewportRuntimeError = nil
-            performanceMetrics = SimulationPerformanceMetrics()
+            diagnosticsStore.resetViewportDiagnostics()
         }
         .onChange(of: moduleCatalogStore.availableFiles) {
             syncSelectedFileSelection()
@@ -487,8 +496,7 @@ struct ContentView: View {
             SimulationCenterPane(
                 editorSettingsStore: editorSettingsStore,
                 runtimeConfigCoordinator: runtimeConfigCoordinator,
-                performanceMetrics: $performanceMetrics,
-                viewportRuntimeError: $viewportRuntimeError,
+                diagnosticsStore: diagnosticsStore,
                 viewportGeneration: viewportGeneration,
                 debugMetricsAreVisible: debugMetricsAreVisible
             )
@@ -991,6 +999,7 @@ struct ContentView: View {
         case .inspector:
             InspectorPanel(
                 interactionSnapshotRecorder: interactionSnapshotRecorder,
+                performanceReviewLogger: performanceReviewLogger,
                 transportState: runtimeConfigCoordinator.transportState,
                 validationReport: runtimeConfigCoordinator.validationReport,
                 performanceMetrics: performanceMetrics,
@@ -998,7 +1007,8 @@ struct ContentView: View {
                 collapsedPanelsCount: collapsedPanelIDs.count,
                 debugMetricsAreVisible: debugMetricsAreVisible,
                 viewportRuntimeError: viewportRuntimeError,
-                onStartInteractionSnapshot: startInteractionSnapshotRecording
+                onStartInteractionSnapshot: startInteractionSnapshotRecording,
+                onSetPerformanceReviewLoggingEnabled: { performanceReviewLogger.setEnabled($0) }
             )
         }
     }
@@ -1178,6 +1188,14 @@ struct ContentView: View {
 
     private var validationReport: RuntimeValidationReport {
         runtimeConfigCoordinator.validationReport
+    }
+
+    private var performanceMetrics: SimulationPerformanceMetrics {
+        diagnosticsStore.performanceMetrics
+    }
+
+    private var viewportRuntimeError: String? {
+        diagnosticsStore.viewportRuntimeError
     }
 
     private var debugMetricsAreVisible: Bool {
@@ -1363,6 +1381,38 @@ struct ContentView: View {
             debugMetricsVisible: debugMetricsAreVisible,
             panels: panelStates,
             performanceMetrics: InteractionSnapshotFormat.performanceMetrics(performanceMetrics)
+        )
+    }
+
+    private func makePerformanceReviewSample() -> PerformanceReviewSample? {
+        let editorState = editorSettingsStore.editorState
+        let activeModules = runtimeConfigCoordinator.activeModules
+        let transportState = runtimeConfigCoordinator.transportState
+        let metrics = performanceMetrics
+
+        return PerformanceReviewSample(
+            physicsModule: activeModules.physics.name,
+            visualModule: activeModules.visual.name,
+            optimizationModule: activeModules.optimization.name,
+            transportState: transportState.rawValue,
+            particleCount: editorState.physicsState.particleCount,
+            randomDistribution: editorState.physicsState.randomDistribution,
+            particleTypes: editorState.physicsState.particleTypes,
+            movementDirectionX: editorState.physicsState.movementDirection.x,
+            movementDirectionY: editorState.physicsState.movementDirection.y,
+            movementDirectionZ: editorState.physicsState.movementDirection.z,
+            timeScale: editorState.physicsState.timeScale,
+            sphereSize: editorState.visualState.sphereSize,
+            spectrumOffset: editorState.visualState.spectrumOffset,
+            showOptimizationInfo: editorState.visualState.showOptimizationInfo,
+            blockingMode: editorState.optimizationState.blockingMode.rawValue,
+            showLeaderCommunicationLog: editorState.optimizationState.showLeaderCommunicationLog,
+            protectLeaderFromUnload: editorState.debugSettings.protectLeaderFromUnload,
+            projectedBytes: runtimeConfigCoordinator.validationReport.projectedBytes,
+            memoryUsedBytes: metrics.memoryUsedBytes,
+            averageFPS: metrics.averageFPS,
+            averageUPS: metrics.averageUPS,
+            leaderInteractionsPerSecond: metrics.leaderInteractionsPerSecond
         )
     }
 
@@ -1670,14 +1720,15 @@ private enum EditorViewSupport {
 private struct SimulationCenterPane: View {
     @ObservedObject var editorSettingsStore: MainWindowEditorSettingsStore
     @ObservedObject var runtimeConfigCoordinator: SimulationRuntimeConfigCoordinator
-    @Binding var performanceMetrics: SimulationPerformanceMetrics
-    @Binding var viewportRuntimeError: String?
+    @ObservedObject var diagnosticsStore: MainWindowDiagnosticsStore
     let viewportGeneration: Int
     let debugMetricsAreVisible: Bool
 
     private var transportState: SimulationTransportState { runtimeConfigCoordinator.transportState }
     private var validationReport: RuntimeValidationReport { runtimeConfigCoordinator.validationReport }
     private var currentMemoryBudgetPreset: MemoryBudgetPreset { ProgramSettingsStore.memoryBudgetPreset }
+    private var performanceMetrics: SimulationPerformanceMetrics { diagnosticsStore.performanceMetrics }
+    private var viewportRuntimeError: String? { diagnosticsStore.viewportRuntimeError }
 
     var body: some View {
         VStack(spacing: 10) {
@@ -1756,8 +1807,7 @@ private struct SimulationCenterPane: View {
 
             MetalViewportView(
                 metricsEnabled: debugMetricsAreVisible,
-                onMetricsUpdate: { performanceMetrics = $0 },
-                onErrorUpdate: { viewportRuntimeError = $0 }
+                diagnosticsStore: diagnosticsStore
             )
             .id(viewportGeneration)
             .clipShape(RoundedRectangle(cornerRadius: 12))
@@ -1805,15 +1855,21 @@ private struct ModuleSlotsPanel: View {
 
                     HStack(spacing: 8) {
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(assigned?.lastPathComponent ?? "\(resolved.name) (fallback)")
+                            Text(assigned?.lastPathComponent ?? "Unassigned")
                                 .font(.caption2)
                                 .foregroundStyle(assigned == nil ? .secondary : .primary)
                                 .lineLimit(1)
-                            Text(assigned == nil ? "Using built-in default runtime module." : "Using assigned module file.")
+                            Text(assigned == nil ? "No file assigned. Runtime falls back to the built-in default module." : "Using assigned module file.")
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
                         Spacer()
+                        if assigned != nil {
+                            Button("Clear") {
+                                editorSettingsStore.setAssignedModulePath(nil, for: kind)
+                            }
+                            .font(.caption)
+                        }
                         Button("Choose File") {
                             importerTargetKind = kind
                             isImporterPresented = true
@@ -2146,10 +2202,18 @@ private struct FileViewPanel: View {
                     Text("Selected: \(selectedFile.url.lastPathComponent)")
                         .font(.caption)
                         .lineLimit(1)
-                    Button("Assign to \(selectedFile.kind.displayName)") {
-                        editorSettingsStore.setAssignedModulePath(selectedFile.url.path, for: selectedFile.kind)
+                    HStack(spacing: 8) {
+                        Button("Assign to \(selectedFile.kind.displayName)") {
+                            editorSettingsStore.setAssignedModulePath(selectedFile.url.path, for: selectedFile.kind)
+                        }
+                        .font(.caption)
+                        if editorSettingsStore.assignedModulePath(for: selectedFile.kind) != nil {
+                            Button("Clear \(selectedFile.kind.displayName)") {
+                                editorSettingsStore.setAssignedModulePath(nil, for: selectedFile.kind)
+                            }
+                            .font(.caption)
+                        }
                     }
-                    .font(.caption)
                 }
             }
         }
@@ -2158,6 +2222,7 @@ private struct FileViewPanel: View {
 
 private struct InspectorPanel: View {
     @ObservedObject var interactionSnapshotRecorder: InteractionSnapshotRecorder
+    @ObservedObject var performanceReviewLogger: PerformanceReviewLogger
     let transportState: SimulationTransportState
     let validationReport: RuntimeValidationReport
     let performanceMetrics: SimulationPerformanceMetrics
@@ -2166,6 +2231,7 @@ private struct InspectorPanel: View {
     let debugMetricsAreVisible: Bool
     let viewportRuntimeError: String?
     let onStartInteractionSnapshot: () -> Void
+    let onSetPerformanceReviewLoggingEnabled: (Bool) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -2196,6 +2262,26 @@ private struct InspectorPanel: View {
             Text("Diagnostics")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
+            Toggle(
+                "Performance Review Logging",
+                isOn: Binding(
+                    get: { performanceReviewLogger.isEnabled },
+                    set: { onSetPerformanceReviewLoggingEnabled($0) }
+                )
+            )
+            .font(.caption)
+            Text(performanceReviewStatusText)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            metricRow(
+                "Review Log Budget",
+                "\(ByteCountFormatter.string(fromByteCount: Int64(performanceReviewLogger.currentBudgetOccupancyBytes), countStyle: .file)) / \(ByteCountFormatter.string(fromByteCount: Int64(performanceReviewLogger.maxBudgetBytes), countStyle: .file))"
+            )
+            if performanceReviewLogger.isNearBudgetLimit {
+                Text("Performance review logs are nearing the 20 MB cap. Oldest samples will roll off.")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+            }
             Button(interactionSnapshotRecorder.isRecording ? "Interaction Snapshot (\(interactionSnapshotRecorder.remainingSeconds)s)" : "Interaction Snapshot") {
                 onStartInteractionSnapshot()
             }
@@ -2232,5 +2318,15 @@ private struct InspectorPanel: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }
+    }
+
+    private var performanceReviewStatusText: String {
+        if performanceReviewLogger.isEnabled {
+            if let currentComboFileName = performanceReviewLogger.currentComboFileName {
+                return "Adaptive logging on. Buffered samples: \(performanceReviewLogger.bufferedSampleCount). Latest combo: \(currentComboFileName)"
+            }
+            return "Adaptive logging on. Waiting for running simulation data."
+        }
+        return "Adaptive logging off."
     }
 }

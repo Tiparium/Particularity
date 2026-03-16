@@ -133,11 +133,15 @@ final class SimulationSession {
     }
 
     func updateSimulationState(_ nextState: SimulationViewportState) {
+        let previousTransportState = currentSimulationState.transportState
         currentSimulationState = nextState
         InteractionSnapshotRecorder.shared.record(
             event: "session.update_simulation_state",
             details: ["state": InteractionSnapshotFormat.viewport(nextState)]
         )
+        if nextState.transportState == .paused, previousTransportState != .paused {
+            viewportStateStore.flushPersistence()
+        }
         runtime?.updateSimulationState(nextState)
     }
 
@@ -269,6 +273,7 @@ final class WindowSimulationSessionStore {
     private let mainEditorSettingsStore = MainWindowEditorSettingsStore.shared
     private let mainViewportStateStore = MainWindowViewportStateStore.shared
     private let mainModuleCatalogStore = MainWindowModuleCatalogStore.shared
+    private let mainDiagnosticsStore = MainWindowDiagnosticsStore.shared
     private var mainRuntimeConfigCoordinator: SimulationRuntimeConfigCoordinator?
 
     func mainWindowEditorSettingsStore() -> MainWindowEditorSettingsStore {
@@ -283,18 +288,38 @@ final class WindowSimulationSessionStore {
         mainModuleCatalogStore
     }
 
+    func mainWindowDiagnosticsStore() -> MainWindowDiagnosticsStore {
+        mainDiagnosticsStore
+    }
+
     func mainWindowRuntimeConfigCoordinator() throws -> SimulationRuntimeConfigCoordinator {
         if let mainRuntimeConfigCoordinator {
             return mainRuntimeConfigCoordinator
         }
 
         let coordinator = SimulationRuntimeConfigCoordinator(
-            session: try mainWindowSession(metricsSink: { _ in }),
+            session: try mainWindowSession(),
             editorSettingsStore: mainEditorSettingsStore,
             moduleCatalogStore: mainModuleCatalogStore
         )
         mainRuntimeConfigCoordinator = coordinator
         return coordinator
+    }
+
+    func mainWindowSession() throws -> SimulationSession {
+        if let mainSession {
+            return mainSession
+        }
+
+        let session = try SimulationSession(
+            metricsSink: { [weak diagnosticsStore = mainDiagnosticsStore] metrics in
+                diagnosticsStore?.updatePerformanceMetrics(metrics)
+            },
+            editorSettingsStore: mainEditorSettingsStore,
+            viewportStateStore: mainViewportStateStore
+        )
+        mainSession = session
+        return session
     }
 
     func mainWindowSession(metricsSink: @escaping @MainActor (SimulationPerformanceMetrics) -> Void) throws -> SimulationSession {

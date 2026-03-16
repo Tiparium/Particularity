@@ -21,7 +21,9 @@ enum DefaultVisualModuleRuntime {
 
     struct ParticleUniforms {
         float4x4 mvp;
-        float pointSize;
+        float sphereSize;
+        float viewportHeight;
+        float projectionYScale;
         uint showOptimizationInfo;
     };
 
@@ -58,7 +60,9 @@ enum DefaultVisualModuleRuntime {
         if (u.showOptimizationInfo != 0 && vertexID != 0) {
             out.color = float4(in.color.rgb * 0.22, 0.10);
         }
-        out.pointSize = u.pointSize;
+        float clipW = max(0.0001, out.position.w);
+        float screenSpaceSize = max(1.0, u.sphereSize * u.viewportHeight * u.projectionYScale / clipW);
+        out.pointSize = screenSpaceSize;
         return out;
     }
 

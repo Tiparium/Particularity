@@ -9,9 +9,11 @@ struct LineUniforms {
 
 struct ParticleUniforms {
     var mvp: float4x4
-    var pointSize: Float
+    var sphereSize: Float
+    var viewportHeight: Float
+    var projectionYScale: Float
     var showOptimizationInfo: UInt32
-    var padding: SIMD2<UInt32> = .zero
+    var padding: UInt32 = 0
 }
 
 struct LineVertex {

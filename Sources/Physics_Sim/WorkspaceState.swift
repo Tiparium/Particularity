@@ -75,7 +75,7 @@ final class MainWindowViewportStateStore: ObservableObject {
     func updateCameraState(_ nextState: ViewportCameraState) {
         var nextViewportState = viewportState
         nextViewportState.camera = nextState
-        updateViewportState(nextViewportState)
+        viewportState = nextViewportState
     }
 
     func updateSceneState(_ nextState: SceneState) {

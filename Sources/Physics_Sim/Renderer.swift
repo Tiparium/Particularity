@@ -240,6 +240,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         let size = view.drawableSize
         let aspect = Float(size.width / max(size.height, 1))
         let projection = float4x4.perspective(fovY: 60.0 * .pi / 180.0, aspect: aspect, near: 0.1, far: 100.0)
+        let projectionYScale = projection.columns.1.y
         let model = float4x4.identity()
         let mvp = projection * currentCameraState().viewMatrix() * model
 
@@ -261,7 +262,9 @@ final class Renderer: NSObject, MTKViewDelegate {
            let particleColorBuffer = renderState.particleColorBuffer {
             var particleUniforms = ParticleUniforms(
                 mvp: mvp,
-                pointSize: DefaultOptimizationModuleRuntime.pointSize(for: simulationState),
+                sphereSize: simulationState.sphereSize,
+                viewportHeight: Float(max(size.height, 1)),
+                projectionYScale: projectionYScale,
                 showOptimizationInfo: simulationState.showOptimizationInfo ? 1 : 0
             )
             encoder.setRenderPipelineState(particlePipeline)

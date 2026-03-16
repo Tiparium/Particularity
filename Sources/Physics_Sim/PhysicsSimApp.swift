@@ -47,6 +47,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
         return true
     }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        MainWindowViewportStateStore.shared.flushPersistence()
+        PerformanceReviewLogger.shared.flushBufferedSamples()
+    }
 }
 
 @main

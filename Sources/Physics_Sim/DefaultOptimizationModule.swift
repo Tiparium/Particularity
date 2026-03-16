@@ -88,7 +88,4 @@ enum DefaultOptimizationModuleRuntime {
         lineVertices[id].position = positions[particleIndex].xyz;
     }
     """
-    static func pointSize(for state: SimulationViewportState) -> Float {
-        max(3.0, state.sphereSize * 480.0)
-    }
 }

@@ -8,6 +8,7 @@ enum ProgramSettingID: String, CaseIterable, Identifiable {
     case shortcutProfile
     case showInteractionDebugOverlays
     case memoryBudgetPreset
+    case performanceReviewLogging
 
     var id: String { rawValue }
 }
@@ -56,6 +57,11 @@ enum ProgramSettingsCatalog {
             title: "Memory Budget Preset",
             description: "Select M1/M1 Pro style memory budget defaults."
         ),
+        ProgramSettingCandidate(
+            id: .performanceReviewLogging,
+            title: "Performance Review Logging",
+            description: "Record sparse long-term performance samples with adaptive bursts after changes."
+        ),
     ]
 }
 
@@ -82,6 +88,7 @@ enum ProgramSettingsStore {
         static let orbitInputMode = "settings.viewport.orbitInputMode"
         static let uiPanelDragInputMode = "settings.ui.panelDragInputMode"
         static let memoryBudgetPreset = "settings.sim.memoryBudgetPreset"
+        static let performanceReviewLogging = "settings.debug.performanceReviewLogging"
     }
 
     static var invertScrollZoom: Bool {
@@ -131,5 +138,16 @@ enum ProgramSettingsStore {
             return preset
         }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: Key.memoryBudgetPreset) }
+    }
+
+    static var performanceReviewLoggingEnabled: Bool {
+        get {
+            let defaults = UserDefaults.standard
+            if defaults.object(forKey: Key.performanceReviewLogging) == nil {
+                return false
+            }
+            return defaults.bool(forKey: Key.performanceReviewLogging)
+        }
+        set { UserDefaults.standard.set(newValue, forKey: Key.performanceReviewLogging) }
     }
 }
