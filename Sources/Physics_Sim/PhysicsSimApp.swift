@@ -5,6 +5,7 @@ import Foundation
 extension Notification.Name {
     static let requestAddDockPanel = Notification.Name("PhysicsSim.RequestAddDockPanel")
     static let cancelInProgressOperation = Notification.Name("PhysicsSim.CancelInProgressOperation")
+    static let rebuildViewport = Notification.Name("PhysicsSim.RebuildViewport")
 }
 
 enum AppMenuEventKey {
@@ -32,6 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         NSApp.setActivationPolicy(.regular)
+        TestingCommandHandler.shared.start()
         DispatchQueue.main.async {
             NSApp.activate(ignoringOtherApps: true)
             NSApp.windows.first?.makeKeyAndOrderFront(nil)
@@ -53,11 +55,18 @@ struct PhysicsSimApp: App {
     @AppStorage("settings.viewport.invertScrollZoom") private var invertScrollZoom = true
     @AppStorage("settings.viewport.orbitInputMode") private var orbitInputModeRaw = ProgramSettingsStore.OrbitInputMode.clickThenDrag.rawValue
     @AppStorage("settings.ui.panelDragInputMode") private var uiPanelDragInputModeRaw = ProgramSettingsStore.UIPanelDragInputMode.clickThenDrag.rawValue
+    @Environment(\.openWindow) private var openWindow
 
     var body: some Scene {
         Window("Particularity", id: "main-window") {
             ContentView()
                 .frame(minWidth: 900, minHeight: 620)
+                .onAppear {
+                    WindowCommandCenter.shared.openMainWindow = {
+                        openWindow(id: "main-window")
+                        NSApp.activate(ignoringOtherApps: true)
+                    }
+                }
         }
         .commands {
             CommandMenu("Settings") {

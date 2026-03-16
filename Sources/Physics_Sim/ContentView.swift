@@ -18,37 +18,6 @@ private enum DockZone: String, CaseIterable, Identifiable, Codable {
     }
 }
 
-private enum ModuleKind: String, CaseIterable, Identifiable {
-    case physics
-    case visual
-    case optimization
-
-    var id: String { rawValue }
-    var displayName: String {
-        switch self {
-        case .physics: return "Physics Module"
-        case .visual: return "Visual Module"
-        case .optimization: return "Optimization Module"
-        }
-    }
-
-    var folderName: String {
-        switch self {
-        case .physics: return "Physics"
-        case .visual: return "Visual"
-        case .optimization: return "Optimization"
-        }
-    }
-
-    var shortTitle: String {
-        switch self {
-        case .physics: return "Physics"
-        case .visual: return "Visual"
-        case .optimization: return "Optimization"
-        }
-    }
-}
-
 private enum DockPanelType: String, CaseIterable, Codable {
     case moduleSlots
     case physicsSettings
@@ -103,13 +72,6 @@ private struct DockPanelPreview: Identifiable {
     let panel: DockPanel
     let isGhost: Bool
     let isShifted: Bool
-}
-
-private struct ModuleFile: Identifiable {
-    let id: String
-    let kind: ModuleKind
-    let url: URL
-    let descriptor: ModuleDescriptor?
 }
 
 private enum HeaderControlVariant {
@@ -296,7 +258,7 @@ private struct DockPanelDropDelegate: DropDelegate {
 struct ContentView: View {
     private let dockLayoutStorageKey = "PhysicsSim.DockLayoutState.v1"
     private let particleCountEngineCap = 10_000_000
-    private let particleCountUICap = 250_000
+    private let particleCountUICap = 100_000
     @AppStorage("layout.dock.leftWidth") private var storedLeftDockWidth = 280.0
     @AppStorage("layout.dock.rightWidth") private var storedRightDockWidth = 280.0
     @AppStorage("layout.dock.centerHeight") private var storedCenterDockHeight = 240.0
@@ -308,8 +270,6 @@ struct ContentView: View {
         DockPanel(id: UUID(), type: .optimizationSettings, zone: .right),
     ]
 
-    @State private var assignedModules: [ModuleKind: URL] = [:]
-    @State private var availableFiles: [ModuleFile] = []
     @State private var selectedFileID: String?
     @State private var isImporterPresented = false
     @State private var importerTargetKind: ModuleKind = .physics
@@ -322,12 +282,9 @@ struct ContentView: View {
     @State private var menuHoverZone: DockZone?
     @State private var panelFramesByZone: [DockZone: [UUID: CGRect]] = [:]
     @State private var zoneFramesInRoot: [DockZone: CGRect] = [:]
-    @State private var transportState: SimulationTransportState = .stopped
-    @State private var physicsState = PhysicsModuleState()
-    @State private var visualState = VisualModuleState()
-    @State private var optimizationState = OptimizationModuleState()
-    @State private var debugSettings = DebugSettingsState()
     @State private var performanceMetrics = SimulationPerformanceMetrics()
+    @State private var viewportRuntimeError: String?
+    @State private var viewportGeneration: Int = 0
     @State private var leftDockWidth = 280.0
     @State private var rightDockWidth = 280.0
     @State private var centerDockHeight = 240.0
@@ -335,9 +292,32 @@ struct ContentView: View {
     @State private var rightResizeOriginWidth: CGFloat?
     @State private var centerResizeOriginHeight: CGFloat?
     @State private var hoveredResizeAxis: DockResizeAxis?
-    @AppStorage("settings.sim.memoryBudgetPreset") private var memoryBudgetPresetRaw = MemoryBudgetPreset.m1Pro.rawValue
+    private let session: SimulationSession
+    @ObservedObject private var editorSettingsStore: MainWindowEditorSettingsStore
+    @ObservedObject private var moduleCatalogStore: MainWindowModuleCatalogStore
+    @ObservedObject private var runtimeConfigCoordinator: SimulationRuntimeConfigCoordinator
+    @ObservedObject private var interactionSnapshotRecorder: InteractionSnapshotRecorder
 
-    private let projectRootURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+    init() {
+        do {
+            let session = try WindowSimulationSessionStore.shared.mainWindowSession(metricsSink: { _ in })
+            self.session = session
+            _editorSettingsStore = ObservedObject(
+                wrappedValue: WindowSimulationSessionStore.shared.mainWindowEditorSettingsStore()
+            )
+            _moduleCatalogStore = ObservedObject(
+                wrappedValue: WindowSimulationSessionStore.shared.mainWindowModuleCatalogStore()
+            )
+            _runtimeConfigCoordinator = ObservedObject(
+                wrappedValue: try WindowSimulationSessionStore.shared.mainWindowRuntimeConfigCoordinator()
+            )
+            _interactionSnapshotRecorder = ObservedObject(
+                wrappedValue: InteractionSnapshotRecorder.shared
+            )
+        } catch {
+            fatalError("Failed to create main window simulation session: \(error.localizedDescription)")
+        }
+    }
 
     private var defaultPanels: [DockPanel] {
         [
@@ -448,7 +428,8 @@ struct ContentView: View {
         }
         .onAppear {
             loadDockLayoutState()
-            refreshModuleFiles()
+            moduleCatalogStore.refresh()
+            syncSelectedFileSelection()
         }
         .onAppear {
             fputs("APP_READY\n", stderr)
@@ -472,6 +453,18 @@ struct ContentView: View {
                 resetDragState()
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .testingAPICommand)) { note in
+            guard let command = note.object as? TestingAPICommand else { return }
+            handleTestingAPICommand(command)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .rebuildViewport)) { _ in
+            viewportGeneration &+= 1
+            viewportRuntimeError = nil
+            performanceMetrics = SimulationPerformanceMetrics()
+        }
+        .onChange(of: moduleCatalogStore.availableFiles) {
+            syncSelectedFileSelection()
+        }
         .onExitCommand {
             cancelMenuInsertionMode()
             if panelDragSession != nil {
@@ -484,66 +477,21 @@ struct ContentView: View {
             allowsMultipleSelection: false
         ) { result in
             if case .success(let urls) = result, let url = urls.first {
-                assignedModules[importerTargetKind] = url
+                editorSettingsStore.setAssignedModulePath(url.path, for: importerTargetKind)
             }
         }
     }
 
     private func centerColumn(maxCenterDockHeight: CGFloat) -> some View {
         VSplitView {
-            VStack(spacing: 10) {
-                HStack {
-                    Text("Simulation")
-                        .font(.headline)
-                    Spacer()
-                    Text("Sprint 01 First Pass")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.horizontal, 4)
-
-                transportBar
-
-                HStack(spacing: 16) {
-                    LabeledContent("Transport", value: transportState.title)
-                    LabeledContent("Budget", value: currentMemoryBudgetPreset.title)
-                    LabeledContent("Projected", value: byteCountString(validationReport.projectedBytes))
-                    Spacer()
-                    if let issue = validationReport.issue {
-                        Text(issue)
-                            .font(.caption)
-                            .foregroundStyle(Color.red.opacity(0.9))
-                            .lineLimit(2)
-                            .multilineTextAlignment(.trailing)
-                    }
-                }
-                .font(.caption)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
-
-                MetalViewportView(
-                    simulationState: currentViewportState,
-                    onMetricsUpdate: { metrics in
-                        performanceMetrics = metrics
-                    }
-                )
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(Color(nsColor: .separatorColor).opacity(0.5), lineWidth: 1)
-                    )
-
-                HStack(spacing: 16) {
-                    Text("Drag: Orbit")
-                    Text("WASD: Orbit")
-                    Text("Scroll/Pinch: Dolly")
-                    Text("F: Reset View")
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
+            SimulationCenterPane(
+                editorSettingsStore: editorSettingsStore,
+                runtimeConfigCoordinator: runtimeConfigCoordinator,
+                performanceMetrics: $performanceMetrics,
+                viewportRuntimeError: $viewportRuntimeError,
+                viewportGeneration: viewportGeneration,
+                debugMetricsAreVisible: debugMetricsAreVisible
+            )
             .frame(minHeight: 320)
 
             dropZoneSurface(for: .center, panels: panelsInZone(.center))
@@ -619,12 +567,12 @@ struct ContentView: View {
     private var transportBar: some View {
         HStack(spacing: 10) {
             Button("Start") {
-                transportState = .running
+                runtimeConfigCoordinator.startSimulation()
             }
             .disabled(transportState != .stopped || !validationReport.canStart)
 
             Button(transportState == .running ? "Pause" : "Play") {
-                transportState = transportState == .running ? .paused : .running
+                runtimeConfigCoordinator.togglePausePlay()
             }
             .frame(minWidth: 64)
             .disabled(
@@ -633,14 +581,21 @@ struct ContentView: View {
             )
 
             Button("Stop") {
-                transportState = .stopped
+                runtimeConfigCoordinator.stopSimulation()
             }
             .disabled(transportState == .stopped)
 
             Divider()
                 .frame(height: 18)
 
-            Picker("Memory Budget", selection: $memoryBudgetPresetRaw) {
+            Picker("Memory Budget", selection: Binding(
+                get: { ProgramSettingsStore.memoryBudgetPreset.rawValue },
+                set: {
+                    guard let preset = MemoryBudgetPreset(rawValue: $0) else { return }
+                    ProgramSettingsStore.memoryBudgetPreset = preset
+                    runtimeConfigCoordinator.refreshDerivedState()
+                }
+            )) {
                 ForEach(MemoryBudgetPreset.allCases) { preset in
                     Text(preset.title).tag(preset.rawValue)
                 }
@@ -945,22 +900,7 @@ struct ContentView: View {
             }
 
             if !collapsedPanelIDs.contains(panel.id) || isGhost {
-                Group {
-                    switch panel.type {
-                    case .moduleSlots:
-                        moduleSlotsBlock
-                    case .physicsSettings:
-                        moduleSettingsPanel(for: .physics)
-                    case .visualSettings:
-                        moduleSettingsPanel(for: .visual)
-                    case .optimizationSettings:
-                        moduleSettingsPanel(for: .optimization)
-                    case .fileView:
-                        fileViewBlock
-                    case .inspector:
-                        inspectorBlock
-                    }
-                }
+                panelBodyContent(for: panel)
                 .allowsHitTesting(!isPanelDragActive || isGhost)
             }
         }
@@ -992,322 +932,74 @@ struct ContentView: View {
         .animation(.easeOut(duration: 0.14), value: isGhost)
     }
 
-    private var moduleSlotsBlock: some View {
-        VStack(spacing: 8) {
-            ForEach(ModuleKind.allCases) { kind in
-                let assigned = assignedModules[kind]
-                let resolved = resolvedModule(for: kind)
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        Text(kind.displayName)
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.primary)
-                        Spacer()
-                        if resolved.visibility == .dev {
-                            Text("DEV")
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(.orange)
-                        }
-                    }
-
-                    HStack(spacing: 8) {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(assigned?.lastPathComponent ?? "\(resolved.name) (fallback)")
-                                .font(.caption2)
-                                .foregroundStyle(assigned == nil ? .secondary : .primary)
-                                .lineLimit(1)
-
-                            Text(assigned == nil ? "Using built-in default runtime module." : "Using assigned module file.")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-
-                        Spacer()
-
-                        Button("Choose File") {
-                            importerTargetKind = kind
-                            isImporterPresented = true
-                        }
-                        .font(.caption)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(8)
-                .background(.quaternary.opacity(0.18), in: RoundedRectangle(cornerRadius: 8))
-                .contextMenu {
-                    if let selected = selectedFile, selected.kind == kind {
-                        Button("Assign Selected File") {
-                            assignedModules[kind] = selected.url
-                        }
-                    }
-                    if assigned != nil {
-                        Button("Clear Assignment", role: .destructive) {
-                            assignedModules.removeValue(forKey: kind)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private func moduleSettingsPanel(for kind: ModuleKind) -> some View {
-        let resolved = resolvedModule(for: kind)
-
-        return VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(resolved.name)
-                        .font(.caption.weight(.semibold))
-                    Text(kind.displayName)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer()
-
-                if resolved.visibility == .dev {
-                    Text("DEV")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.orange)
-                }
-            }
-
-            ZStack {
-                moduleSettingsContent(for: kind, resolved: resolved)
-                    .id(resolved.id)
-                    .transition(
-                        .asymmetric(
-                            insertion: .opacity.combined(with: .scale(scale: 0.985)),
-                            removal: .opacity
-                        )
-                    )
-            }
-            .animation(.easeInOut(duration: 0.22), value: resolved.id)
-        }
-    }
-
     @ViewBuilder
-    private func moduleSettingsContent(for kind: ModuleKind, resolved: ModuleDescriptor) -> some View {
-        switch kind {
-        case .physics:
-            if resolved.name == ModuleCatalog.defaultPhysics.name {
-                physicsControlBlock
-            } else {
-                unavailableSettingsView(for: resolved)
+    private func panelBodyContent(for panel: DockPanel) -> some View {
+        if panel.zone == .center {
+            ScrollView(.vertical) {
+                panelBodyCore(for: panel)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.trailing, 14)
             }
-        case .visual:
-            if resolved.name == ModuleCatalog.defaultVisual.name {
-                visualControlBlock
-            } else {
-                unavailableSettingsView(for: resolved)
-            }
-        case .optimization:
-            if resolved.name == ModuleCatalog.defaultOptimization.name {
-                optimizationControlBlock
-            } else {
-                unavailableSettingsView(for: resolved)
-            }
-        }
-    }
-
-    private func unavailableSettingsView(for resolved: ModuleDescriptor) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("No dedicated settings UI is registered for this module yet.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text("Resolved module: \(resolved.name)")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(8)
-        .background(.quaternary.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
-    }
-
-    @ViewBuilder
-    private func moduleControlBlock(for kind: ModuleKind) -> some View {
-        switch kind {
-        case .physics:
-            physicsControlBlock
-        case .visual:
-            visualControlBlock
-        case .optimization:
-            optimizationControlBlock
-        }
-    }
-
-    private var physicsControlBlock: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            EventuallyAppliedIntSlider(
-                title: "Particle Count",
-                appliedValue: $physicsState.particleCount,
-                range: 1...particleCountUICap,
-                helpText: "UI cap: \(particleCountUICap.formatted()). Hard engine limit: \(particleCountEngineCap.formatted())."
-            )
-
-            EventuallyAppliedToggle(title: "Random Distribution", appliedValue: $physicsState.randomDistribution)
-
-            EventuallyAppliedSlider(
-                title: "Particle Types",
-                appliedValue: Binding(
-                    get: { Double(physicsState.particleTypes) },
-                    set: { physicsState.particleTypes = max(1, min(32, Int($0.rounded()))) }
-                ),
-                range: 1...32,
-                step: 1,
-                valueText: { "\(Int($0.rounded()))" }
-            )
-
-            Picker("Movement", selection: .constant("slide")) {
-                Text("Slide").tag("slide")
-            }
-            .font(.caption)
-            .pickerStyle(.segmented)
-            .disabled(true)
-
-            EventuallyAppliedSlider(
-                title: "Direction X",
-                appliedValue: $physicsState.movementDirection.x,
-                range: 0...1,
-                step: 0.01,
-                valueText: { String(format: "%.2f", $0) }
-            )
-
-            EventuallyAppliedSlider(
-                title: "Direction Y",
-                appliedValue: $physicsState.movementDirection.y,
-                range: 0...1,
-                step: 0.01,
-                valueText: { String(format: "%.2f", $0) }
-            )
-
-            EventuallyAppliedSlider(
-                title: "Direction Z",
-                appliedValue: $physicsState.movementDirection.z,
-                range: 0...1,
-                step: 0.01,
-                valueText: { String(format: "%.2f", $0) }
-            )
-
-            EventuallyAppliedSlider(
-                title: "Time Scale",
-                appliedValue: $physicsState.timeScale,
-                range: 0...4,
-                step: 0.01,
-                valueText: { String(format: "%.2fx", $0) }
-            )
-        }
-    }
-
-    private var visualControlBlock: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            EventuallyAppliedSlider(
-                title: "Sphere Size",
-                appliedValue: $visualState.sphereSize,
-                range: 0.005...0.120,
-                step: 0.001,
-                valueText: { String(format: "%.3f", $0) }
-            )
-
-            EventuallyAppliedSlider(
-                title: "Spectrum Offset",
-                appliedValue: $visualState.spectrumOffset,
-                range: 0...1,
-                step: 0.01,
-                valueText: { String(format: "%.2f", $0) }
-            )
-
-            EventuallyAppliedToggle(title: "Show Optimization Info", appliedValue: $visualState.showOptimizationInfo)
-                .disabled(!resolvedVisualSupportsOptimizationDebug)
-        }
-    }
-
-    private var optimizationControlBlock: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            EventuallyAppliedSegmentedPicker(
-                title: "Blocking Mode",
-                appliedValue: $optimizationState.blockingMode,
-                options: OptimizationBlockingMode.allCases,
-                optionTitle: { $0.title }
-            )
-
-            EventuallyAppliedToggle(title: "Leader Communication Log", appliedValue: $optimizationState.showLeaderCommunicationLog)
-
-            EventuallyAppliedToggle(title: "Protect Leader From Unload", appliedValue: $debugSettings.protectLeaderFromUnload)
-
-            Text("Naive all-pairs traversal is the default optimization MVP.")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    private var fileViewBlock: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Root: \(modulesRootURL.path)")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                Spacer()
-                Button("Refresh") { refreshModuleFiles() }
-                    .font(.caption2)
-            }
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 10) {
-                    ForEach(ModuleKind.allCases) { kind in
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(kind.displayName)
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                            let files = availableFiles.filter { $0.kind == kind }
-                            if files.isEmpty {
-                                Text("No files")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                            } else {
-                                ForEach(files) { file in
-                                    Button {
-                                        selectedFileID = file.id
-                                    } label: {
-                                        HStack {
-                                            Text(file.url.lastPathComponent)
-                                                .font(.caption)
-                                                .lineLimit(1)
-                                            Spacer()
-                                        }
-                                        .padding(.horizontal, 8)
-                                        .padding(.vertical, 5)
-                                        .background(
-                                            RoundedRectangle(cornerRadius: 6)
-                                                .fill(
-                                                    selectedFileID == file.id
-                                                        ? Color.accentColor.opacity(0.22)
-                                                        : Color(nsColor: .quaternaryLabelColor).opacity(0.09)
-                                                )
-                                        )
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            .frame(minHeight: 180)
             .scrollIndicators(.visible)
+        } else {
+            panelBodyCore(for: panel)
+        }
+    }
 
-            if let selected = selectedFile {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Selected: \(selected.url.lastPathComponent)")
-                        .font(.caption)
-                        .lineLimit(1)
-                    Button("Assign to \(selected.kind.displayName)") {
-                        assignedModules[selected.kind] = selected.url
-                    }
-                    .font(.caption)
-                }
-            }
+    @ViewBuilder
+    private func panelBodyCore(for panel: DockPanel) -> some View {
+        switch panel.type {
+        case .moduleSlots:
+            ModuleSlotsPanel(
+                editorSettingsStore: editorSettingsStore,
+                availableFiles: moduleCatalogStore.availableFiles,
+                selectedFile: selectedFile,
+                importerTargetKind: $importerTargetKind,
+                isImporterPresented: $isImporterPresented
+            )
+        case .physicsSettings:
+            ModuleSettingsPanelView(
+                kind: .physics,
+                editorSettingsStore: editorSettingsStore,
+                availableFiles: moduleCatalogStore.availableFiles,
+                particleCountUICap: particleCountUICap,
+                particleCountEngineCap: particleCountEngineCap
+            )
+        case .visualSettings:
+            ModuleSettingsPanelView(
+                kind: .visual,
+                editorSettingsStore: editorSettingsStore,
+                availableFiles: moduleCatalogStore.availableFiles,
+                particleCountUICap: particleCountUICap,
+                particleCountEngineCap: particleCountEngineCap
+            )
+        case .optimizationSettings:
+            ModuleSettingsPanelView(
+                kind: .optimization,
+                editorSettingsStore: editorSettingsStore,
+                availableFiles: moduleCatalogStore.availableFiles,
+                particleCountUICap: particleCountUICap,
+                particleCountEngineCap: particleCountEngineCap
+            )
+        case .fileView:
+            FileViewPanel(
+                editorSettingsStore: editorSettingsStore,
+                availableFiles: moduleCatalogStore.availableFiles,
+                selectedFile: selectedFile,
+                onRefresh: moduleCatalogStore.refresh
+            )
+        case .inspector:
+            InspectorPanel(
+                interactionSnapshotRecorder: interactionSnapshotRecorder,
+                transportState: runtimeConfigCoordinator.transportState,
+                validationReport: runtimeConfigCoordinator.validationReport,
+                performanceMetrics: performanceMetrics,
+                panelsCount: panels.count,
+                collapsedPanelsCount: collapsedPanelIDs.count,
+                debugMetricsAreVisible: debugMetricsAreVisible,
+                viewportRuntimeError: viewportRuntimeError,
+                onStartInteractionSnapshot: startInteractionSnapshotRecording
+            )
         }
     }
 
@@ -1451,7 +1143,7 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
             }
 
-            if let issue = validationReport.issue {
+            if let issue = viewportRuntimeError ?? validationReport.issue {
                 Text(issue)
                     .font(.caption2)
                     .foregroundStyle(Color.red.opacity(0.9))
@@ -1463,76 +1155,34 @@ struct ContentView: View {
         }
     }
 
-    private var modulesRootURL: URL {
-        projectRootURL.appendingPathComponent("Modules", isDirectory: true)
-    }
-
     private var selectedFile: ModuleFile? {
         guard let selectedFileID else { return nil }
-        return availableFiles.first(where: { $0.id == selectedFileID })
+        return moduleCatalogStore.availableFiles.first(where: { $0.id == selectedFileID })
+    }
+
+    private var availableFiles: [ModuleFile] {
+        moduleCatalogStore.availableFiles
+    }
+
+    private var modulesRootURL: URL {
+        moduleCatalogStore.modulesRootURL
     }
 
     private var currentMemoryBudgetPreset: MemoryBudgetPreset {
-        MemoryBudgetPreset(rawValue: memoryBudgetPresetRaw) ?? .m1Pro
+        ProgramSettingsStore.memoryBudgetPreset
     }
 
-    private var currentViewportState: SimulationViewportState {
-        SimulationViewportState(
-            transportState: transportState,
-            particleCount: physicsState.particleCount,
-            randomDistribution: physicsState.randomDistribution,
-            particleTypes: physicsState.particleTypes,
-            movementDirection: SIMD3<Float>(
-                Float(physicsState.movementDirection.x),
-                Float(physicsState.movementDirection.y),
-                Float(physicsState.movementDirection.z)
-            ),
-            timeScale: Float(physicsState.timeScale),
-            sphereSize: Float(visualState.sphereSize),
-            spectrumOffset: Float(visualState.spectrumOffset),
-            showOptimizationInfo: resolvedVisualSupportsOptimizationDebug && visualState.showOptimizationInfo,
-            optimizationBlockingMode: optimizationState.blockingMode
-        )
-    }
-
-    private var resolvedVisualSupportsOptimizationDebug: Bool {
-        resolvedModule(for: .visual).acceptsOptimizationDebugInfo
-            && resolvedModule(for: .optimization).name == ModuleCatalog.defaultOptimization.name
+    private var activeModuleSet: ActiveModuleSet {
+        runtimeConfigCoordinator.activeModules
     }
 
     private var validationReport: RuntimeValidationReport {
-        let projectedBytes = projectedMemoryBytes()
-
-        if !resolvedModulesAreCompatible {
-            return RuntimeValidationReport(
-                issue: "Selected modules are incompatible. TSD would fail to start.",
-                projectedBytes: projectedBytes
-            )
-        }
-
-        if projectedBytes > currentMemoryBudgetPreset.budgetBytes {
-            return RuntimeValidationReport(
-                issue: "Projected simulation memory exceeds the \(currentMemoryBudgetPreset.title) budget.",
-                projectedBytes: projectedBytes
-            )
-        }
-
-        return RuntimeValidationReport(issue: nil, projectedBytes: projectedBytes)
+        runtimeConfigCoordinator.validationReport
     }
 
-    private var resolvedModulesAreCompatible: Bool {
-        let visual = resolvedModule(for: .visual)
-        let optimization = resolvedModule(for: .optimization)
-
-        if visual.acceptsOptimizationDebugInfo {
-            return optimization.name == ModuleCatalog.defaultOptimization.name
-        }
-
-        if optimizationState.showLeaderCommunicationLog {
-            return optimization.name == ModuleCatalog.defaultOptimization.name
-        }
-
-        return true
+    private var debugMetricsAreVisible: Bool {
+        guard let inspectorPanel = panels.first(where: { $0.type == .inspector }) else { return false }
+        return !collapsedPanelIDs.contains(inspectorPanel.id)
     }
 
     private var currentlyDraggingPanel: DockPanel? {
@@ -1546,11 +1196,22 @@ struct ContentView: View {
 
     private func addPanel(type: DockPanelType, to zone: DockZone) {
         panels.append(DockPanel(id: UUID(), type: type, zone: zone))
+        interactionSnapshotRecorder.record(
+            event: "ui.add_panel",
+            details: [
+                "type": type.rawValue,
+                "zone": zone.rawValue,
+            ]
+        )
     }
 
     private func removePanel(_ id: UUID) {
         panels.removeAll { $0.id == id }
         collapsedPanelIDs.remove(id)
+        interactionSnapshotRecorder.record(
+            event: "ui.remove_panel",
+            details: ["panelID": id.uuidString]
+        )
         if panelDragSession?.panelID == id {
             resetDragState()
         }
@@ -1562,6 +1223,13 @@ struct ContentView: View {
         } else {
             collapsedPanelIDs.insert(id)
         }
+        interactionSnapshotRecorder.record(
+            event: "ui.toggle_panel_collapsed",
+            details: [
+                "panelID": id.uuidString,
+                "isCollapsed": "\(collapsedPanelIDs.contains(id))",
+            ]
+        )
     }
 
     private func movePanel(id: UUID, to zone: DockZone, at insertionIndex: Int?) {
@@ -1576,6 +1244,14 @@ struct ContentView: View {
 
         if destinationCandidates.isEmpty {
             panels.append(moved)
+            interactionSnapshotRecorder.record(
+                event: "ui.move_panel",
+                details: [
+                    "panelID": id.uuidString,
+                    "zone": zone.rawValue,
+                    "insertionIndex": "\(insertionIndex ?? destinationCandidates.count)",
+                ]
+            )
             return
         }
 
@@ -1584,6 +1260,14 @@ struct ContentView: View {
         } else {
             panels.insert(moved, at: destinationCandidates[indexInZone])
         }
+        interactionSnapshotRecorder.record(
+            event: "ui.move_panel",
+            details: [
+                "panelID": id.uuidString,
+                "zone": zone.rawValue,
+                "insertionIndex": "\(indexInZone)",
+            ]
+        )
     }
 
     private func dragPreview(for panel: DockPanel) -> some View {
@@ -1611,34 +1295,75 @@ struct ContentView: View {
         .shadow(color: .black.opacity(0.15), radius: 10, x: 0, y: 4)
     }
 
-    private func refreshModuleFiles() {
-        let fm = FileManager.default
-        var scanned: [ModuleFile] = []
-
-        for kind in ModuleKind.allCases {
-            let dir = modulesRootURL.appendingPathComponent(kind.folderName, isDirectory: true)
-            guard let items = try? fm.contentsOfDirectory(
-                at: dir,
-                includingPropertiesForKeys: nil,
-                options: [.skipsHiddenFiles]
-            ) else { continue }
-
-            for url in items where !url.hasDirectoryPath {
-                scanned.append(
-                    ModuleFile(
-                        id: "\(kind.rawValue)|\(url.path)",
-                        kind: kind,
-                        url: url,
-                        descriptor: parseDescriptor(at: url)
-                    )
-                )
-            }
-        }
-
-        availableFiles = scanned.sorted { $0.url.lastPathComponent < $1.url.lastPathComponent }
+    private func syncSelectedFileSelection() {
+        let availableFiles = moduleCatalogStore.availableFiles
         if selectedFileID == nil || !availableFiles.contains(where: { $0.id == selectedFileID }) {
             selectedFileID = availableFiles.first?.id
         }
+    }
+
+    private func refreshModuleFiles() {
+        moduleCatalogStore.refresh()
+    }
+
+    private func handleTestingAPICommand(_ command: TestingAPICommand) {
+        interactionSnapshotRecorder.record(
+            event: "testing_api.command",
+            details: ["command": command.rawValue]
+        )
+        switch command {
+        case .startSimulation:
+            runtimeConfigCoordinator.startSimulation()
+        case .togglePausePlay:
+            runtimeConfigCoordinator.togglePausePlay()
+        case .stopSimulation:
+            runtimeConfigCoordinator.stopSimulation()
+        case .dumpState:
+            RuntimeEventLogger.log(
+                "testing_api dump_state transport=\(transportState.rawValue) particles=\(physicsState.particleCount) random=\(physicsState.randomDistribution) modules=physics:\(runtimeConfigCoordinator.activeModules.physics.name),visual:\(runtimeConfigCoordinator.activeModules.visual.name),optimization:\(runtimeConfigCoordinator.activeModules.optimization.name) panels=\(panels.count)"
+            )
+        case .closeMainWindow:
+            WindowCommandCenter.shared.closeMainWindow()
+        case .openMainWindow:
+            WindowCommandCenter.shared.reopenMainWindow()
+        }
+    }
+
+    private func startInteractionSnapshotRecording() {
+        interactionSnapshotRecorder.startRecording { makeInteractionSnapshotState() }
+    }
+
+    private func makeInteractionSnapshotState() -> InteractionSnapshotState {
+        let editorState = editorSettingsStore.editorState
+        let sessionSimulationState = session.simulationState
+        let renderState = session.renderState
+        let panelStates = panels.map { panel in
+            InteractionSnapshotPanelState(
+                id: panel.id.uuidString,
+                type: panel.type.rawValue,
+                zone: panel.zone.rawValue,
+                isCollapsed: collapsedPanelIDs.contains(panel.id)
+            )
+        }
+
+        return InteractionSnapshotState(
+            transportState: runtimeConfigCoordinator.transportState.rawValue,
+            coordinatorSimulationState: InteractionSnapshotFormat.viewport(runtimeConfigCoordinator.simulationState),
+            sessionSimulationState: InteractionSnapshotFormat.viewport(sessionSimulationState),
+            renderState: InteractionSnapshotFormat.renderState(renderState),
+            activeModules: InteractionSnapshotFormat.activeModules(runtimeConfigCoordinator.activeModules),
+            editorPhysicsState: InteractionSnapshotFormat.physics(editorState.physicsState),
+            editorVisualState: InteractionSnapshotFormat.visual(editorState.visualState),
+            editorOptimizationState: InteractionSnapshotFormat.optimization(editorState.optimizationState),
+            debugSettingsState: InteractionSnapshotFormat.debug(editorState.debugSettings),
+            validationIssue: runtimeConfigCoordinator.validationReport.issue,
+            projectedBytes: runtimeConfigCoordinator.validationReport.projectedBytes,
+            viewportRuntimeError: viewportRuntimeError,
+            selectedFile: selectedFile?.url.path,
+            debugMetricsVisible: debugMetricsAreVisible,
+            panels: panelStates,
+            performanceMetrics: InteractionSnapshotFormat.performanceMetrics(performanceMetrics)
+        )
     }
 
     private func previewPanelsInZone(_ zone: DockZone, fallback: [DockPanel]) -> [DockPanelPreview] {
@@ -1795,22 +1520,11 @@ struct ContentView: View {
 
     private func resolvedModule(for kind: ModuleKind) -> ModuleDescriptor {
         guard let assignedURL = assignedModules[kind],
-              let file = availableFiles.first(where: { $0.url == assignedURL }),
+              let file = moduleCatalogStore.availableFiles.first(where: { $0.url == assignedURL }),
               let descriptor = file.descriptor else {
             return ModuleCatalog.fallback(for: kind.rawValue)
         }
         return descriptor
-    }
-
-    private func projectedMemoryBytes() -> UInt64 {
-        let particleCount = max(1, physicsState.particleCount)
-        let baseParticleStride = 40
-        let visualStride = 16
-        let optimizationStride = 16
-        let typeBudget = 32 * 32
-        let debugBudget = optimizationState.showLeaderCommunicationLog ? 8 * 1024 * 1024 : 0
-        let reserved = particleCount * (baseParticleStride + visualStride + optimizationStride) + typeBudget + debugBudget
-        return UInt64(reserved)
     }
 
     private func byteCountString(_ bytes: UInt64) -> String {
@@ -1831,28 +1545,692 @@ struct ContentView: View {
         return String(format: "%.0f", value)
     }
 
-    private func parseDescriptor(at url: URL) -> ModuleDescriptor? {
-        struct ModuleManifest: Decodable {
-            let name: String
-            let kind: String
-            let version: Int
-        }
+    private var transportState: SimulationTransportState { runtimeConfigCoordinator.transportState }
+    private var physicsState: PhysicsModuleState { editorSettingsStore.editorState.physicsState }
 
-        guard let data = try? Data(contentsOf: url),
-              let manifest = try? JSONDecoder().decode(ModuleManifest.self, from: data) else {
-            return nil
-        }
+    private var assignedModules: [ModuleKind: URL] {
+        Dictionary(uniqueKeysWithValues: ModuleKind.allCases.compactMap { kind in
+            guard let path = editorSettingsStore.assignedModulePath(for: kind) else { return nil }
+            return (kind, URL(fileURLWithPath: path))
+        })
+    }
+}
 
-        if let known = ModuleCatalog.knownModulesByName[manifest.name] {
-            return known
-        }
+@MainActor
+private enum EditorViewSupport {
+    static func assignedModules(
+        from store: MainWindowEditorSettingsStore
+    ) -> [ModuleKind: URL] {
+        Dictionary(uniqueKeysWithValues: ModuleKind.allCases.compactMap { kind in
+            guard let path = store.assignedModulePath(for: kind) else { return nil }
+            return (kind, URL(fileURLWithPath: path))
+        })
+    }
 
-        return ModuleDescriptor(
-            kind: manifest.kind,
-            name: manifest.name,
-            visibility: .production,
-            isDefaultFallback: false,
-            acceptsOptimizationDebugInfo: false
+    static func resolvedModule(
+        for kind: ModuleKind,
+        store: MainWindowEditorSettingsStore,
+        availableFiles: [ModuleFile]
+    ) -> ModuleDescriptor {
+        let assignedModules = assignedModules(from: store)
+        guard let assignedURL = assignedModules[kind],
+              let file = availableFiles.first(where: { $0.url == assignedURL }),
+              let descriptor = file.descriptor else {
+            return ModuleCatalog.fallback(for: kind.rawValue)
+        }
+        return descriptor
+    }
+
+    static func resolvedVisualSupportsOptimizationDebug(
+        store: MainWindowEditorSettingsStore,
+        availableFiles: [ModuleFile]
+    ) -> Bool {
+        resolvedModule(for: .visual, store: store, availableFiles: availableFiles).acceptsOptimizationDebugInfo
+            && resolvedModule(for: .optimization, store: store, availableFiles: availableFiles).name == ModuleCatalog.defaultOptimization.name
+    }
+
+    static func currentViewportState(
+        store: MainWindowEditorSettingsStore,
+        availableFiles: [ModuleFile]
+    ) -> SimulationViewportState {
+        let editorState = store.editorState
+        return SimulationViewportState(
+            transportState: .stopped,
+            particleCount: editorState.physicsState.particleCount,
+            randomDistribution: editorState.physicsState.randomDistribution,
+            particleTypes: editorState.physicsState.particleTypes,
+            movementDirection: SIMD3<Float>(
+                Float(editorState.physicsState.movementDirection.x),
+                Float(editorState.physicsState.movementDirection.y),
+                Float(editorState.physicsState.movementDirection.z)
+            ),
+            timeScale: Float(editorState.physicsState.timeScale),
+            sphereSize: Float(editorState.visualState.sphereSize),
+            spectrumOffset: Float(editorState.visualState.spectrumOffset),
+            showOptimizationInfo: resolvedVisualSupportsOptimizationDebug(store: store, availableFiles: availableFiles)
+                && editorState.visualState.showOptimizationInfo,
+            optimizationBlockingMode: editorState.optimizationState.blockingMode
         )
+    }
+
+    static func activeModuleSet(
+        store: MainWindowEditorSettingsStore,
+        availableFiles: [ModuleFile]
+    ) -> ActiveModuleSet {
+        ActiveModuleSet(
+            physics: resolvedModule(for: .physics, store: store, availableFiles: availableFiles),
+            visual: resolvedModule(for: .visual, store: store, availableFiles: availableFiles),
+            optimization: resolvedModule(for: .optimization, store: store, availableFiles: availableFiles)
+        )
+    }
+
+    static func projectedMemoryBytes(editorState: SimulationEditorState) -> UInt64 {
+        let particleCount = max(1, editorState.physicsState.particleCount)
+        let baseParticleStride = 40
+        let visualStride = 16
+        let optimizationStride = 16
+        let typeBudget = 32 * 32
+        let debugBudget = editorState.optimizationState.showLeaderCommunicationLog ? 8 * 1024 * 1024 : 0
+        let reserved = particleCount * (baseParticleStride + visualStride + optimizationStride) + typeBudget + debugBudget
+        return UInt64(reserved)
+    }
+
+    static func validationReport(
+        store: MainWindowEditorSettingsStore,
+        availableFiles: [ModuleFile],
+        memoryBudgetPreset: MemoryBudgetPreset
+    ) -> RuntimeValidationReport {
+        let projectedBytes = projectedMemoryBytes(editorState: store.editorState)
+        let activeModules = activeModuleSet(store: store, availableFiles: availableFiles)
+        let viewportState = currentViewportState(store: store, availableFiles: availableFiles)
+
+        if let issue = ModuleCompatibility.incompatibilityReason(for: activeModules, state: viewportState) {
+            return RuntimeValidationReport(issue: issue, projectedBytes: projectedBytes)
+        }
+
+        if store.editorState.optimizationState.showLeaderCommunicationLog,
+           activeModules.optimization.name != ModuleCatalog.defaultOptimization.name {
+            return RuntimeValidationReport(
+                issue: "Leader communication log is only available with \(ModuleCatalog.defaultOptimization.name).",
+                projectedBytes: projectedBytes
+            )
+        }
+
+        if projectedBytes > memoryBudgetPreset.budgetBytes {
+            return RuntimeValidationReport(
+                issue: "Projected simulation memory exceeds the \(memoryBudgetPreset.title) budget.",
+                projectedBytes: projectedBytes
+            )
+        }
+
+        return RuntimeValidationReport(issue: nil, projectedBytes: projectedBytes)
+    }
+}
+
+private struct SimulationCenterPane: View {
+    @ObservedObject var editorSettingsStore: MainWindowEditorSettingsStore
+    @ObservedObject var runtimeConfigCoordinator: SimulationRuntimeConfigCoordinator
+    @Binding var performanceMetrics: SimulationPerformanceMetrics
+    @Binding var viewportRuntimeError: String?
+    let viewportGeneration: Int
+    let debugMetricsAreVisible: Bool
+
+    private var transportState: SimulationTransportState { runtimeConfigCoordinator.transportState }
+    private var validationReport: RuntimeValidationReport { runtimeConfigCoordinator.validationReport }
+    private var currentMemoryBudgetPreset: MemoryBudgetPreset { ProgramSettingsStore.memoryBudgetPreset }
+
+    var body: some View {
+        VStack(spacing: 10) {
+            HStack {
+                Text("Simulation")
+                    .font(.headline)
+                Spacer()
+                Text("Sprint 01 First Pass")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 4)
+
+            HStack(spacing: 10) {
+                Button("Start") {
+                    runtimeConfigCoordinator.startSimulation()
+                }
+                .disabled(transportState != .stopped || !validationReport.canStart)
+
+                Button(transportState == .running ? "Pause" : "Play") {
+                    runtimeConfigCoordinator.togglePausePlay()
+                }
+                .frame(minWidth: 64)
+                .disabled(transportState == .stopped || (transportState == .paused && !validationReport.canStart))
+
+                Button("Stop") {
+                    runtimeConfigCoordinator.stopSimulation()
+                }
+                .disabled(transportState == .stopped)
+
+                Divider()
+                    .frame(height: 18)
+
+                Picker("Memory Budget", selection: Binding(
+                    get: { ProgramSettingsStore.memoryBudgetPreset.rawValue },
+                    set: {
+                        guard let preset = MemoryBudgetPreset(rawValue: $0) else { return }
+                        ProgramSettingsStore.memoryBudgetPreset = preset
+                        runtimeConfigCoordinator.refreshDerivedState()
+                    }
+                )) {
+                    ForEach(MemoryBudgetPreset.allCases) { preset in
+                        Text(preset.title).tag(preset.rawValue)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 240)
+
+                Spacer()
+
+                Text(validationReport.canStart ? "Ready" : "Blocked")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(validationReport.canStart ? Color.green.opacity(0.9) : Color.red.opacity(0.9))
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+
+            HStack(spacing: 16) {
+                LabeledContent("Transport", value: transportState.title)
+                LabeledContent("Budget", value: currentMemoryBudgetPreset.title)
+                LabeledContent("Projected", value: ByteCountFormatter.string(fromByteCount: Int64(validationReport.projectedBytes), countStyle: .memory))
+                Spacer()
+                if let issue = viewportRuntimeError ?? validationReport.issue {
+                    Text(issue)
+                        .font(.caption)
+                        .foregroundStyle(Color.red.opacity(0.9))
+                        .lineLimit(2)
+                        .multilineTextAlignment(.trailing)
+                }
+            }
+            .font(.caption)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+
+            MetalViewportView(
+                metricsEnabled: debugMetricsAreVisible,
+                onMetricsUpdate: { performanceMetrics = $0 },
+                onErrorUpdate: { viewportRuntimeError = $0 }
+            )
+            .id(viewportGeneration)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(Color(nsColor: .separatorColor).opacity(0.5), lineWidth: 1)
+            )
+
+            HStack(spacing: 16) {
+                Text("Drag: Orbit")
+                Text("WASD: Orbit")
+                Text("Scroll/Pinch: Dolly")
+                Text("F: Reset View")
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct ModuleSlotsPanel: View {
+    @ObservedObject var editorSettingsStore: MainWindowEditorSettingsStore
+    let availableFiles: [ModuleFile]
+    let selectedFile: ModuleFile?
+    @Binding var importerTargetKind: ModuleKind
+    @Binding var isImporterPresented: Bool
+
+    var body: some View {
+        VStack(spacing: 8) {
+            ForEach(ModuleKind.allCases) { kind in
+                let assigned = EditorViewSupport.assignedModules(from: editorSettingsStore)[kind]
+                let resolved = EditorViewSupport.resolvedModule(for: kind, store: editorSettingsStore, availableFiles: availableFiles)
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text(kind.displayName)
+                            .font(.caption.weight(.semibold))
+                        Spacer()
+                        if resolved.visibility == .dev {
+                            Text("DEV")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.orange)
+                        }
+                    }
+
+                    HStack(spacing: 8) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(assigned?.lastPathComponent ?? "\(resolved.name) (fallback)")
+                                .font(.caption2)
+                                .foregroundStyle(assigned == nil ? .secondary : .primary)
+                                .lineLimit(1)
+                            Text(assigned == nil ? "Using built-in default runtime module." : "Using assigned module file.")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Choose File") {
+                            importerTargetKind = kind
+                            isImporterPresented = true
+                        }
+                        .font(.caption)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(8)
+                .background(.quaternary.opacity(0.18), in: RoundedRectangle(cornerRadius: 8))
+                .contextMenu {
+                    if let selectedFile, selectedFile.kind == kind {
+                        Button("Assign Selected File") {
+                            editorSettingsStore.setAssignedModulePath(selectedFile.url.path, for: kind)
+                        }
+                    }
+                    if assigned != nil {
+                        Button("Clear Assignment", role: .destructive) {
+                            editorSettingsStore.setAssignedModulePath(nil, for: kind)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct ModuleSettingsPanelView: View {
+    let kind: ModuleKind
+    @ObservedObject var editorSettingsStore: MainWindowEditorSettingsStore
+    let availableFiles: [ModuleFile]
+    let particleCountUICap: Int
+    let particleCountEngineCap: Int
+
+    private var resolved: ModuleDescriptor {
+        EditorViewSupport.resolvedModule(for: kind, store: editorSettingsStore, availableFiles: availableFiles)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(resolved.name)
+                        .font(.caption.weight(.semibold))
+                    Text(kind.displayName)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                if resolved.visibility == .dev {
+                    Text("DEV")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.orange)
+                }
+            }
+
+            Group {
+                switch kind {
+                case .physics:
+                    if resolved.name == ModuleCatalog.defaultPhysics.name {
+                        PhysicsSettingsPanel(store: editorSettingsStore, particleCountUICap: particleCountUICap, particleCountEngineCap: particleCountEngineCap)
+                    } else {
+                        unavailable
+                    }
+                case .visual:
+                    if resolved.name == ModuleCatalog.defaultVisual.name {
+                        VisualSettingsPanel(store: editorSettingsStore, optimizationDebugSupported: EditorViewSupport.resolvedVisualSupportsOptimizationDebug(store: editorSettingsStore, availableFiles: availableFiles))
+                    } else {
+                        unavailable
+                    }
+                case .optimization:
+                    if resolved.name == ModuleCatalog.defaultOptimization.name {
+                        OptimizationSettingsPanel(store: editorSettingsStore)
+                    } else {
+                        unavailable
+                    }
+                }
+            }
+            .id(resolved.id)
+            .animation(.easeInOut(duration: 0.22), value: resolved.id)
+        }
+    }
+
+    private var unavailable: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("No dedicated settings UI is registered for this module yet.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text("Resolved module: \(resolved.name)")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(8)
+        .background(.quaternary.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+private struct PhysicsSettingsPanel: View {
+    @ObservedObject var store: MainWindowEditorSettingsStore
+    let particleCountUICap: Int
+    let particleCountEngineCap: Int
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            EventuallyAppliedIntSlider(
+                title: "Particle Count",
+                appliedValue: Binding(
+                    get: { store.editorState.physicsState.particleCount },
+                    set: {
+                        var next = store.editorState.physicsState
+                        next.particleCount = $0
+                        store.setPhysicsState(next)
+                    }
+                ),
+                range: 1...particleCountUICap,
+                helpText: "UI cap: \(particleCountUICap.formatted()). Hard engine limit: \(particleCountEngineCap.formatted())."
+            )
+            EventuallyAppliedToggle(title: "Random Distribution", appliedValue: Binding(
+                get: { store.editorState.physicsState.randomDistribution },
+                set: {
+                    var next = store.editorState.physicsState
+                    next.randomDistribution = $0
+                    store.setPhysicsState(next)
+                }
+            ))
+            EventuallyAppliedSlider(
+                title: "Particle Types",
+                appliedValue: Binding(
+                    get: { Double(store.editorState.physicsState.particleTypes) },
+                    set: {
+                        var next = store.editorState.physicsState
+                        next.particleTypes = max(1, min(32, Int($0.rounded())))
+                        store.setPhysicsState(next)
+                    }
+                ),
+                range: 1...32,
+                step: 1,
+                valueText: { "\(Int($0.rounded()))" }
+            )
+            Picker("Movement", selection: .constant("slide")) {
+                Text("Slide").tag("slide")
+            }
+            .font(.caption)
+            .pickerStyle(.segmented)
+            .disabled(true)
+            ForEach([("Direction X", \SIMD3<Double>.x), ("Direction Y", \SIMD3<Double>.y), ("Direction Z", \SIMD3<Double>.z)], id: \.0) { title, keyPath in
+                EventuallyAppliedSlider(
+                    title: title,
+                    appliedValue: Binding(
+                        get: { store.editorState.physicsState.movementDirection[keyPath: keyPath] },
+                        set: {
+                            var next = store.editorState.physicsState
+                            next.movementDirection[keyPath: keyPath] = $0
+                            store.setPhysicsState(next)
+                        }
+                    ),
+                    range: 0...1,
+                    step: 0.01,
+                    valueText: { String(format: "%.2f", $0) }
+                )
+            }
+            EventuallyAppliedSlider(
+                title: "Time Scale",
+                appliedValue: Binding(
+                    get: { store.editorState.physicsState.timeScale },
+                    set: {
+                        var next = store.editorState.physicsState
+                        next.timeScale = $0
+                        store.setPhysicsState(next)
+                    }
+                ),
+                range: 0...4,
+                step: 0.01,
+                valueText: { String(format: "%.2fx", $0) }
+            )
+        }
+    }
+}
+
+private struct VisualSettingsPanel: View {
+    @ObservedObject var store: MainWindowEditorSettingsStore
+    let optimizationDebugSupported: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            EventuallyAppliedSlider(
+                title: "Sphere Size",
+                appliedValue: Binding(
+                    get: { store.editorState.visualState.sphereSize },
+                    set: {
+                        var next = store.editorState.visualState
+                        next.sphereSize = $0
+                        store.setVisualState(next)
+                    }
+                ),
+                range: 0.005...0.120,
+                step: 0.001,
+                valueText: { String(format: "%.3f", $0) }
+            )
+            EventuallyAppliedSlider(
+                title: "Spectrum Offset",
+                appliedValue: Binding(
+                    get: { store.editorState.visualState.spectrumOffset },
+                    set: {
+                        var next = store.editorState.visualState
+                        next.spectrumOffset = $0
+                        store.setVisualState(next)
+                    }
+                ),
+                range: 0...1,
+                step: 0.01,
+                valueText: { String(format: "%.2f", $0) }
+            )
+            EventuallyAppliedToggle(
+                title: "Show Optimization Info",
+                appliedValue: Binding(
+                    get: { store.editorState.visualState.showOptimizationInfo },
+                    set: {
+                        var next = store.editorState.visualState
+                        next.showOptimizationInfo = $0
+                        store.setVisualState(next)
+                    }
+                )
+            )
+            .disabled(!optimizationDebugSupported)
+        }
+    }
+}
+
+private struct OptimizationSettingsPanel: View {
+    @ObservedObject var store: MainWindowEditorSettingsStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            EventuallyAppliedSegmentedPicker(
+                title: "Blocking Mode",
+                appliedValue: Binding(
+                    get: { store.editorState.optimizationState.blockingMode },
+                    set: {
+                        var next = store.editorState.optimizationState
+                        next.blockingMode = $0
+                        store.setOptimizationState(next)
+                    }
+                ),
+                options: OptimizationBlockingMode.allCases,
+                optionTitle: { $0.title }
+            )
+            EventuallyAppliedToggle(
+                title: "Leader Communication Log",
+                appliedValue: Binding(
+                    get: { store.editorState.optimizationState.showLeaderCommunicationLog },
+                    set: {
+                        var next = store.editorState.optimizationState
+                        next.showLeaderCommunicationLog = $0
+                        store.setOptimizationState(next)
+                    }
+                )
+            )
+            EventuallyAppliedToggle(
+                title: "Protect Leader From Unload",
+                appliedValue: Binding(
+                    get: { store.editorState.debugSettings.protectLeaderFromUnload },
+                    set: {
+                        var next = store.editorState.debugSettings
+                        next.protectLeaderFromUnload = $0
+                        store.setDebugSettings(next)
+                    }
+                )
+            )
+            Text("Naive all-pairs traversal is the default optimization MVP.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct FileViewPanel: View {
+    @ObservedObject var editorSettingsStore: MainWindowEditorSettingsStore
+    let availableFiles: [ModuleFile]
+    let selectedFile: ModuleFile?
+    let onRefresh: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Root: \(URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("Modules", isDirectory: true).path)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer()
+                Button("Refresh", action: onRefresh)
+                    .font(.caption2)
+            }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(ModuleKind.allCases) { kind in
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(kind.displayName)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            let files = availableFiles.filter { $0.kind == kind }
+                            if files.isEmpty {
+                                Text("No files")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                ForEach(files) { file in
+                                    Text(file.url.lastPathComponent)
+                                        .font(.caption)
+                                        .lineLimit(1)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 5)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 6)
+                                                .fill(Color(nsColor: .quaternaryLabelColor).opacity(0.09))
+                                        )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .frame(minHeight: 180)
+            .scrollIndicators(.visible)
+
+            if let selectedFile {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Selected: \(selectedFile.url.lastPathComponent)")
+                        .font(.caption)
+                        .lineLimit(1)
+                    Button("Assign to \(selectedFile.kind.displayName)") {
+                        editorSettingsStore.setAssignedModulePath(selectedFile.url.path, for: selectedFile.kind)
+                    }
+                    .font(.caption)
+                }
+            }
+        }
+    }
+}
+
+private struct InspectorPanel: View {
+    @ObservedObject var interactionSnapshotRecorder: InteractionSnapshotRecorder
+    let transportState: SimulationTransportState
+    let validationReport: RuntimeValidationReport
+    let performanceMetrics: SimulationPerformanceMetrics
+    let panelsCount: Int
+    let collapsedPanelsCount: Int
+    let debugMetricsAreVisible: Bool
+    let viewportRuntimeError: String?
+    let onStartInteractionSnapshot: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Performance")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            metricRow("Memory Used", ByteCountFormatter.string(fromByteCount: Int64(performanceMetrics.memoryUsedBytes), countStyle: .memory))
+            metricRow("FPS", String(format: "%.1f", performanceMetrics.averageFPS))
+            metricRow("UPS", String(format: "%.1f", performanceMetrics.averageUPS))
+            metricRow("Leader Interactions/s", performanceMetrics.leaderInteractionsPerSecond >= 1_000_000 ? String(format: "%.2fM", performanceMetrics.leaderInteractionsPerSecond / 1_000_000) : performanceMetrics.leaderInteractionsPerSecond >= 1_000 ? String(format: "%.1fK", performanceMetrics.leaderInteractionsPerSecond / 1_000) : String(format: "%.0f", performanceMetrics.leaderInteractionsPerSecond))
+            Text("Rolling average over the last \(Int(performanceMetrics.sampleWindowSeconds))s.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            Divider()
+            Text("Session")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            metricRow("Transport", transportState.title)
+            metricRow("Panels", "\(panelsCount)")
+            metricRow("Collapsed", "\(collapsedPanelsCount)")
+            Divider()
+            Text("Runtime")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            metricRow("Projected Memory", ByteCountFormatter.string(fromByteCount: Int64(validationReport.projectedBytes), countStyle: .memory))
+            metricRow("Visible Debug", debugMetricsAreVisible ? "Yes" : "No")
+            Divider()
+            Text("Diagnostics")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Button(interactionSnapshotRecorder.isRecording ? "Interaction Snapshot (\(interactionSnapshotRecorder.remainingSeconds)s)" : "Interaction Snapshot") {
+                onStartInteractionSnapshot()
+            }
+            .font(.caption)
+            .disabled(interactionSnapshotRecorder.isRecording)
+            if let lastOutputPath = interactionSnapshotRecorder.lastOutputPath {
+                Text(lastOutputPath)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            } else if interactionSnapshotRecorder.isRecording {
+                Text("Recording UI and simulation state for 15 seconds.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            if let issue = viewportRuntimeError ?? validationReport.issue {
+                Text(issue)
+                    .font(.caption2)
+                    .foregroundStyle(Color.red.opacity(0.9))
+            } else {
+                Text("No runtime validation issues.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func metricRow(_ label: String, _ value: String) -> some View {
+        HStack {
+            Text(label)
+                .font(.caption)
+            Spacer()
+            Text(value)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
     }
 }

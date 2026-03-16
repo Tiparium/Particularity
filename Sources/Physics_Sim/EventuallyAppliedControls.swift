@@ -32,10 +32,7 @@ struct EventuallyAppliedSlider: View {
     let delay: TimeInterval
     let valueText: (Double) -> String
 
-    @State private var draftValue: Double
     @State private var draftText: String
-    @State private var applyWorkItem: DispatchWorkItem?
-    @State private var isPending = false
 
     init(
         title: String,
@@ -51,7 +48,6 @@ struct EventuallyAppliedSlider: View {
         self.step = step
         self.delay = delay
         self.valueText = valueText
-        _draftValue = State(initialValue: appliedValue.wrappedValue)
         _draftText = State(initialValue: Self.editingText(for: appliedValue.wrappedValue))
     }
 
@@ -70,65 +66,41 @@ struct EventuallyAppliedSlider: View {
 
             Slider(
                 value: Binding(
-                    get: { draftValue },
+                    get: { appliedValue },
                     set: {
-                        draftValue = min(max($0, range.lowerBound), range.upperBound)
-                        draftText = Self.editingText(for: draftValue)
-                        scheduleApply()
+                        appliedValue = min(max($0, range.lowerBound), range.upperBound)
+                        draftText = Self.editingText(for: appliedValue)
                     }
                 ),
                 in: range,
                 step: step
             )
 
-            pendingStatusRow
+            statusRow(valueText(appliedValue))
         }
-        .onChange(of: appliedValue) {
-            if !isPending {
-                draftValue = appliedValue
-                draftText = Self.editingText(for: appliedValue)
-            }
+        .onChange(of: appliedValue) { _, nextValue in
+            draftText = Self.editingText(for: nextValue)
         }
     }
 
     @ViewBuilder
-    private var pendingStatusRow: some View {
-        Group {
-            if isPending && draftValue != appliedValue {
-                Text("Applying \(valueText(draftValue)) after 1s idle. Active: \(valueText(appliedValue))")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            } else {
-                Color.clear
-            }
-        }
-        .frame(height: 16, alignment: .leading)
+    private func statusRow(_ text: String) -> some View {
+        Text("Active: \(text)")
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .frame(height: 16, alignment: .leading)
     }
 
     private func commitTextEntry() {
         guard let parsed = Self.parseNumericText(draftText) else {
-            draftText = Self.editingText(for: draftValue)
+            draftText = Self.editingText(for: appliedValue)
             return
         }
 
         let snapped = (parsed / step).rounded() * step
-        draftValue = min(max(snapped, range.lowerBound), range.upperBound)
-        draftText = Self.editingText(for: draftValue)
-        scheduleApply()
-    }
-
-    private func scheduleApply() {
-        isPending = true
-        applyWorkItem?.cancel()
-
-        let workItem = DispatchWorkItem {
-            appliedValue = draftValue
-            isPending = false
-            applyWorkItem = nil
-        }
-        applyWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
+        appliedValue = min(max(snapped, range.lowerBound), range.upperBound)
+        draftText = Self.editingText(for: appliedValue)
     }
 
     private static func editingText(for value: Double) -> String {
@@ -152,58 +124,23 @@ struct EventuallyAppliedToggle: View {
     @Binding var appliedValue: Bool
     let delay: TimeInterval
 
-    @State private var draftValue: Bool
-    @State private var applyWorkItem: DispatchWorkItem?
-    @State private var isPending = false
-
     init(title: String, appliedValue: Binding<Bool>, delay: TimeInterval = 1.0) {
         self.title = title
         _appliedValue = appliedValue
         self.delay = delay
-        _draftValue = State(initialValue: appliedValue.wrappedValue)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Toggle(title, isOn: Binding(
-                get: { draftValue },
-                set: {
-                    draftValue = $0
-                    scheduleApply()
-                }
-            ))
-            .font(.caption)
+            Toggle(title, isOn: $appliedValue)
+                .font(.caption)
 
-            Group {
-                if isPending && draftValue != appliedValue {
-                    Text("Applying \(draftValue ? "On" : "Off") after 1s idle. Active: \(appliedValue ? "On" : "Off")")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                } else {
-                    Color.clear
-                }
-            }
-            .frame(height: 16, alignment: .leading)
+            Text("Active: \(appliedValue ? "On" : "Off")")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .frame(height: 16, alignment: .leading)
         }
-        .onChange(of: appliedValue) {
-            if !isPending {
-                draftValue = appliedValue
-            }
-        }
-    }
-
-    private func scheduleApply() {
-        isPending = true
-        applyWorkItem?.cancel()
-
-        let workItem = DispatchWorkItem {
-            appliedValue = draftValue
-            isPending = false
-            applyWorkItem = nil
-        }
-        applyWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
     }
 }
 
@@ -214,10 +151,8 @@ struct EventuallyAppliedIntSlider: View {
     let delay: TimeInterval
     let helpText: String?
 
-    @State private var draftValue: Int
     @State private var draftText: String
-    @State private var applyWorkItem: DispatchWorkItem?
-    @State private var isPending = false
+
     init(
         title: String,
         appliedValue: Binding<Int>,
@@ -230,7 +165,6 @@ struct EventuallyAppliedIntSlider: View {
         self.range = range
         self.delay = delay
         self.helpText = helpText
-        _draftValue = State(initialValue: appliedValue.wrappedValue)
         _draftText = State(initialValue: "\(appliedValue.wrappedValue)")
     }
 
@@ -249,11 +183,10 @@ struct EventuallyAppliedIntSlider: View {
 
             Slider(
                 value: Binding(
-                    get: { Double(draftValue) },
+                    get: { Double(appliedValue) },
                     set: {
-                        draftValue = Int($0.rounded())
-                        draftText = "\(draftValue)"
-                        scheduleApply()
+                        appliedValue = Int($0.rounded())
+                        draftText = "\(appliedValue)"
                     }
                 ),
                 in: Double(range.lowerBound)...Double(range.upperBound),
@@ -261,49 +194,26 @@ struct EventuallyAppliedIntSlider: View {
             )
             .help(helpText ?? "")
 
-            Group {
-                if isPending && draftValue != appliedValue {
-                    Text("Applying \(draftValue.formatted()) after 1s idle. Active: \(appliedValue.formatted())")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                } else {
-                    Color.clear
-                }
-            }
-            .frame(height: 16, alignment: .leading)
+            Text("Active: \(appliedValue.formatted())")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .frame(height: 16, alignment: .leading)
         }
-        .onChange(of: appliedValue) {
-            if !isPending {
-                draftValue = appliedValue
-                draftText = "\(appliedValue)"
-            }
+        .onChange(of: appliedValue) { _, nextValue in
+            draftText = "\(nextValue)"
         }
     }
 
     private func commitTextEntry() {
         let digitsOnly = draftText.filter(\.isNumber)
         guard let parsed = Int(digitsOnly), parsed >= range.lowerBound else {
-            draftText = "\(draftValue)"
+            draftText = "\(appliedValue)"
             return
         }
 
-        draftValue = min(range.upperBound, parsed)
-        draftText = "\(draftValue)"
-        scheduleApply()
-    }
-
-    private func scheduleApply() {
-        isPending = true
-        applyWorkItem?.cancel()
-
-        let workItem = DispatchWorkItem {
-            appliedValue = draftValue
-            isPending = false
-            applyWorkItem = nil
-        }
-        applyWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
+        appliedValue = min(range.upperBound, parsed)
+        draftText = "\(appliedValue)"
     }
 }
 
@@ -313,10 +223,6 @@ struct EventuallyAppliedSegmentedPicker<Option: Hashable>: View {
     let options: [Option]
     let delay: TimeInterval
     let optionTitle: (Option) -> String
-
-    @State private var draftValue: Option
-    @State private var applyWorkItem: DispatchWorkItem?
-    @State private var isPending = false
 
     init(
         title: String,
@@ -330,7 +236,6 @@ struct EventuallyAppliedSegmentedPicker<Option: Hashable>: View {
         self.options = options
         self.delay = delay
         self.optionTitle = optionTitle
-        _draftValue = State(initialValue: appliedValue.wrappedValue)
     }
 
     var body: some View {
@@ -338,51 +243,18 @@ struct EventuallyAppliedSegmentedPicker<Option: Hashable>: View {
             Text(title)
                 .font(.caption)
 
-            Picker(
-                title,
-                selection: Binding(
-                    get: { draftValue },
-                    set: {
-                        draftValue = $0
-                        scheduleApply()
-                    }
-                )
-            ) {
+            Picker(title, selection: $appliedValue) {
                 ForEach(options, id: \.self) { option in
                     Text(optionTitle(option)).tag(option)
                 }
             }
             .pickerStyle(.segmented)
 
-            Group {
-                if isPending && draftValue != appliedValue {
-                    Text("Applying \(optionTitle(draftValue)) after 1s idle. Active: \(optionTitle(appliedValue))")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                } else {
-                    Color.clear
-                }
-            }
-            .frame(height: 16, alignment: .leading)
+            Text("Active: \(optionTitle(appliedValue))")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .frame(height: 16, alignment: .leading)
         }
-        .onChange(of: appliedValue) {
-            if !isPending {
-                draftValue = appliedValue
-            }
-        }
-    }
-
-    private func scheduleApply() {
-        isPending = true
-        applyWorkItem?.cancel()
-
-        let workItem = DispatchWorkItem {
-            appliedValue = draftValue
-            isPending = false
-            applyWorkItem = nil
-        }
-        applyWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
     }
 }

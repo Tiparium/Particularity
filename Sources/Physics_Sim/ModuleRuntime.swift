@@ -80,6 +80,46 @@ struct DebugSettingsState {
     var protectLeaderFromUnload = true
 }
 
+enum ModuleKind: String, CaseIterable, Identifiable {
+    case physics
+    case visual
+    case optimization
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .physics: return "Physics Module"
+        case .visual: return "Visual Module"
+        case .optimization: return "Optimization Module"
+        }
+    }
+
+    var folderName: String {
+        switch self {
+        case .physics: return "Physics"
+        case .visual: return "Visual"
+        case .optimization: return "Optimization"
+        }
+    }
+
+    var shortTitle: String {
+        switch self {
+        case .physics: return "Physics"
+        case .visual: return "Visual"
+        case .optimization: return "Optimization"
+        }
+    }
+}
+
+struct SimulationEditorState {
+    var physicsState = PhysicsModuleState()
+    var visualState = VisualModuleState()
+    var optimizationState = OptimizationModuleState()
+    var debugSettings = DebugSettingsState()
+    var assignedModulePaths: [String: String] = [:]
+}
+
 struct ModuleDescriptor: Identifiable, Equatable {
     let kind: String
     let name: String
@@ -164,6 +204,27 @@ struct RuntimeValidationReport {
     }
 }
 
+struct ActiveModuleSet: Equatable {
+    var physics: ModuleDescriptor
+    var visual: ModuleDescriptor
+    var optimization: ModuleDescriptor
+}
+
+enum ModuleCompatibility {
+    static func incompatibilityReason(for modules: ActiveModuleSet, state: SimulationViewportState) -> String? {
+        if modules.visual.acceptsOptimizationDebugInfo,
+           modules.optimization.name != ModuleCatalog.defaultOptimization.name {
+            return "Visual module \(modules.visual.name) requires optimization debug compatibility, but optimization module \(modules.optimization.name) does not provide it."
+        }
+
+        if state.showOptimizationInfo && !modules.visual.acceptsOptimizationDebugInfo {
+            return "Visual module \(modules.visual.name) does not accept optimization debug data."
+        }
+
+        return nil
+    }
+}
+
 struct SimulationViewportState: Equatable {
     var transportState: SimulationTransportState
     var particleCount: Int
@@ -185,7 +246,8 @@ struct SimulationPerformanceMetrics: Equatable {
     var sampleWindowSeconds: Double = 3.0
 }
 
-struct ViewportCameraState: Equatable {
+struct ViewportCameraState: Codable, Equatable {
     var yaw: Float = 0.75
     var pitch: Float = 0.45
+    var radius: Float = 3.6
 }

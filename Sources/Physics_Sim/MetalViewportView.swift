@@ -10,13 +10,20 @@ private final class InputMTKView: MTKView {
     private var clickThenDragOrbitActive = false
     private var orbitDisarmWorkItem: DispatchWorkItem?
     private var trackingAreaRef: NSTrackingArea?
+    private let minimumOrbitMotion: Float = 0.35
 
     override var acceptsFirstResponder: Bool { true }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        window?.makeFirstResponder(self)
-        window?.acceptsMouseMovedEvents = true
+        if let window {
+            isPaused = false
+            enableSetNeedsDisplay = false
+            window.makeFirstResponder(self)
+            window.acceptsMouseMovedEvents = true
+        } else {
+            isPaused = true
+        }
     }
 
     override func updateTrackingAreas() {
@@ -60,6 +67,7 @@ private final class InputMTKView: MTKView {
         let dx = Float(p.x - lastMousePoint.x)
         let dy = Float(p.y - lastMousePoint.y)
         lastMousePoint = p
+        guard abs(dx) >= minimumOrbitMotion || abs(dy) >= minimumOrbitMotion else { return }
         inputDelegate?.didDrag(deltaX: dx, deltaY: dy)
         armOrbitDisarmTimer()
     }
@@ -70,6 +78,7 @@ private final class InputMTKView: MTKView {
         let dx = Float(p.x - lastMousePoint.x)
         let dy = Float(p.y - lastMousePoint.y)
         lastMousePoint = p
+        guard abs(dx) >= minimumOrbitMotion || abs(dy) >= minimumOrbitMotion else { return }
         inputDelegate?.didDrag(deltaX: dx, deltaY: dy)
         armOrbitDisarmTimer()
     }
@@ -140,9 +149,83 @@ protocol InputMTKViewDelegate: AnyObject {
 }
 
 @MainActor
+private final class WindowLifecycleObserver {
+    weak var coordinator: MetalViewportCoordinator?
+    weak var window: NSWindow?
+
+    private var didBecomeKeyObserver: NSObjectProtocol?
+    private var didDeminiaturizeObserver: NSObjectProtocol?
+    private var willCloseObserver: NSObjectProtocol?
+
+    func bind(to nextWindow: NSWindow?) {
+        guard window !== nextWindow else { return }
+        unbind()
+        guard let nextWindow else { return }
+
+        window = nextWindow
+        didBecomeKeyObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification,
+            object: nextWindow,
+            queue: .main
+        ) { [weak coordinator] _ in
+            Task { @MainActor in
+                coordinator?.windowDidBecomeActive()
+            }
+        }
+        didDeminiaturizeObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didDeminiaturizeNotification,
+            object: nextWindow,
+            queue: .main
+        ) { [weak coordinator] _ in
+            Task { @MainActor in
+                coordinator?.windowDidBecomeActive()
+            }
+        }
+        willCloseObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: nextWindow,
+            queue: .main
+        ) { [weak coordinator] _ in
+            Task { @MainActor in
+                coordinator?.windowWillClose()
+            }
+        }
+
+        coordinator?.windowDidBecomeActive()
+    }
+
+    func unbind() {
+        if let didBecomeKeyObserver {
+            NotificationCenter.default.removeObserver(didBecomeKeyObserver)
+            self.didBecomeKeyObserver = nil
+        }
+        if let didDeminiaturizeObserver {
+            NotificationCenter.default.removeObserver(didDeminiaturizeObserver)
+            self.didDeminiaturizeObserver = nil
+        }
+        if let willCloseObserver {
+            NotificationCenter.default.removeObserver(willCloseObserver)
+            self.willCloseObserver = nil
+        }
+        window = nil
+    }
+}
+
+@MainActor
 final class MetalViewportCoordinator: NSObject, InputMTKViewDelegate {
+    var session: SimulationSession?
     var renderer: Renderer?
+    fileprivate weak var metalView: InputMTKView?
     fileprivate weak var axisHostView: NSHostingView<ViewportAxisIndicator>?
+    fileprivate let axisModel = ViewportAxisModel()
+    fileprivate var errorSink: (@MainActor (String?) -> Void)?
+    fileprivate let windowLifecycleObserver = WindowLifecycleObserver()
+    private var isViewportAttached = false
+
+    override init() {
+        super.init()
+        windowLifecycleObserver.coordinator = self
+    }
 
     func didPressKey(_ key: String) {
         renderer?.registerKeyDown(key)
@@ -169,14 +252,35 @@ final class MetalViewportCoordinator: NSObject, InputMTKViewDelegate {
         renderer?.resetCamera()
     }
 
-    func updateSimulationState(_ state: SimulationViewportState) {
-        renderer?.updateSimulationState(state)
+    func tearDownViewport() {
+        if isViewportAttached {
+            session?.detachViewport()
+            isViewportAttached = false
+        }
+        windowLifecycleObserver.unbind()
+        metalView?.isPaused = true
+        metalView = nil
+        axisHostView = nil
+    }
+
+    func windowDidBecomeActive() {
+        guard !isViewportAttached else { return }
+        isViewportAttached = true
+        session?.attachViewport()
+    }
+
+    func windowWillClose() {
+        guard isViewportAttached else { return }
+        isViewportAttached = false
+        session?.detachViewport()
+        NotificationCenter.default.post(name: .rebuildViewport, object: nil)
     }
 }
 
 struct MetalViewportView: NSViewRepresentable {
-    let simulationState: SimulationViewportState
+    let metricsEnabled: Bool
     let onMetricsUpdate: @MainActor (SimulationPerformanceMetrics) -> Void
+    let onErrorUpdate: @MainActor (String?) -> Void
 
     func makeCoordinator() -> MetalViewportCoordinator {
         MetalViewportCoordinator()
@@ -187,11 +291,17 @@ struct MetalViewportView: NSViewRepresentable {
         container.wantsLayer = true
         container.layer?.backgroundColor = NSColor(white: 0.08, alpha: 1).cgColor
 
-        guard let device = MTLCreateSystemDefaultDevice() else {
+        let session: SimulationSession
+        let viewportStateStore: MainWindowViewportStateStore
+        do {
+            session = try WindowSimulationSessionStore.shared.mainWindowSession(metricsSink: onMetricsUpdate)
+            viewportStateStore = WindowSimulationSessionStore.shared.mainWindowViewportStateStore()
+        } catch {
+            onErrorUpdate(error.localizedDescription)
             return container
         }
 
-        let metalView = InputMTKView(frame: .zero, device: device)
+        let metalView = InputMTKView(frame: .zero, device: session.device)
         metalView.translatesAutoresizingMaskIntoConstraints = false
         metalView.colorPixelFormat = .bgra8Unorm
         metalView.depthStencilPixelFormat = .depth32Float
@@ -200,24 +310,33 @@ struct MetalViewportView: NSViewRepresentable {
         metalView.isPaused = false
         metalView.preferredFramesPerSecond = 60
 
-        let axisHostView = NSHostingView(rootView: ViewportAxisIndicator(cameraState: ViewportCameraState()))
+        context.coordinator.axisModel.cameraState = viewportStateStore.viewportState.camera
+        let axisHostView = NSHostingView(rootView: ViewportAxisIndicator(model: context.coordinator.axisModel))
         axisHostView.translatesAutoresizingMaskIntoConstraints = false
         axisHostView.setFrameSize(NSSize(width: 72, height: 72))
         axisHostView.wantsLayer = true
         axisHostView.layer?.backgroundColor = NSColor.clear.cgColor
 
-        guard let renderer = Renderer(
-            mtkView: metalView,
-            metricsSink: onMetricsUpdate,
-            cameraStateSink: { [weak coordinator = context.coordinator] cameraState in
-                coordinator?.axisHostView?.rootView = ViewportAxisIndicator(cameraState: cameraState)
-            }
-        ) else {
+        let renderer: Renderer
+        do {
+            renderer = try Renderer(
+                mtkView: metalView,
+                session: session,
+                viewportStateStore: viewportStateStore,
+                cameraStateSink: { [weak coordinator = context.coordinator] cameraState in
+                    coordinator?.axisModel.cameraState = cameraState
+                }
+            )
+        } catch {
+            onErrorUpdate(error.localizedDescription)
             return container
         }
         context.coordinator.renderer = renderer
+        context.coordinator.session = session
+        context.coordinator.metalView = metalView
         context.coordinator.axisHostView = axisHostView
-        context.coordinator.updateSimulationState(simulationState)
+        context.coordinator.errorSink = onErrorUpdate
+        renderer.setMetricsEnabled(metricsEnabled)
         metalView.delegate = renderer
         metalView.inputDelegate = context.coordinator
 
@@ -238,12 +357,35 @@ struct MetalViewportView: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
-        context.coordinator.updateSimulationState(simulationState)
+        if let metalView = nsView.subviews.compactMap({ $0 as? InputMTKView }).first {
+            context.coordinator.metalView = metalView
+            if metalView.delegate == nil, let renderer = context.coordinator.renderer {
+                metalView.delegate = renderer
+            }
+            if metalView.inputDelegate == nil {
+                metalView.inputDelegate = context.coordinator
+            }
+            context.coordinator.windowLifecycleObserver.bind(to: metalView.window)
+            if metalView.window != nil {
+                metalView.isPaused = false
+                metalView.enableSetNeedsDisplay = false
+            }
+        }
+        context.coordinator.renderer?.setMetricsEnabled(metricsEnabled)
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: MetalViewportCoordinator) {
+        coordinator.tearDownViewport()
     }
 }
 
+@MainActor
+private final class ViewportAxisModel: ObservableObject {
+    @Published var cameraState = ViewportCameraState()
+}
+
 private struct ViewportAxisIndicator: View {
-    let cameraState: ViewportCameraState
+    @ObservedObject var model: ViewportAxisModel
 
     private struct AxisProjection {
         let label: String
@@ -275,6 +417,7 @@ private struct ViewportAxisIndicator: View {
     }
 
     private var projectedAxes: [AxisProjection] {
+        let cameraState = model.cameraState
         let eye = SIMD3<Float>(
             cosf(cameraState.pitch) * sinf(cameraState.yaw),
             sinf(cameraState.pitch),

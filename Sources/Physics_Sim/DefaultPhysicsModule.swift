@@ -3,6 +3,7 @@ import simd
 
 enum DefaultPhysicsModuleRuntime {
     struct SpawnData {
+        var activeCount: Int
         var positions: [SIMD4<Float>]
         var colors: [SIMD4<Float>]
     }
@@ -108,7 +109,7 @@ enum DefaultPhysicsModuleRuntime {
             }
         }
 
-        return SpawnData(positions: positions, colors: colors)
+        return SpawnData(activeCount: count, positions: positions, colors: colors)
     }
 }
 
