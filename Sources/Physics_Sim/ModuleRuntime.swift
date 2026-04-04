@@ -16,41 +16,17 @@ enum SimulationTransportState: String {
     }
 }
 
-enum MemoryBudgetPreset: String, CaseIterable, Identifiable {
-    case m1
-    case m1Pro
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .m1:
-            return "M1"
-        case .m1Pro:
-            return "M1 Pro"
-        }
-    }
-
-    var budgetBytes: UInt64 {
-        switch self {
-        case .m1:
-            return 4 * 1024 * 1024 * 1024
-        case .m1Pro:
-            return 24 * 1024 * 1024 * 1024
-        }
-    }
-}
-
 struct PhysicsModuleState {
     var particleCount: Int = 20_000
     var randomDistribution = true
     var particleTypes: Int = 6
+    var allParticlesIntercommunicate = true
     var movementDirection = SIMD3<Double>(0.82, 0.18, 0.12)
     var timeScale: Double = 1.0
 }
 
 struct VisualModuleState {
-    var sphereSize: Double = 0.025
+    var sphereSize: Double = 0.008
     var spectrumOffset: Double = 0.0
     var showOptimizationInfo = false
 }
@@ -158,6 +134,13 @@ enum ModuleCatalog {
     )
 
     static let knownModulesByName: [String: ModuleDescriptor] = [
+        PhysicsModuleTemplateRuntime.moduleName: ModuleDescriptor(
+            kind: "physics",
+            name: PhysicsModuleTemplateRuntime.moduleName,
+            visibility: .production,
+            isDefaultFallback: false,
+            acceptsOptimizationDebugInfo: false
+        ),
         "TypeMatrixLocalAttractionRepulsion": ModuleDescriptor(
             kind: "physics",
             name: "TypeMatrixLocalAttractionRepulsion",
@@ -230,12 +213,42 @@ struct SimulationViewportState: Equatable {
     var particleCount: Int
     var randomDistribution: Bool
     var particleTypes: Int
+    var allParticlesIntercommunicate: Bool
     var movementDirection: SIMD3<Float>
     var timeScale: Float
     var sphereSize: Float
     var spectrumOffset: Float
     var showOptimizationInfo: Bool
+    var showLeaderCommunicationLog: Bool
     var optimizationBlockingMode: OptimizationBlockingMode
+}
+
+struct LeaderCommunicationLogEntry: Identifiable, Equatable {
+    let id: UUID
+    let recordedAt: String
+    let firstTargetIndex: Int
+    let interactionCount: Int
+    let workItemStart: UInt64
+    let workItemCount: UInt64
+    let blockingMode: OptimizationBlockingMode
+
+    init(
+        id: UUID = UUID(),
+        recordedAt: String,
+        firstTargetIndex: Int,
+        interactionCount: Int,
+        workItemStart: UInt64,
+        workItemCount: UInt64,
+        blockingMode: OptimizationBlockingMode
+    ) {
+        self.id = id
+        self.recordedAt = recordedAt
+        self.firstTargetIndex = firstTargetIndex
+        self.interactionCount = interactionCount
+        self.workItemStart = workItemStart
+        self.workItemCount = workItemCount
+        self.blockingMode = blockingMode
+    }
 }
 
 struct SimulationPerformanceMetrics: Equatable {

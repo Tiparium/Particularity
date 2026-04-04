@@ -73,9 +73,7 @@ final class MainWindowViewportStateStore: ObservableObject {
     }
 
     func updateCameraState(_ nextState: ViewportCameraState) {
-        var nextViewportState = viewportState
-        nextViewportState.camera = nextState
-        viewportState = nextViewportState
+        applyCameraState(nextState)
     }
 
     func updateSceneState(_ nextState: SceneState) {
@@ -93,6 +91,13 @@ final class MainWindowViewportStateStore: ObservableObject {
         workspacePersistenceHandler.schedule(after: persistDelay) {
             self.persist()
         }
+    }
+
+    private func applyCameraState(_ nextState: ViewportCameraState) {
+        var nextViewportState = viewportState
+        nextViewportState.camera = nextState
+        viewportState = nextViewportState
+        schedulePersistence()
     }
 
     private func persist() {

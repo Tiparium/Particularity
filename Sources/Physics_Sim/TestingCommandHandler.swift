@@ -22,18 +22,12 @@ struct TestingAPICommandEnvelope: Codable {
 final class WindowCommandCenter {
     static let shared = WindowCommandCenter()
 
-    var openMainWindow: (() -> Void)?
-
     func closeMainWindow() {
         let candidate = NSApp.windows.first { $0.isVisible } ?? NSApp.windows.first
         candidate?.performClose(nil)
     }
 
     func reopenMainWindow() {
-        if let openMainWindow {
-            openMainWindow()
-            return
-        }
         let candidate = NSApp.windows.first
         candidate?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)

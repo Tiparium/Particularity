@@ -1,8 +1,19 @@
 import Foundation
 import Metal
 
+private final class PreparedSimulationBootstrap: @unchecked Sendable {
+    let device: MTLDevice
+    let library: MTLLibrary
+
+    init(device: MTLDevice, library: MTLLibrary) {
+        self.device = device
+        self.library = library
+    }
+}
+
 enum SimulationSessionError: LocalizedError {
     case missingDevice
+    case shaderSourceLoadingFailed(String)
     case libraryCompilationFailed(String)
     case runtimeCreationFailed(SimulationRuntimeError)
 
@@ -10,6 +21,8 @@ enum SimulationSessionError: LocalizedError {
         switch self {
         case .missingDevice:
             return "Simulation session could not acquire a Metal device."
+        case .shaderSourceLoadingFailed(let message):
+            return "Simulation session failed to load a Metal shader source file. \(message)"
         case .libraryCompilationFailed(let message):
             return "Simulation session failed to compile the shared Metal library. \(message)"
         case .runtimeCreationFailed(let error):
@@ -35,10 +48,11 @@ final class SimulationSession {
     private let closedSimulationStaleTimeout: TimeInterval = 300.0
 
     private var metricsSink: @MainActor (SimulationPerformanceMetrics) -> Void
-    private let editorSettingsStore: MainWindowEditorSettingsStore
+    private var leaderCommunicationLogSink: @MainActor ([LeaderCommunicationLogEntry]) -> Void
     private let viewportStateStore: MainWindowViewportStateStore
     private var currentSimulationState: SimulationViewportState
     private var activeModules: ActiveModuleSet
+    private var typeMatrixLocalSettings = TypeMatrixLocalPhysicsSettings()
     private var metricsEnabled = true
     private var lifecycleState: LifecycleState = .active
     private var suspensionStartedAt: TimeInterval?
@@ -47,66 +61,52 @@ final class SimulationSession {
     private var suspendGeneration: UInt64 = 0
     private var attachedViewportCount = 0
 
-    init(
+    private init(
+        preparedBootstrap: PreparedSimulationBootstrap,
         metricsSink: @escaping @MainActor (SimulationPerformanceMetrics) -> Void = { _ in },
+        leaderCommunicationLogSink: @escaping @MainActor ([LeaderCommunicationLogEntry]) -> Void = { _ in },
         editorSettingsStore: MainWindowEditorSettingsStore = .shared,
         viewportStateStore: MainWindowViewportStateStore = .shared
     ) throws {
-        guard let device = MTLCreateSystemDefaultDevice() else {
-            throw SimulationSessionError.missingDevice
-        }
-
-        let librarySource = [
-            DefaultVisualModuleRuntime.shaderSource,
-            DefaultPhysicsModuleRuntime.computeShaderSource,
-            DefaultOptimizationModuleRuntime.computeShaderSource,
-        ].joined(separator: "\n\n")
-
-        let library: MTLLibrary
-        do {
-            library = try device.makeLibrary(source: librarySource, options: nil)
-        } catch {
-            throw SimulationSessionError.libraryCompilationFailed(error.localizedDescription)
-        }
-
         self.metricsSink = metricsSink
-        self.editorSettingsStore = editorSettingsStore
+        self.leaderCommunicationLogSink = leaderCommunicationLogSink
         self.viewportStateStore = viewportStateStore
-        self.currentSimulationState = Self.makeSimulationViewportState(from: editorSettingsStore.editorState)
+        self.currentSimulationState = SimulationConfigurationDerivation.simulationState(
+            transportState: .stopped,
+            editorState: editorSettingsStore.editorState,
+            availableFiles: []
+        )
         self.activeModules = ActiveModuleSet(
             physics: ModuleCatalog.defaultPhysics,
             visual: ModuleCatalog.defaultVisual,
             optimization: ModuleCatalog.defaultOptimization
         )
 
-        self.device = device
-        self.library = library
-        self.runtime = try Self.makeRuntime(device: device, library: library, metricsSink: metricsSink)
+        self.device = preparedBootstrap.device
+        self.library = preparedBootstrap.library
+        self.runtime = try Self.makeRuntime(
+            device: preparedBootstrap.device,
+            library: preparedBootstrap.library,
+            metricsSink: metricsSink,
+            leaderCommunicationLogSink: leaderCommunicationLogSink
+        )
         try applyStateToRuntime()
     }
 
-    private static func makeSimulationViewportState(from editorState: SimulationEditorState) -> SimulationViewportState {
-        SimulationViewportState(
-            transportState: .stopped,
-            particleCount: editorState.physicsState.particleCount,
-            randomDistribution: editorState.physicsState.randomDistribution,
-            particleTypes: editorState.physicsState.particleTypes,
-            movementDirection: SIMD3<Float>(
-                Float(editorState.physicsState.movementDirection.x),
-                Float(editorState.physicsState.movementDirection.y),
-                Float(editorState.physicsState.movementDirection.z)
-            ),
-            timeScale: Float(editorState.physicsState.timeScale),
-            sphereSize: Float(editorState.visualState.sphereSize),
-            spectrumOffset: Float(editorState.visualState.spectrumOffset),
-            showOptimizationInfo: editorState.visualState.showOptimizationInfo,
-            optimizationBlockingMode: editorState.optimizationState.blockingMode
+    static func create(
+        metricsSink: @escaping @MainActor (SimulationPerformanceMetrics) -> Void = { _ in },
+        leaderCommunicationLogSink: @escaping @MainActor ([LeaderCommunicationLogEntry]) -> Void = { _ in },
+        editorSettingsStore: MainWindowEditorSettingsStore = .shared,
+        viewportStateStore: MainWindowViewportStateStore = .shared
+    ) async throws -> SimulationSession {
+        let preparedBootstrap = try await Self.prepareBootstrap()
+        return try SimulationSession(
+            preparedBootstrap: preparedBootstrap,
+            metricsSink: metricsSink,
+            leaderCommunicationLogSink: leaderCommunicationLogSink,
+            editorSettingsStore: editorSettingsStore,
+            viewportStateStore: viewportStateStore
         )
-    }
-
-    func setMetricsSink(_ sink: @escaping @MainActor (SimulationPerformanceMetrics) -> Void) {
-        metricsSink = sink
-        runtime?.setMetricsSink(sink)
     }
 
     var simulationState: SimulationViewportState {
@@ -123,8 +123,7 @@ final class SimulationSession {
 
     var renderState: SimulationRuntime.RenderState {
         runtime?.renderState ?? SimulationRuntime.RenderState(
-            particlePositionBuffer: nil,
-            particleColorBuffer: nil,
+            particleBuffer: nil,
             activeParticleCount: 0,
             particleCapacity: 0,
             debugLineBuffer: nil,
@@ -168,6 +167,11 @@ final class SimulationSession {
     func setMetricsEnabled(_ enabled: Bool) {
         metricsEnabled = enabled
         runtime?.setMetricsEnabled(enabled)
+    }
+
+    func updateTypeMatrixLocalSettings(_ nextSettings: TypeMatrixLocalPhysicsSettings) {
+        typeMatrixLocalSettings = nextSettings
+        runtime?.updateTypeMatrixLocalSettings(nextSettings)
     }
 
     func publishFrameMetrics(averageFPS: Double, at now: TimeInterval) {
@@ -236,10 +240,16 @@ final class SimulationSession {
     private static func makeRuntime(
         device: MTLDevice,
         library: MTLLibrary,
-        metricsSink: @escaping @MainActor (SimulationPerformanceMetrics) -> Void
+        metricsSink: @escaping @MainActor (SimulationPerformanceMetrics) -> Void,
+        leaderCommunicationLogSink: @escaping @MainActor ([LeaderCommunicationLogEntry]) -> Void
     ) throws -> SimulationRuntime {
         do {
-            return try SimulationRuntime(device: device, library: library, metricsSink: metricsSink)
+            return try SimulationRuntime(
+                device: device,
+                library: library,
+                metricsSink: metricsSink,
+                leaderCommunicationLogSink: leaderCommunicationLogSink
+            )
         } catch let error as SimulationRuntimeError {
             throw SimulationSessionError.runtimeCreationFailed(error)
         } catch {
@@ -247,12 +257,44 @@ final class SimulationSession {
         }
     }
 
+    nonisolated private static func prepareBootstrap() async throws -> PreparedSimulationBootstrap {
+        try await Task.detached(priority: .userInitiated) {
+            guard let device = MTLCreateSystemDefaultDevice() else {
+                throw SimulationSessionError.missingDevice
+            }
+
+            let defaultPhysicsSource = try PhysicsShaderSourceFiles.defaultPhysicsSource()
+            let packagedPhysicsSources = try PhysicsShaderSourceFiles.packagedPhysicsSources()
+            let librarySource = [
+                SimulationMetalSharedSource.source,
+                DefaultVisualModuleRuntime.shaderSource,
+                defaultPhysicsSource,
+                packagedPhysicsSources.joined(separator: "\n\n"),
+                DefaultOptimizationModuleRuntime.computeShaderSource,
+            ].joined(separator: "\n\n")
+
+            let library: MTLLibrary
+            do {
+                library = try device.makeLibrary(source: librarySource, options: nil)
+            } catch {
+                throw SimulationSessionError.libraryCompilationFailed(error.localizedDescription)
+            }
+
+            return PreparedSimulationBootstrap(device: device, library: library)
+        }.value
+    }
+
     private func ensureRuntime() throws {
         guard runtime == nil else {
             try applyStateToRuntime()
             return
         }
-        let nextRuntime = try Self.makeRuntime(device: device, library: library, metricsSink: metricsSink)
+        let nextRuntime = try Self.makeRuntime(
+            device: device,
+            library: library,
+            metricsSink: metricsSink,
+            leaderCommunicationLogSink: leaderCommunicationLogSink
+        )
         runtime = nextRuntime
         try applyStateToRuntime()
     }
@@ -260,6 +302,7 @@ final class SimulationSession {
     private func applyStateToRuntime() throws {
         guard let runtime else { return }
         try runtime.updateActiveModules(activeModules)
+        runtime.updateTypeMatrixLocalSettings(typeMatrixLocalSettings)
         runtime.setMetricsEnabled(metricsEnabled)
         runtime.updateSimulationState(currentSimulationState)
     }
@@ -272,6 +315,7 @@ final class WindowSimulationSessionStore {
     private var mainSession: SimulationSession?
     private let mainEditorSettingsStore = MainWindowEditorSettingsStore.shared
     private let mainViewportStateStore = MainWindowViewportStateStore.shared
+    private let mainPhysicsModuleSettingsStore = MainWindowPhysicsModuleSettingsStore.shared
     private let mainModuleCatalogStore = MainWindowModuleCatalogStore.shared
     private let mainDiagnosticsStore = MainWindowDiagnosticsStore.shared
     private var mainRuntimeConfigCoordinator: SimulationRuntimeConfigCoordinator?
@@ -284,6 +328,10 @@ final class WindowSimulationSessionStore {
         mainViewportStateStore
     }
 
+    func mainWindowPhysicsModuleSettingsStore() -> MainWindowPhysicsModuleSettingsStore {
+        mainPhysicsModuleSettingsStore
+    }
+
     func mainWindowModuleCatalogStore() -> MainWindowModuleCatalogStore {
         mainModuleCatalogStore
     }
@@ -292,47 +340,37 @@ final class WindowSimulationSessionStore {
         mainDiagnosticsStore
     }
 
-    func mainWindowRuntimeConfigCoordinator() throws -> SimulationRuntimeConfigCoordinator {
+    func mainWindowRuntimeConfigCoordinator() async throws -> SimulationRuntimeConfigCoordinator {
         if let mainRuntimeConfigCoordinator {
             return mainRuntimeConfigCoordinator
         }
 
         let coordinator = SimulationRuntimeConfigCoordinator(
-            session: try mainWindowSession(),
+            session: try await mainWindowSession(),
             editorSettingsStore: mainEditorSettingsStore,
+            physicsModuleSettingsStore: mainPhysicsModuleSettingsStore,
             moduleCatalogStore: mainModuleCatalogStore
         )
         mainRuntimeConfigCoordinator = coordinator
         return coordinator
     }
 
-    func mainWindowSession() throws -> SimulationSession {
+    func mainWindowSession() async throws -> SimulationSession {
         if let mainSession {
             return mainSession
         }
 
-        let session = try SimulationSession(
+        let session = try await SimulationSession.create(
             metricsSink: { [weak diagnosticsStore = mainDiagnosticsStore] metrics in
                 diagnosticsStore?.updatePerformanceMetrics(metrics)
+            },
+            leaderCommunicationLogSink: { [weak diagnosticsStore = mainDiagnosticsStore] entries in
+                diagnosticsStore?.updateLeaderCommunicationLogEntries(entries)
             },
             editorSettingsStore: mainEditorSettingsStore,
             viewportStateStore: mainViewportStateStore
         )
-        mainSession = session
-        return session
-    }
-
-    func mainWindowSession(metricsSink: @escaping @MainActor (SimulationPerformanceMetrics) -> Void) throws -> SimulationSession {
-        if let mainSession {
-            mainSession.setMetricsSink(metricsSink)
-            return mainSession
-        }
-
-        let session = try SimulationSession(
-            metricsSink: metricsSink,
-            editorSettingsStore: mainEditorSettingsStore,
-            viewportStateStore: mainViewportStateStore
-        )
+        session.updateTypeMatrixLocalSettings(mainPhysicsModuleSettingsStore.typeMatrixLocalSettings())
         mainSession = session
         return session
     }

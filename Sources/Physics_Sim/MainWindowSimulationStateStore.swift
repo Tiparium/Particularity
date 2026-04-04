@@ -9,6 +9,7 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
     var particleCount: Int
     var randomDistribution: Bool
     var particleTypes: Int
+    var allParticlesIntercommunicate: Bool
     var movementDirectionX: Double
     var movementDirectionY: Double
     var movementDirectionZ: Double
@@ -27,11 +28,12 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
         particleCount: 20_000,
         randomDistribution: true,
         particleTypes: 6,
+        allParticlesIntercommunicate: true,
         movementDirectionX: 0.82,
         movementDirectionY: 0.18,
         movementDirectionZ: 0.12,
         timeScale: 1.0,
-        sphereSize: 0.025,
+        sphereSize: 0.008,
         spectrumOffset: 0.0,
         showOptimizationInfo: false,
         showLeaderCommunicationLog: false,
@@ -57,6 +59,7 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
             particleCount: particleCount,
             randomDistribution: randomDistribution,
             particleTypes: particleTypes,
+            allParticlesIntercommunicate: allParticlesIntercommunicate,
             movementDirection: SIMD3<Double>(movementDirectionX, movementDirectionY, movementDirectionZ),
             timeScale: timeScale
         )
@@ -100,6 +103,7 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
             particleCount: physicsState.particleCount,
             randomDistribution: physicsState.randomDistribution,
             particleTypes: physicsState.particleTypes,
+            allParticlesIntercommunicate: physicsState.allParticlesIntercommunicate,
             movementDirectionX: physicsState.movementDirection.x,
             movementDirectionY: physicsState.movementDirection.y,
             movementDirectionZ: physicsState.movementDirection.z,
@@ -232,6 +236,33 @@ final class MainWindowEditorSettingsStore: ObservableObject {
 
     func assignedModulePath(for kind: ModuleKind) -> String? {
         editorState.assignedModulePaths[kind.rawValue]
+    }
+
+    func normalizeAssignedModulePaths(availableFiles: [ModuleFile]) {
+        var nextAssignments = editorState.assignedModulePaths
+        var didChange = false
+
+        for kind in ModuleKind.allCases {
+            guard let storedPath = nextAssignments[kind.rawValue],
+                  let resolvedFile = SimulationConfigurationDerivation.resolvedAssignedModuleFile(
+                    for: kind,
+                    assignedPath: storedPath,
+                    availableFiles: availableFiles
+                  ) else {
+                continue
+            }
+
+            let resolvedPath = resolvedFile.url.path
+            if resolvedPath != storedPath {
+                nextAssignments[kind.rawValue] = resolvedPath
+                didChange = true
+            }
+        }
+
+        guard didChange else { return }
+        updateEditorState {
+            $0.assignedModulePaths = nextAssignments
+        }
     }
 
     private func updateEditorState(_ mutate: (inout SimulationEditorState) -> Void) {

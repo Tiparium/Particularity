@@ -1,65 +1,42 @@
 import Foundation
 
 enum DefaultOptimizationModuleRuntime {
+    enum InteractionTraversalMode: UInt32 {
+        case explicitIndices = 0
+        case canonicalRange = 1
+    }
+
+    struct InteractionPlanData {
+        var traversalMode: InteractionTraversalMode
+        var offsets: [UInt32]
+        var indices: [UInt32]
+    }
+
     static let computeShaderSource = """
-    #include <metal_stdlib>
-    using namespace metal;
-
-    struct OptimizationChunkParams {
-        ulong startPair;
-        ulong pairCount;
-        uint particleCount;
-        uint threadCount;
-    };
-
-    struct OptimizationScratchState {
-        atomic_uint checksum;
-    };
-
     struct OptimizationDebugLineParams {
-        uint particleCount;
         uint segmentCount;
+        uint particleCount;
+        uint traversalMode;
+        uint _padding0;
     };
 
     struct OptimizationDebugLineSegment {
-        uint firstTargetIndex;
+        uint sourceParticleIndex;
+        uint interactionOffset;
         uint interactionCount;
         uint firstVertexIndex;
-        uint _padding;
     };
 
     struct OptimizationLineVertex {
         float3 position;
     };
 
-    kernel void optimization_chunk(
-        device const float4 *positions [[buffer(0)]],
-        constant OptimizationChunkParams& params [[buffer(1)]],
-        device OptimizationScratchState *scratch [[buffer(2)]],
-        uint id [[thread_position_in_grid]]
-    ) {
-        if (id >= params.threadCount) {
-            return;
-        }
-
-        uint localChecksum = 0;
-        for (ulong offset = id; offset < params.pairCount; offset += params.threadCount) {
-            ulong pairIndex = params.startPair + offset;
-            uint sourceIndex = uint(pairIndex % ulong(params.particleCount));
-            uint targetIndex = uint(pairIndex / ulong(params.particleCount));
-            float4 sourcePosition = positions[sourceIndex];
-            float4 targetPosition = positions[targetIndex];
-            localChecksum ^= as_type<uint>(sourcePosition.x) ^ as_type<uint>(targetPosition.y);
-        }
-
-        atomic_fetch_xor_explicit(&scratch->checksum, localChecksum, memory_order_relaxed);
-    }
-
     kernel void build_debug_lines(
-        device const float4 *positions [[buffer(0)]],
-        device OptimizationLineVertex *lineVertices [[buffer(1)]],
-        constant OptimizationDebugLineParams& params [[buffer(2)]],
-        device const OptimizationDebugLineSegment *segments [[buffer(3)]],
+        device const ParticleState *particles [[buffer(0)]],
+        device const uint *interactionIndices [[buffer(1)]],
+        device OptimizationLineVertex *lineVertices [[buffer(2)]],
+        constant OptimizationDebugLineParams& params [[buffer(3)]],
+        device const OptimizationDebugLineSegment *segments [[buffer(4)]],
         uint id [[thread_position_in_grid]]
     ) {
         if (params.segmentCount == 0) {
@@ -78,14 +55,38 @@ enum DefaultOptimizationModuleRuntime {
             }
         }
 
-        if (!found) {
+        if (!found || segment.interactionCount == 0) {
             return;
         }
 
         uint localVertexIndex = id - segment.firstVertexIndex;
         uint interactionIndex = localVertexIndex / 2;
-        uint particleIndex = (localVertexIndex % 2 == 0) ? 0 : min(segment.firstTargetIndex + interactionIndex, params.particleCount - 1);
-        lineVertices[id].position = positions[particleIndex].xyz;
+        uint particleIndex = segment.sourceParticleIndex;
+        if ((localVertexIndex % 2) != 0) {
+            if (params.traversalMode == 1) {
+                particleIndex = min(interactionIndex, params.particleCount - 1);
+            } else {
+                particleIndex = interactionIndices[segment.interactionOffset + interactionIndex];
+            }
+        }
+
+        lineVertices[id].position = particles[particleIndex].position.xyz;
     }
     """
+
+    static func rebuildInteractionPlan(particleCount: Int) -> InteractionPlanData {
+        let safeParticleCount = max(1, particleCount)
+
+        var offsets: [UInt32] = []
+        offsets.reserveCapacity(safeParticleCount + 1)
+        for index in 0...safeParticleCount {
+            offsets.append(UInt32(index * safeParticleCount))
+        }
+
+        return InteractionPlanData(
+            traversalMode: .canonicalRange,
+            offsets: offsets,
+            indices: []
+        )
+    }
 }

@@ -2,16 +2,8 @@ import simd
 
 enum DefaultVisualModuleRuntime {
     static let shaderSource = """
-    #include <metal_stdlib>
-    using namespace metal;
-
     struct LineVertexIn {
         float3 position [[attribute(0)]];
-    };
-
-    struct ParticleVertexIn {
-        float4 position [[attribute(0)]];
-        float4 color [[attribute(1)]];
     };
 
     struct LineUniforms {
@@ -24,7 +16,10 @@ enum DefaultVisualModuleRuntime {
         float sphereSize;
         float viewportHeight;
         float projectionYScale;
+        float spectrumOffset;
+        uint particleTypeCount;
         uint showOptimizationInfo;
+        uint _padding;
     };
 
     struct LineVertexOut {
@@ -38,6 +33,30 @@ enum DefaultVisualModuleRuntime {
         float pointSize [[point_size]];
     };
 
+    float3 hsv_to_rgb(float h, float s, float v) {
+        float i = floor(h * 6.0);
+        float f = h * 6.0 - i;
+        float p = v * (1.0 - s);
+        float q = v * (1.0 - f * s);
+        float t = v * (1.0 - (1.0 - f) * s);
+
+        switch (int(i) % 6) {
+            case 0: return float3(v, t, p);
+            case 1: return float3(q, v, p);
+            case 2: return float3(p, v, t);
+            case 3: return float3(p, q, v);
+            case 4: return float3(t, p, v);
+            default: return float3(v, p, q);
+        }
+    }
+
+    float4 color_for_type(uint typeIndex, uint typeCount, float spectrumOffset) {
+        uint boundedTypeCount = max(typeCount, 1u);
+        float hue = fmod(spectrumOffset + float(typeIndex) / float(boundedTypeCount), 1.0);
+        float3 rgb = hsv_to_rgb(hue, 0.8, 1.0);
+        return float4(rgb, 1.0);
+    }
+
     vertex LineVertexOut line_vs(LineVertexIn in [[stage_in]], constant LineUniforms& u [[buffer(1)]]) {
         LineVertexOut out;
         out.position = u.mvp * float4(in.position, 1.0);
@@ -50,16 +69,25 @@ enum DefaultVisualModuleRuntime {
     }
 
     vertex ParticleVertexOut particle_vs(
-        ParticleVertexIn in [[stage_in]],
-        constant ParticleUniforms& u [[buffer(2)]],
+        device const ParticleState *particles [[buffer(0)]],
+        constant ParticleUniforms& u [[buffer(1)]],
         uint vertexID [[vertex_id]]
     ) {
         ParticleVertexOut out;
-        out.position = u.mvp * float4(in.position.xyz, 1.0);
-        out.color = in.color;
-        if (u.showOptimizationInfo != 0 && vertexID != 0) {
-            out.color = float4(in.color.rgb * 0.22, 0.10);
+        ParticleState particle = particles[vertexID];
+        out.position = u.mvp * float4(particle.position.xyz, 1.0);
+        out.color = color_for_type(particle_type(particle), u.particleTypeCount, u.spectrumOffset);
+
+        if (particle_active(particle) == 0) {
+            out.color.a = 0.0;
+            out.pointSize = 0.0;
+            return out;
         }
+
+        if (u.showOptimizationInfo != 0 && vertexID != 0) {
+            out.color = float4(out.color.rgb * 0.22, 0.10);
+        }
+
         float clipW = max(0.0001, out.position.w);
         float screenSpaceSize = max(1.0, u.sphereSize * u.viewportHeight * u.projectionYScale / clipW);
         out.pointSize = screenSpaceSize;
@@ -69,7 +97,7 @@ enum DefaultVisualModuleRuntime {
     fragment float4 particle_fs(ParticleVertexOut in [[stage_in]], float2 pointCoord [[point_coord]]) {
         float2 centered = pointCoord * 2.0 - 1.0;
         float radiusSquared = dot(centered, centered);
-        if (radiusSquared > 1.0) {
+        if (radiusSquared > 1.0 || in.color.a <= 0.0) {
             discard_fragment();
         }
         return in.color;

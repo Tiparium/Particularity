@@ -33,6 +33,8 @@ struct EventuallyAppliedSlider: View {
     let valueText: (Double) -> String
 
     @State private var draftText: String
+    @State private var draftValue: Double
+    @State private var deferredCommit = DeferredActionHandler()
 
     init(
         title: String,
@@ -49,6 +51,7 @@ struct EventuallyAppliedSlider: View {
         self.delay = delay
         self.valueText = valueText
         _draftText = State(initialValue: Self.editingText(for: appliedValue.wrappedValue))
+        _draftValue = State(initialValue: appliedValue.wrappedValue)
     }
 
     var body: some View {
@@ -66,19 +69,26 @@ struct EventuallyAppliedSlider: View {
 
             Slider(
                 value: Binding(
-                    get: { appliedValue },
+                    get: { draftValue },
                     set: {
-                        appliedValue = min(max($0, range.lowerBound), range.upperBound)
-                        draftText = Self.editingText(for: appliedValue)
+                        draftValue = min(max($0, range.lowerBound), range.upperBound)
+                        draftText = Self.editingText(for: draftValue)
+                        scheduleCommit()
                     }
                 ),
                 in: range,
-                step: step
+                step: step,
+                onEditingChanged: { isEditing in
+                    if !isEditing {
+                        flushCommit()
+                    }
+                }
             )
 
             statusRow(valueText(appliedValue))
         }
         .onChange(of: appliedValue) { _, nextValue in
+            draftValue = nextValue
             draftText = Self.editingText(for: nextValue)
         }
     }
@@ -99,8 +109,22 @@ struct EventuallyAppliedSlider: View {
         }
 
         let snapped = (parsed / step).rounded() * step
-        appliedValue = min(max(snapped, range.lowerBound), range.upperBound)
-        draftText = Self.editingText(for: appliedValue)
+        draftValue = min(max(snapped, range.lowerBound), range.upperBound)
+        deferredCommit.cancel()
+        appliedValue = draftValue
+        draftText = Self.editingText(for: draftValue)
+    }
+
+    private func scheduleCommit() {
+        deferredCommit.schedule(after: delay) {
+            appliedValue = draftValue
+        }
+    }
+
+    private func flushCommit() {
+        deferredCommit.flush {
+            appliedValue = draftValue
+        }
     }
 
     private static func editingText(for value: Double) -> String {
@@ -152,6 +176,8 @@ struct EventuallyAppliedIntSlider: View {
     let helpText: String?
 
     @State private var draftText: String
+    @State private var draftValue: Int
+    @State private var deferredCommit = DeferredActionHandler()
 
     init(
         title: String,
@@ -166,6 +192,7 @@ struct EventuallyAppliedIntSlider: View {
         self.delay = delay
         self.helpText = helpText
         _draftText = State(initialValue: "\(appliedValue.wrappedValue)")
+        _draftValue = State(initialValue: appliedValue.wrappedValue)
     }
 
     var body: some View {
@@ -183,14 +210,20 @@ struct EventuallyAppliedIntSlider: View {
 
             Slider(
                 value: Binding(
-                    get: { Double(appliedValue) },
+                    get: { Double(draftValue) },
                     set: {
-                        appliedValue = Int($0.rounded())
-                        draftText = "\(appliedValue)"
+                        draftValue = Int($0.rounded())
+                        draftText = "\(draftValue)"
+                        scheduleCommit()
                     }
                 ),
                 in: Double(range.lowerBound)...Double(range.upperBound),
-                step: 1
+                step: 1,
+                onEditingChanged: { isEditing in
+                    if !isEditing {
+                        flushCommit()
+                    }
+                }
             )
             .help(helpText ?? "")
 
@@ -201,6 +234,7 @@ struct EventuallyAppliedIntSlider: View {
                 .frame(height: 16, alignment: .leading)
         }
         .onChange(of: appliedValue) { _, nextValue in
+            draftValue = nextValue
             draftText = "\(nextValue)"
         }
     }
@@ -208,12 +242,27 @@ struct EventuallyAppliedIntSlider: View {
     private func commitTextEntry() {
         let digitsOnly = draftText.filter(\.isNumber)
         guard let parsed = Int(digitsOnly), parsed >= range.lowerBound else {
+            draftValue = appliedValue
             draftText = "\(appliedValue)"
             return
         }
 
-        appliedValue = min(range.upperBound, parsed)
-        draftText = "\(appliedValue)"
+        draftValue = min(range.upperBound, parsed)
+        deferredCommit.cancel()
+        appliedValue = draftValue
+        draftText = "\(draftValue)"
+    }
+
+    private func scheduleCommit() {
+        deferredCommit.schedule(after: delay) {
+            appliedValue = draftValue
+        }
+    }
+
+    private func flushCommit() {
+        deferredCommit.flush {
+            appliedValue = draftValue
+        }
     }
 }
 

@@ -25,6 +25,7 @@ private enum DockPanelType: String, CaseIterable, Codable {
     case optimizationSettings
     case fileView
     case inspector
+    case leaderCommunicationLog
 
     var title: String {
         switch self {
@@ -34,6 +35,7 @@ private enum DockPanelType: String, CaseIterable, Codable {
         case .optimizationSettings: return "Optimization Settings"
         case .fileView: return "File View"
         case .inspector: return "Debug Inspector"
+        case .leaderCommunicationLog: return "Leader Communication Log"
         }
     }
 
@@ -41,7 +43,7 @@ private enum DockPanelType: String, CaseIterable, Codable {
         switch self {
         case .moduleSlots, .physicsSettings, .visualSettings, .optimizationSettings, .fileView:
             return .core
-        case .inspector:
+        case .inspector, .leaderCommunicationLog:
             return .diagnostics
         }
     }
@@ -255,6 +257,52 @@ private struct DockPanelDropDelegate: DropDelegate {
     }
 }
 
+struct MainWindowContentDependencies {
+    let session: SimulationSession
+    let editorSettingsStore: MainWindowEditorSettingsStore
+    let viewportStateStore: MainWindowViewportStateStore
+    let physicsModuleSettingsStore: MainWindowPhysicsModuleSettingsStore
+    let moduleCatalogStore: MainWindowModuleCatalogStore
+    let runtimeConfigCoordinator: SimulationRuntimeConfigCoordinator
+    let diagnosticsStore: MainWindowDiagnosticsStore
+    let interactionSnapshotRecorder: InteractionSnapshotRecorder
+    let performanceReviewLogger: PerformanceReviewLogger
+
+    @MainActor
+    static func load(
+        progress: ((LaunchProgressStage) -> Void)? = nil
+    ) async throws -> MainWindowContentDependencies {
+        progress?(.loadingSession)
+        await Task.yield()
+        let session = try await WindowSimulationSessionStore.shared.mainWindowSession()
+
+        progress?(.loadingEditorStores)
+        await Task.yield()
+        let editorSettingsStore = WindowSimulationSessionStore.shared.mainWindowEditorSettingsStore()
+        let physicsModuleSettingsStore = WindowSimulationSessionStore.shared.mainWindowPhysicsModuleSettingsStore()
+        let moduleCatalogStore = WindowSimulationSessionStore.shared.mainWindowModuleCatalogStore()
+        let diagnosticsStore = WindowSimulationSessionStore.shared.mainWindowDiagnosticsStore()
+
+        progress?(.buildingCoordinator)
+        await Task.yield()
+        let runtimeConfigCoordinator = try await WindowSimulationSessionStore.shared.mainWindowRuntimeConfigCoordinator()
+
+        progress?(.finalizingUI)
+        await Task.yield()
+        return MainWindowContentDependencies(
+            session: session,
+            editorSettingsStore: editorSettingsStore,
+            viewportStateStore: WindowSimulationSessionStore.shared.mainWindowViewportStateStore(),
+            physicsModuleSettingsStore: physicsModuleSettingsStore,
+            moduleCatalogStore: moduleCatalogStore,
+            runtimeConfigCoordinator: runtimeConfigCoordinator,
+            diagnosticsStore: diagnosticsStore,
+            interactionSnapshotRecorder: InteractionSnapshotRecorder.shared,
+            performanceReviewLogger: PerformanceReviewLogger.shared
+        )
+    }
+}
+
 struct ContentView: View {
     private let dockLayoutStorageKey = "PhysicsSim.DockLayoutState.v1"
     private let particleCountEngineCap = 10_000_000
@@ -277,6 +325,7 @@ struct ContentView: View {
     @State private var hoveredGrabPanelID: UUID?
     @State private var hoveredClosePanelID: UUID?
     @State private var panelDragSession: PanelDragSession?
+    @State private var panelDragInteractionState = DragInteractionState(clickThenDragEndBehavior: .explicitOnly)
     @State private var collapsedPanelIDs: Set<UUID> = []
     @State private var menuInsertionType: DockPanelType?
     @State private var menuHoverZone: DockZone?
@@ -292,37 +341,24 @@ struct ContentView: View {
     @State private var hoveredResizeAxis: DockResizeAxis?
     private let session: SimulationSession
     @ObservedObject private var editorSettingsStore: MainWindowEditorSettingsStore
+    @ObservedObject private var viewportStateStore: MainWindowViewportStateStore
+    @ObservedObject private var physicsModuleSettingsStore: MainWindowPhysicsModuleSettingsStore
     @ObservedObject private var moduleCatalogStore: MainWindowModuleCatalogStore
     @ObservedObject private var runtimeConfigCoordinator: SimulationRuntimeConfigCoordinator
     @ObservedObject private var diagnosticsStore: MainWindowDiagnosticsStore
     @ObservedObject private var interactionSnapshotRecorder: InteractionSnapshotRecorder
     @ObservedObject private var performanceReviewLogger: PerformanceReviewLogger
 
-    init() {
-        do {
-            let session = try WindowSimulationSessionStore.shared.mainWindowSession()
-            self.session = session
-            _editorSettingsStore = ObservedObject(
-                wrappedValue: WindowSimulationSessionStore.shared.mainWindowEditorSettingsStore()
-            )
-            _moduleCatalogStore = ObservedObject(
-                wrappedValue: WindowSimulationSessionStore.shared.mainWindowModuleCatalogStore()
-            )
-            _runtimeConfigCoordinator = ObservedObject(
-                wrappedValue: try WindowSimulationSessionStore.shared.mainWindowRuntimeConfigCoordinator()
-            )
-            _diagnosticsStore = ObservedObject(
-                wrappedValue: WindowSimulationSessionStore.shared.mainWindowDiagnosticsStore()
-            )
-            _interactionSnapshotRecorder = ObservedObject(
-                wrappedValue: InteractionSnapshotRecorder.shared
-            )
-            _performanceReviewLogger = ObservedObject(
-                wrappedValue: PerformanceReviewLogger.shared
-            )
-        } catch {
-            fatalError("Failed to create main window simulation session: \(error.localizedDescription)")
-        }
+    init(dependencies: MainWindowContentDependencies) {
+        self.session = dependencies.session
+        _editorSettingsStore = ObservedObject(wrappedValue: dependencies.editorSettingsStore)
+        _viewportStateStore = ObservedObject(wrappedValue: dependencies.viewportStateStore)
+        _physicsModuleSettingsStore = ObservedObject(wrappedValue: dependencies.physicsModuleSettingsStore)
+        _moduleCatalogStore = ObservedObject(wrappedValue: dependencies.moduleCatalogStore)
+        _runtimeConfigCoordinator = ObservedObject(wrappedValue: dependencies.runtimeConfigCoordinator)
+        _diagnosticsStore = ObservedObject(wrappedValue: dependencies.diagnosticsStore)
+        _interactionSnapshotRecorder = ObservedObject(wrappedValue: dependencies.interactionSnapshotRecorder)
+        _performanceReviewLogger = ObservedObject(wrappedValue: dependencies.performanceReviewLogger)
     }
 
     private var defaultPanels: [DockPanel] {
@@ -494,6 +530,8 @@ struct ContentView: View {
     private func centerColumn(maxCenterDockHeight: CGFloat) -> some View {
         VSplitView {
             SimulationCenterPane(
+                session: session,
+                viewportStateStore: viewportStateStore,
                 editorSettingsStore: editorSettingsStore,
                 runtimeConfigCoordinator: runtimeConfigCoordinator,
                 diagnosticsStore: diagnosticsStore,
@@ -592,24 +630,6 @@ struct ContentView: View {
                 runtimeConfigCoordinator.stopSimulation()
             }
             .disabled(transportState == .stopped)
-
-            Divider()
-                .frame(height: 18)
-
-            Picker("Memory Budget", selection: Binding(
-                get: { ProgramSettingsStore.memoryBudgetPreset.rawValue },
-                set: {
-                    guard let preset = MemoryBudgetPreset(rawValue: $0) else { return }
-                    ProgramSettingsStore.memoryBudgetPreset = preset
-                    runtimeConfigCoordinator.refreshDerivedState()
-                }
-            )) {
-                ForEach(MemoryBudgetPreset.allCases) { preset in
-                    Text(preset.title).tag(preset.rawValue)
-                }
-            }
-            .pickerStyle(.segmented)
-            .frame(maxWidth: 240)
 
             Spacer()
 
@@ -860,6 +880,7 @@ struct ContentView: View {
                                 .onDrag {
                                     cancelMenuInsertionMode()
                                     resetDragState()
+                                    _ = panelDragInteractionState.beginInteraction(for: .clickAndDrag)
                                     panelDragSession = PanelDragSession(
                                         panelID: panel.id,
                                         mode: .clickAndDrag,
@@ -876,14 +897,22 @@ struct ContentView: View {
                                 .contentShape(Rectangle())
                                 .onTapGesture {
                                     cancelMenuInsertionMode()
-                                    resetDragState()
-                                    panelDragSession = PanelDragSession(
-                                        panelID: panel.id,
-                                        mode: .clickThenDrag,
-                                        pointerInRoot: .zero,
-                                        hoveredZone: nil,
-                                        insertionIndexByZone: [:]
-                                    )
+                                    if panelDragSession?.panelID != panel.id {
+                                        resetDragState()
+                                    }
+
+                                    let isActive = panelDragInteractionState.beginInteraction(for: .clickThenDrag)
+                                    if isActive {
+                                        panelDragSession = PanelDragSession(
+                                            panelID: panel.id,
+                                            mode: .clickThenDrag,
+                                            pointerInRoot: .zero,
+                                            hoveredZone: nil,
+                                            insertionIndexByZone: [:]
+                                        )
+                                    } else {
+                                        panelDragSession = nil
+                                    }
                                 }
                         }
                     }
@@ -969,7 +998,9 @@ struct ContentView: View {
             ModuleSettingsPanelView(
                 kind: .physics,
                 editorSettingsStore: editorSettingsStore,
+                physicsModuleSettingsStore: physicsModuleSettingsStore,
                 availableFiles: moduleCatalogStore.availableFiles,
+                transportState: runtimeConfigCoordinator.transportState,
                 particleCountUICap: particleCountUICap,
                 particleCountEngineCap: particleCountEngineCap
             )
@@ -977,7 +1008,9 @@ struct ContentView: View {
             ModuleSettingsPanelView(
                 kind: .visual,
                 editorSettingsStore: editorSettingsStore,
+                physicsModuleSettingsStore: physicsModuleSettingsStore,
                 availableFiles: moduleCatalogStore.availableFiles,
+                transportState: runtimeConfigCoordinator.transportState,
                 particleCountUICap: particleCountUICap,
                 particleCountEngineCap: particleCountEngineCap
             )
@@ -985,7 +1018,9 @@ struct ContentView: View {
             ModuleSettingsPanelView(
                 kind: .optimization,
                 editorSettingsStore: editorSettingsStore,
+                physicsModuleSettingsStore: physicsModuleSettingsStore,
                 availableFiles: moduleCatalogStore.availableFiles,
+                transportState: runtimeConfigCoordinator.transportState,
                 particleCountUICap: particleCountUICap,
                 particleCountEngineCap: particleCountEngineCap
             )
@@ -1010,6 +1045,8 @@ struct ContentView: View {
                 onStartInteractionSnapshot: startInteractionSnapshotRecording,
                 onSetPerformanceReviewLoggingEnabled: { performanceReviewLogger.setEnabled($0) }
             )
+        case .leaderCommunicationLog:
+            LeaderCommunicationLogPanel(entries: diagnosticsStore.leaderCommunicationLogEntries)
         }
     }
 
@@ -1144,15 +1181,6 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
             }
 
-            HStack {
-                Text("Budget Preset")
-                    .font(.caption)
-                Spacer()
-                Text(currentMemoryBudgetPreset.title)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-
             if let issue = viewportRuntimeError ?? validationReport.issue {
                 Text(issue)
                     .font(.caption2)
@@ -1176,10 +1204,6 @@ struct ContentView: View {
 
     private var modulesRootURL: URL {
         moduleCatalogStore.modulesRootURL
-    }
-
-    private var currentMemoryBudgetPreset: MemoryBudgetPreset {
-        ProgramSettingsStore.memoryBudgetPreset
     }
 
     private var activeModuleSet: ActiveModuleSet {
@@ -1398,6 +1422,7 @@ struct ContentView: View {
             particleCount: editorState.physicsState.particleCount,
             randomDistribution: editorState.physicsState.randomDistribution,
             particleTypes: editorState.physicsState.particleTypes,
+            allParticlesIntercommunicate: editorState.physicsState.allParticlesIntercommunicate,
             movementDirectionX: editorState.physicsState.movementDirection.x,
             movementDirectionY: editorState.physicsState.movementDirection.y,
             movementDirectionZ: editorState.physicsState.movementDirection.z,
@@ -1489,6 +1514,7 @@ struct ContentView: View {
     }
 
     private func resetDragState() {
+        panelDragInteractionState.reset()
         panelDragSession = nil
     }
 
@@ -1536,6 +1562,7 @@ struct ContentView: View {
         if let zone = session.hoveredZone {
             movePanel(id: session.panelID, to: zone, at: session.insertionIndexByZone[zone])
         }
+        panelDragInteractionState.endClickThenDragInteraction()
         resetDragState()
     }
 
@@ -1622,44 +1649,31 @@ private enum EditorViewSupport {
         store: MainWindowEditorSettingsStore,
         availableFiles: [ModuleFile]
     ) -> ModuleDescriptor {
-        let assignedModules = assignedModules(from: store)
-        guard let assignedURL = assignedModules[kind],
-              let file = availableFiles.first(where: { $0.url == assignedURL }),
-              let descriptor = file.descriptor else {
-            return ModuleCatalog.fallback(for: kind.rawValue)
-        }
-        return descriptor
+        SimulationConfigurationDerivation.resolveModule(
+            for: kind,
+            editorState: store.editorState,
+            availableFiles: availableFiles
+        )
     }
 
     static func resolvedVisualSupportsOptimizationDebug(
         store: MainWindowEditorSettingsStore,
         availableFiles: [ModuleFile]
     ) -> Bool {
-        resolvedModule(for: .visual, store: store, availableFiles: availableFiles).acceptsOptimizationDebugInfo
-            && resolvedModule(for: .optimization, store: store, availableFiles: availableFiles).name == ModuleCatalog.defaultOptimization.name
+        SimulationConfigurationDerivation.visualSupportsOptimizationDebug(
+            editorState: store.editorState,
+            availableFiles: availableFiles
+        )
     }
 
     static func currentViewportState(
         store: MainWindowEditorSettingsStore,
         availableFiles: [ModuleFile]
     ) -> SimulationViewportState {
-        let editorState = store.editorState
-        return SimulationViewportState(
+        SimulationConfigurationDerivation.simulationState(
             transportState: .stopped,
-            particleCount: editorState.physicsState.particleCount,
-            randomDistribution: editorState.physicsState.randomDistribution,
-            particleTypes: editorState.physicsState.particleTypes,
-            movementDirection: SIMD3<Float>(
-                Float(editorState.physicsState.movementDirection.x),
-                Float(editorState.physicsState.movementDirection.y),
-                Float(editorState.physicsState.movementDirection.z)
-            ),
-            timeScale: Float(editorState.physicsState.timeScale),
-            sphereSize: Float(editorState.visualState.sphereSize),
-            spectrumOffset: Float(editorState.visualState.spectrumOffset),
-            showOptimizationInfo: resolvedVisualSupportsOptimizationDebug(store: store, availableFiles: availableFiles)
-                && editorState.visualState.showOptimizationInfo,
-            optimizationBlockingMode: editorState.optimizationState.blockingMode
+            editorState: store.editorState,
+            availableFiles: availableFiles
         )
     }
 
@@ -1667,57 +1681,31 @@ private enum EditorViewSupport {
         store: MainWindowEditorSettingsStore,
         availableFiles: [ModuleFile]
     ) -> ActiveModuleSet {
-        ActiveModuleSet(
-            physics: resolvedModule(for: .physics, store: store, availableFiles: availableFiles),
-            visual: resolvedModule(for: .visual, store: store, availableFiles: availableFiles),
-            optimization: resolvedModule(for: .optimization, store: store, availableFiles: availableFiles)
+        SimulationConfigurationDerivation.activeModules(
+            editorState: store.editorState,
+            availableFiles: availableFiles
         )
     }
 
     static func projectedMemoryBytes(editorState: SimulationEditorState) -> UInt64 {
-        let particleCount = max(1, editorState.physicsState.particleCount)
-        let baseParticleStride = 40
-        let visualStride = 16
-        let optimizationStride = 16
-        let typeBudget = 32 * 32
-        let debugBudget = editorState.optimizationState.showLeaderCommunicationLog ? 8 * 1024 * 1024 : 0
-        let reserved = particleCount * (baseParticleStride + visualStride + optimizationStride) + typeBudget + debugBudget
-        return UInt64(reserved)
+        SimulationConfigurationDerivation.projectedMemoryBytes(editorState: editorState)
     }
 
     static func validationReport(
         store: MainWindowEditorSettingsStore,
-        availableFiles: [ModuleFile],
-        memoryBudgetPreset: MemoryBudgetPreset
+        availableFiles: [ModuleFile]
     ) -> RuntimeValidationReport {
-        let projectedBytes = projectedMemoryBytes(editorState: store.editorState)
-        let activeModules = activeModuleSet(store: store, availableFiles: availableFiles)
-        let viewportState = currentViewportState(store: store, availableFiles: availableFiles)
-
-        if let issue = ModuleCompatibility.incompatibilityReason(for: activeModules, state: viewportState) {
-            return RuntimeValidationReport(issue: issue, projectedBytes: projectedBytes)
-        }
-
-        if store.editorState.optimizationState.showLeaderCommunicationLog,
-           activeModules.optimization.name != ModuleCatalog.defaultOptimization.name {
-            return RuntimeValidationReport(
-                issue: "Leader communication log is only available with \(ModuleCatalog.defaultOptimization.name).",
-                projectedBytes: projectedBytes
-            )
-        }
-
-        if projectedBytes > memoryBudgetPreset.budgetBytes {
-            return RuntimeValidationReport(
-                issue: "Projected simulation memory exceeds the \(memoryBudgetPreset.title) budget.",
-                projectedBytes: projectedBytes
-            )
-        }
-
-        return RuntimeValidationReport(issue: nil, projectedBytes: projectedBytes)
+        SimulationConfigurationDerivation.validationReport(
+            editorState: store.editorState,
+            transportState: .stopped,
+            availableFiles: availableFiles
+        )
     }
 }
 
 private struct SimulationCenterPane: View {
+    let session: SimulationSession
+    @ObservedObject var viewportStateStore: MainWindowViewportStateStore
     @ObservedObject var editorSettingsStore: MainWindowEditorSettingsStore
     @ObservedObject var runtimeConfigCoordinator: SimulationRuntimeConfigCoordinator
     @ObservedObject var diagnosticsStore: MainWindowDiagnosticsStore
@@ -1726,7 +1714,6 @@ private struct SimulationCenterPane: View {
 
     private var transportState: SimulationTransportState { runtimeConfigCoordinator.transportState }
     private var validationReport: RuntimeValidationReport { runtimeConfigCoordinator.validationReport }
-    private var currentMemoryBudgetPreset: MemoryBudgetPreset { ProgramSettingsStore.memoryBudgetPreset }
     private var performanceMetrics: SimulationPerformanceMetrics { diagnosticsStore.performanceMetrics }
     private var viewportRuntimeError: String? { diagnosticsStore.viewportRuntimeError }
 
@@ -1736,7 +1723,7 @@ private struct SimulationCenterPane: View {
                 Text("Simulation")
                     .font(.headline)
                 Spacer()
-                Text("Sprint 01 First Pass")
+                Text("Editor Runtime")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -1759,24 +1746,6 @@ private struct SimulationCenterPane: View {
                 }
                 .disabled(transportState == .stopped)
 
-                Divider()
-                    .frame(height: 18)
-
-                Picker("Memory Budget", selection: Binding(
-                    get: { ProgramSettingsStore.memoryBudgetPreset.rawValue },
-                    set: {
-                        guard let preset = MemoryBudgetPreset(rawValue: $0) else { return }
-                        ProgramSettingsStore.memoryBudgetPreset = preset
-                        runtimeConfigCoordinator.refreshDerivedState()
-                    }
-                )) {
-                    ForEach(MemoryBudgetPreset.allCases) { preset in
-                        Text(preset.title).tag(preset.rawValue)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 240)
-
                 Spacer()
 
                 Text(validationReport.canStart ? "Ready" : "Blocked")
@@ -1789,7 +1758,6 @@ private struct SimulationCenterPane: View {
 
             HStack(spacing: 16) {
                 LabeledContent("Transport", value: transportState.title)
-                LabeledContent("Budget", value: currentMemoryBudgetPreset.title)
                 LabeledContent("Projected", value: ByteCountFormatter.string(fromByteCount: Int64(validationReport.projectedBytes), countStyle: .memory))
                 Spacer()
                 if let issue = viewportRuntimeError ?? validationReport.issue {
@@ -1806,6 +1774,9 @@ private struct SimulationCenterPane: View {
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
 
             MetalViewportView(
+                session: session,
+                viewportStateStore: viewportStateStore,
+                transportState: transportState,
                 metricsEnabled: debugMetricsAreVisible,
                 diagnosticsStore: diagnosticsStore
             )
@@ -1900,7 +1871,9 @@ private struct ModuleSlotsPanel: View {
 private struct ModuleSettingsPanelView: View {
     let kind: ModuleKind
     @ObservedObject var editorSettingsStore: MainWindowEditorSettingsStore
+    @ObservedObject var physicsModuleSettingsStore: MainWindowPhysicsModuleSettingsStore
     let availableFiles: [ModuleFile]
+    let transportState: SimulationTransportState
     let particleCountUICap: Int
     let particleCountEngineCap: Int
 
@@ -1931,6 +1904,13 @@ private struct ModuleSettingsPanelView: View {
                 case .physics:
                     if resolved.name == ModuleCatalog.defaultPhysics.name {
                         PhysicsSettingsPanel(store: editorSettingsStore, particleCountUICap: particleCountUICap, particleCountEngineCap: particleCountEngineCap)
+                    } else if resolved.name == TypeMatrixLocalPhysicsSettings.moduleName {
+                        TypeMatrixLocalPhysicsModuleSettingsPanel(
+                            store: editorSettingsStore,
+                            physicsModuleSettingsStore: physicsModuleSettingsStore,
+                            transportState: transportState,
+                            particleCountUICap: particleCountUICap
+                        )
                     } else {
                         unavailable
                     }
@@ -1996,6 +1976,14 @@ private struct PhysicsSettingsPanel: View {
                     store.setPhysicsState(next)
                 }
             ))
+            EventuallyAppliedToggle(title: "Inter-Particle Communication", appliedValue: Binding(
+                get: { store.editorState.physicsState.allParticlesIntercommunicate },
+                set: {
+                    var next = store.editorState.physicsState
+                    next.allParticlesIntercommunicate = $0
+                    store.setPhysicsState(next)
+                }
+            ))
             EventuallyAppliedSlider(
                 title: "Particle Types",
                 appliedValue: Binding(
@@ -2042,8 +2030,8 @@ private struct PhysicsSettingsPanel: View {
                         store.setPhysicsState(next)
                     }
                 ),
-                range: 0...4,
-                step: 0.01,
+                range: 0...0.25,
+                step: 0.001,
                 valueText: { String(format: "%.2fx", $0) }
             )
         }
@@ -2066,8 +2054,8 @@ private struct VisualSettingsPanel: View {
                         store.setVisualState(next)
                     }
                 ),
-                range: 0.005...0.120,
-                step: 0.001,
+                range: 0.002...0.015,
+                step: 0.0005,
                 valueText: { String(format: "%.3f", $0) }
             )
             EventuallyAppliedSlider(
@@ -2143,6 +2131,43 @@ private struct OptimizationSettingsPanel: View {
             Text("Naive all-pairs traversal is the default optimization MVP.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct LeaderCommunicationLogPanel: View {
+    let entries: [LeaderCommunicationLogEntry]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Recent leader-sweep dispatch summaries from the default optimization runtime.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
+            if entries.isEmpty {
+                Text("No leader communication entries recorded.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(entries.reversed()) { entry in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("t=\(entry.recordedAt) target=\(entry.firstTargetIndex) interactions=\(entry.interactionCount)")
+                                    .font(.caption.weight(.semibold))
+                                Text("workItems=\(entry.workItemStart)..<\(entry.workItemStart + entry.workItemCount) mode=\(entry.blockingMode.title)")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(8)
+                            .background(.quaternary.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
+                        }
+                    }
+                }
+                .frame(minHeight: 180)
+                .scrollIndicators(.visible)
+            }
         }
     }
 }
@@ -2323,7 +2348,7 @@ private struct InspectorPanel: View {
     private var performanceReviewStatusText: String {
         if performanceReviewLogger.isEnabled {
             if let currentComboFileName = performanceReviewLogger.currentComboFileName {
-                return "Adaptive logging on. Buffered samples: \(performanceReviewLogger.bufferedSampleCount). Latest combo: \(currentComboFileName)"
+                return "Adaptive logging on. Buffered entries: \(performanceReviewLogger.bufferedSampleCount). Latest combo: \(currentComboFileName)"
             }
             return "Adaptive logging on. Waiting for running simulation data."
         }

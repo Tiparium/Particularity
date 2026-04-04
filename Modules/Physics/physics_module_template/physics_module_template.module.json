@@ -1,0 +1,6 @@
+{
+  "name": "PhysicsModuleTemplate",
+  "kind": "physics",
+  "version": 1,
+  "shaderSource": "module/PhysicsModuleTemplate.metal"
+}

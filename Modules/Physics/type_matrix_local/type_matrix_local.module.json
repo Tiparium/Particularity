@@ -1,0 +1,6 @@
+{
+  "name": "TypeMatrixLocalAttractionRepulsion",
+  "kind": "physics",
+  "version": 1,
+  "shaderSource": "module/TypeMatrixLocalPhysicsModule.metal"
+}

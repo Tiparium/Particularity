@@ -4,65 +4,14 @@ import simd
 enum DefaultPhysicsModuleRuntime {
     struct SpawnData {
         var activeCount: Int
-        var positions: [SIMD4<Float>]
-        var colors: [SIMD4<Float>]
+        var particles: [ParticleState]
     }
-
-    static let computeShaderSource = """
-    #include <metal_stdlib>
-    using namespace metal;
-
-    struct PhysicsStepParams {
-        float4 movementDirection;
-        uint particleCount;
-        float deltaTime;
-    };
-
-    static float wrap_axis(float value) {
-        float wrapped = value;
-        while (wrapped > 1.0) {
-            wrapped -= 2.0;
-        }
-        while (wrapped < -1.0) {
-            wrapped += 2.0;
-        }
-        return wrapped;
-    }
-
-    kernel void physics_step(
-        device float4 *positions [[buffer(0)]],
-        constant PhysicsStepParams& params [[buffer(1)]],
-        uint id [[thread_position_in_grid]]
-    ) {
-        if (id >= params.particleCount) {
-            return;
-        }
-
-        float3 direction = params.movementDirection.xyz;
-        float lengthSquared = dot(direction, direction);
-        if (lengthSquared > 0.0000001) {
-            direction = normalize(direction);
-        } else {
-            direction = float3(0.0);
-        }
-
-        float3 next = positions[id].xyz + direction * params.deltaTime;
-        positions[id] = float4(
-            wrap_axis(next.x),
-            wrap_axis(next.y),
-            wrap_axis(next.z),
-            1.0
-        );
-    }
-    """
 
     static func rebuildParticles(from state: SimulationViewportState) -> SpawnData {
         let count = max(1, state.particleCount)
         let typeCount = max(1, state.particleTypes)
-        var positions: [SIMD4<Float>] = []
-        var colors: [SIMD4<Float>] = []
-        positions.reserveCapacity(count)
-        colors.reserveCapacity(count)
+        var particles: [ParticleState] = []
+        particles.reserveCapacity(count)
 
         if state.randomDistribution {
             var generator = SeededGenerator(seed: UInt64(count * 37 + typeCount * 101))
@@ -72,12 +21,12 @@ enum DefaultPhysicsModuleRuntime {
                     Float.random(in: -0.98...0.98, using: &generator),
                     Float.random(in: -0.98...0.98, using: &generator)
                 )
-                positions.append(SIMD4<Float>(position.x, position.y, position.z, 1.0))
-                colors.append(
-                    DefaultVisualModuleRuntime.colorForType(
-                        typeIndex: index % typeCount,
-                        typeCount: typeCount,
-                        spectrumOffset: state.spectrumOffset
+                particles.append(
+                    ParticleState(
+                        position: position,
+                        type: UInt32(index % typeCount),
+                        particleID: UInt32(index),
+                        active: 1
                     )
                 )
             }
@@ -98,18 +47,18 @@ enum DefaultPhysicsModuleRuntime {
                     -0.98 + Float(y) * step,
                     -0.98 + Float(z) * step
                 )
-                positions.append(SIMD4<Float>(position.x, position.y, position.z, 1.0))
-                colors.append(
-                    DefaultVisualModuleRuntime.colorForType(
-                        typeIndex: emitted % typeCount,
-                        typeCount: typeCount,
-                        spectrumOffset: state.spectrumOffset
+                particles.append(
+                    ParticleState(
+                        position: position,
+                        type: UInt32(emitted % typeCount),
+                        particleID: UInt32(emitted),
+                        active: 1
                     )
                 )
             }
         }
 
-        return SpawnData(activeCount: count, positions: positions, colors: colors)
+        return SpawnData(activeCount: count, particles: particles)
     }
 }
 

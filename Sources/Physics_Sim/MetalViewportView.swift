@@ -6,9 +6,7 @@ import simd
 private final class InputMTKView: MTKView {
     weak var inputDelegate: InputMTKViewDelegate?
     private var lastMousePoint: NSPoint = .zero
-    private var isDraggingOrbit = false
-    private var clickThenDragOrbitActive = false
-    private var orbitDisarmWorkItem: DispatchWorkItem?
+    private var orbitInteractionState = DragInteractionState(clickThenDragEndBehavior: .explicitOrIndirectTouchLift)
     private var trackingAreaRef: NSTrackingArea?
     private let minimumOrbitMotion: Float = 0.35
 
@@ -21,8 +19,10 @@ private final class InputMTKView: MTKView {
             enableSetNeedsDisplay = false
             window.makeFirstResponder(self)
             window.acceptsMouseMovedEvents = true
+            allowedTouchTypes = [.indirect]
         } else {
             isPaused = true
+            disarmOrbit()
         }
     }
 
@@ -44,20 +44,18 @@ private final class InputMTKView: MTKView {
 
         switch ProgramSettingsStore.orbitInputMode {
         case .clickAndDrag:
-            isDraggingOrbit = true
+            _ = orbitInteractionState.beginInteraction(for: ProgramSettingsStore.DragInputMode.clickAndDrag)
         case .clickThenDrag:
-            clickThenDragOrbitActive = true
-            armOrbitDisarmTimer()
+            _ = orbitInteractionState.beginInteraction(for: ProgramSettingsStore.DragInputMode.clickThenDrag)
         }
     }
 
     override func mouseUp(with event: NSEvent) {
         switch ProgramSettingsStore.orbitInputMode {
         case .clickAndDrag:
-            isDraggingOrbit = false
+            orbitInteractionState.endPrimaryInteraction(for: ProgramSettingsStore.DragInputMode.clickAndDrag)
         case .clickThenDrag:
-            // Keep orbit active after click release; disable when touchpad motion ends.
-            armOrbitDisarmTimer()
+            break
         }
     }
 
@@ -69,18 +67,37 @@ private final class InputMTKView: MTKView {
         lastMousePoint = p
         guard abs(dx) >= minimumOrbitMotion || abs(dy) >= minimumOrbitMotion else { return }
         inputDelegate?.didDrag(deltaX: dx, deltaY: dy)
-        armOrbitDisarmTimer()
     }
 
     override func mouseMoved(with event: NSEvent) {
-        guard ProgramSettingsStore.orbitInputMode == .clickThenDrag, clickThenDragOrbitActive else { return }
+        guard ProgramSettingsStore.orbitInputMode == .clickThenDrag,
+              orbitInteractionState.isActive(for: ProgramSettingsStore.DragInputMode.clickThenDrag) else { return }
         let p = convert(event.locationInWindow, from: nil)
         let dx = Float(p.x - lastMousePoint.x)
         let dy = Float(p.y - lastMousePoint.y)
         lastMousePoint = p
         guard abs(dx) >= minimumOrbitMotion || abs(dy) >= minimumOrbitMotion else { return }
         inputDelegate?.didDrag(deltaX: dx, deltaY: dy)
-        armOrbitDisarmTimer()
+    }
+
+    override func touchesEnded(with event: NSEvent) {
+        super.touchesEnded(with: event)
+        unregisterIndirectTouches(matching: .ended, from: event)
+    }
+
+    override func touchesCancelled(with event: NSEvent) {
+        super.touchesCancelled(with: event)
+        unregisterIndirectTouches(matching: .cancelled, from: event)
+    }
+
+    override func touchesBegan(with event: NSEvent) {
+        super.touchesBegan(with: event)
+        registerIndirectTouches(from: event)
+    }
+
+    override func touchesMoved(with event: NSEvent) {
+        super.touchesMoved(with: event)
+        registerIndirectTouches(from: event)
     }
 
     override func mouseExited(with event: NSEvent) {
@@ -111,30 +128,26 @@ private final class InputMTKView: MTKView {
     }
 
     private var shouldHandleOrbitMotion: Bool {
-        switch ProgramSettingsStore.orbitInputMode {
-        case .clickAndDrag:
-            return isDraggingOrbit
-        case .clickThenDrag:
-            return clickThenDragOrbitActive
-        }
+        orbitInteractionState.isActive(for: ProgramSettingsStore.orbitInputMode)
     }
 
-    private func armOrbitDisarmTimer() {
+    private func registerIndirectTouches(from event: NSEvent) {
         guard ProgramSettingsStore.orbitInputMode == .clickThenDrag else { return }
-        orbitDisarmWorkItem?.cancel()
-        let work = DispatchWorkItem { [weak self] in
-            self?.clickThenDragOrbitActive = false
-        }
-        orbitDisarmWorkItem = work
-        // No direct "finger lifted" callback exists here; inactivity is the practical stop signal.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.22, execute: work)
+        let touchingTouches = event.touches(matching: .touching, in: self).filter { $0.type == .indirect }
+        orbitInteractionState.registerIndirectTouches(touchingTouches.map { ObjectIdentifier($0.identity) })
+    }
+
+    private func unregisterIndirectTouches(matching phase: NSTouch.Phase, from event: NSEvent) {
+        let indirectTouches = event.touches(matching: phase, in: self).filter { $0.type == .indirect }
+        guard ProgramSettingsStore.orbitInputMode == .clickThenDrag else { return }
+        _ = orbitInteractionState.unregisterIndirectTouches(
+            indirectTouches.map { ObjectIdentifier($0.identity) },
+            isPrimaryButtonPressed: (NSEvent.pressedMouseButtons & 1) != 0
+        )
     }
 
     private func disarmOrbit() {
-        isDraggingOrbit = false
-        clickThenDragOrbitActive = false
-        orbitDisarmWorkItem?.cancel()
-        orbitDisarmWorkItem = nil
+        orbitInteractionState.reset()
     }
 }
 
@@ -221,6 +234,7 @@ final class MetalViewportCoordinator: NSObject, InputMTKViewDelegate {
     fileprivate var errorSink: (@MainActor (String?) -> Void)?
     fileprivate let windowLifecycleObserver = WindowLifecycleObserver()
     private var isViewportAttached = false
+    fileprivate var lastAppliedTransportState: SimulationTransportState?
 
     override init() {
         super.init()
@@ -253,6 +267,7 @@ final class MetalViewportCoordinator: NSObject, InputMTKViewDelegate {
     }
 
     func tearDownViewport() {
+        renderer?.commitCameraState()
         if isViewportAttached {
             session?.detachViewport()
             isViewportAttached = false
@@ -270,6 +285,7 @@ final class MetalViewportCoordinator: NSObject, InputMTKViewDelegate {
     }
 
     func windowWillClose() {
+        renderer?.commitCameraState()
         guard isViewportAttached else { return }
         isViewportAttached = false
         session?.detachViewport()
@@ -278,8 +294,11 @@ final class MetalViewportCoordinator: NSObject, InputMTKViewDelegate {
 }
 
 struct MetalViewportView: NSViewRepresentable {
+    let session: SimulationSession
+    let viewportStateStore: MainWindowViewportStateStore
+    let transportState: SimulationTransportState
     let metricsEnabled: Bool
-    @ObservedObject var diagnosticsStore: MainWindowDiagnosticsStore
+    let diagnosticsStore: MainWindowDiagnosticsStore
 
     func makeCoordinator() -> MetalViewportCoordinator {
         MetalViewportCoordinator()
@@ -290,18 +309,6 @@ struct MetalViewportView: NSViewRepresentable {
         container.wantsLayer = true
         container.layer?.backgroundColor = NSColor(white: 0.08, alpha: 1).cgColor
 
-        let session: SimulationSession
-        let viewportStateStore: MainWindowViewportStateStore
-        do {
-            session = try WindowSimulationSessionStore.shared.mainWindowSession(metricsSink: { [weak diagnosticsStore] metrics in
-                diagnosticsStore?.updatePerformanceMetrics(metrics)
-            })
-            viewportStateStore = WindowSimulationSessionStore.shared.mainWindowViewportStateStore()
-        } catch {
-            diagnosticsStore.updateViewportRuntimeError(error.localizedDescription)
-            return container
-        }
-
         let metalView = InputMTKView(frame: .zero, device: session.device)
         metalView.translatesAutoresizingMaskIntoConstraints = false
         metalView.colorPixelFormat = .bgra8Unorm
@@ -311,7 +318,7 @@ struct MetalViewportView: NSViewRepresentable {
         metalView.isPaused = false
         metalView.preferredFramesPerSecond = 60
 
-        context.coordinator.axisModel.cameraState = viewportStateStore.viewportState.camera
+        context.coordinator.axisModel.cameraState = session.viewportState.camera
         let axisHostView = NSHostingView(rootView: ViewportAxisIndicator(model: context.coordinator.axisModel))
         axisHostView.translatesAutoresizingMaskIntoConstraints = false
         axisHostView.setFrameSize(NSSize(width: 72, height: 72))
@@ -373,6 +380,12 @@ struct MetalViewportView: NSViewRepresentable {
                 metalView.isPaused = false
                 metalView.enableSetNeedsDisplay = false
             }
+        }
+        if context.coordinator.lastAppliedTransportState != transportState {
+            if transportState == .paused || transportState == .stopped {
+                context.coordinator.renderer?.commitCameraState()
+            }
+            context.coordinator.lastAppliedTransportState = transportState
         }
         context.coordinator.renderer?.setMetricsEnabled(metricsEnabled)
     }

@@ -12,6 +12,9 @@ let package = Package(
         .executableTarget(
             name: "Particularity",
             path: "Sources/Physics_Sim",
+            resources: [
+                .process("Shaders"),
+            ],
             linkerSettings: [
                 .linkedFramework("SwiftUI"),
                 .linkedFramework("AppKit"),

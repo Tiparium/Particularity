@@ -35,19 +35,40 @@ final class MainWindowModuleCatalogStore: ObservableObject {
                 options: [.skipsHiddenFiles]
             ) else { continue }
 
-            for url in items where !url.hasDirectoryPath {
-                scanned.append(
-                    ModuleFile(
-                        id: "\(kind.rawValue)|\(url.path)",
-                        kind: kind,
-                        url: url,
-                        descriptor: parseDescriptor(at: url)
+            for url in items {
+                if url.hasDirectoryPath {
+                    guard let manifestURL = manifestURL(in: url) else { continue }
+                    scanned.append(
+                        ModuleFile(
+                            id: "\(kind.rawValue)|\(manifestURL.path)",
+                            kind: kind,
+                            url: manifestURL,
+                            descriptor: parseDescriptor(at: manifestURL)
+                        )
                     )
-                )
+                } else {
+                    scanned.append(
+                        ModuleFile(
+                            id: "\(kind.rawValue)|\(url.path)",
+                            kind: kind,
+                            url: url,
+                            descriptor: parseDescriptor(at: url)
+                        )
+                    )
+                }
             }
         }
 
         availableFiles = scanned.sorted { $0.url.lastPathComponent < $1.url.lastPathComponent }
+    }
+
+    private func manifestURL(in directoryURL: URL) -> URL? {
+        let fm = FileManager.default
+        return try? fm.contentsOfDirectory(
+            at: directoryURL,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ).first(where: { !$0.hasDirectoryPath && $0.pathExtension == "json" && $0.lastPathComponent.hasSuffix(".module.json") })
     }
 
     private func parseDescriptor(at url: URL) -> ModuleDescriptor? {

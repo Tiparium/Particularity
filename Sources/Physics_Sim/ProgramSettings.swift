@@ -7,7 +7,6 @@ enum ProgramSettingID: String, CaseIterable, Identifiable {
     case targetUPS
     case shortcutProfile
     case showInteractionDebugOverlays
-    case memoryBudgetPreset
     case performanceReviewLogging
 
     var id: String { rawValue }
@@ -53,11 +52,6 @@ enum ProgramSettingsCatalog {
             description: "Toggle visualization overlays for optimization behavior."
         ),
         ProgramSettingCandidate(
-            id: .memoryBudgetPreset,
-            title: "Memory Budget Preset",
-            description: "Select M1/M1 Pro style memory budget defaults."
-        ),
-        ProgramSettingCandidate(
             id: .performanceReviewLogging,
             title: "Performance Review Logging",
             description: "Record sparse long-term performance samples with adaptive bursts after changes."
@@ -87,7 +81,6 @@ enum ProgramSettingsStore {
         static let invertScrollZoom = "settings.viewport.invertScrollZoom"
         static let orbitInputMode = "settings.viewport.orbitInputMode"
         static let uiPanelDragInputMode = "settings.ui.panelDragInputMode"
-        static let memoryBudgetPreset = "settings.sim.memoryBudgetPreset"
         static let performanceReviewLogging = "settings.debug.performanceReviewLogging"
     }
 
@@ -126,18 +119,6 @@ enum ProgramSettingsStore {
             return mode
         }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: Key.uiPanelDragInputMode) }
-    }
-
-    static var memoryBudgetPreset: MemoryBudgetPreset {
-        get {
-            let defaults = UserDefaults.standard
-            guard let raw = defaults.string(forKey: Key.memoryBudgetPreset),
-                  let preset = MemoryBudgetPreset(rawValue: raw) else {
-                return .m1Pro
-            }
-            return preset
-        }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: Key.memoryBudgetPreset) }
     }
 
     static var performanceReviewLoggingEnabled: Bool {

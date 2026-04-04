@@ -44,8 +44,8 @@ final class Renderer: NSObject, MTKViewDelegate {
     private let particleReadOnlyDepthState: MTLDepthStencilState
     private let cameraStateSink: @MainActor (ViewportCameraState) -> Void
     private let debugLineFadeController = DebugLineFadeController(
-        fadeInDuration: 0.018,
-        fadeOutDuration: 0.055
+        fadeInDuration: 0.045,
+        fadeOutDuration: 0.12
     )
     private var lastPublishedCameraState = ViewportCameraState()
 
@@ -56,6 +56,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     private var frameRateTracker = RendererFrameRateTracker(windowSeconds: 3.0)
     private var activeKeys: Set<String> = []
     private let keyboardAngularSpeed: Float = 1.2
+    private let liveCameraState = CameraState()
 
     init(
         mtkView: MTKView,
@@ -121,17 +122,6 @@ final class Renderer: NSObject, MTKViewDelegate {
         particleDescriptor.colorAttachments[0].destinationRGBBlendFactor = .oneMinusSourceAlpha
         particleDescriptor.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
 
-        let particleVertexDescriptor = MTLVertexDescriptor()
-        particleVertexDescriptor.attributes[0].format = .float4
-        particleVertexDescriptor.attributes[0].offset = 0
-        particleVertexDescriptor.attributes[0].bufferIndex = 0
-        particleVertexDescriptor.attributes[1].format = .float4
-        particleVertexDescriptor.attributes[1].offset = 0
-        particleVertexDescriptor.attributes[1].bufferIndex = 1
-        particleVertexDescriptor.layouts[0].stride = MemoryLayout<SIMD4<Float>>.stride
-        particleVertexDescriptor.layouts[1].stride = MemoryLayout<SIMD4<Float>>.stride
-        particleDescriptor.vertexDescriptor = particleVertexDescriptor
-
         let depthDescriptor = MTLDepthStencilDescriptor()
         depthDescriptor.depthCompareFunction = .less
         depthDescriptor.isDepthWriteEnabled = true
@@ -161,6 +151,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         lineIndexCount = geometry.indexCount
         super.init()
         lastPublishedCameraState = viewportStateStore.viewportState.camera
+        liveCameraState.viewportCameraState = viewportStateStore.viewportState.camera
         publishCameraState()
     }
 
@@ -175,29 +166,33 @@ final class Renderer: NSObject, MTKViewDelegate {
     func orbitByDrag(deltaX: Float, deltaY: Float) {
         let camera = currentCameraState()
         camera.orbit(yawDelta: deltaX * 0.01, pitchDelta: deltaY * 0.01)
-        persistCameraState(camera)
+        liveCameraState.viewportCameraState = camera.viewportCameraState
         publishCameraState()
     }
 
     func dollyByScroll(deltaY: Float) {
         let camera = currentCameraState()
         camera.dolly(delta: deltaY * 0.0035)
-        persistCameraState(camera)
+        liveCameraState.viewportCameraState = camera.viewportCameraState
         publishCameraState()
     }
 
     func dollyByMagnification(_ magnification: Float) {
         let camera = currentCameraState()
         camera.dolly(delta: -magnification * 0.6)
-        persistCameraState(camera)
+        liveCameraState.viewportCameraState = camera.viewportCameraState
         publishCameraState()
     }
 
     func resetCamera() {
         let camera = currentCameraState()
         camera.reset()
-        persistCameraState(camera)
+        commitCameraState()
         publishCameraState()
+    }
+
+    func commitCameraState() {
+        viewportStateStore.updateCameraState(liveCameraState.viewportCameraState)
     }
 
     func updateSimulationState(_ nextState: SimulationViewportState) {
@@ -258,20 +253,20 @@ final class Renderer: NSObject, MTKViewDelegate {
         )
 
         if renderState.activeParticleCount > 0,
-           let particlePositionBuffer = renderState.particlePositionBuffer,
-           let particleColorBuffer = renderState.particleColorBuffer {
+           let particleBuffer = renderState.particleBuffer {
             var particleUniforms = ParticleUniforms(
                 mvp: mvp,
                 sphereSize: simulationState.sphereSize,
                 viewportHeight: Float(max(size.height, 1)),
                 projectionYScale: projectionYScale,
+                spectrumOffset: simulationState.spectrumOffset,
+                particleTypeCount: UInt32(max(1, simulationState.particleTypes)),
                 showOptimizationInfo: simulationState.showOptimizationInfo ? 1 : 0
             )
             encoder.setRenderPipelineState(particlePipeline)
             encoder.setDepthStencilState(simulationState.showOptimizationInfo ? particleReadOnlyDepthState : depthState)
-            encoder.setVertexBuffer(particlePositionBuffer, offset: 0, index: 0)
-            encoder.setVertexBuffer(particleColorBuffer, offset: 0, index: 1)
-            encoder.setVertexBytes(&particleUniforms, length: MemoryLayout<ParticleUniforms>.stride, index: 2)
+            encoder.setVertexBuffer(particleBuffer, offset: 0, index: 0)
+            encoder.setVertexBytes(&particleUniforms, length: MemoryLayout<ParticleUniforms>.stride, index: 1)
             encoder.drawPrimitives(type: .point, vertexStart: 0, vertexCount: renderState.activeParticleCount)
         }
 
@@ -310,25 +305,20 @@ final class Renderer: NSObject, MTKViewDelegate {
         if yawDelta != 0 || pitchDelta != 0 {
             let camera = currentCameraState()
             camera.orbit(yawDelta: yawDelta, pitchDelta: pitchDelta)
-            persistCameraState(camera)
+            liveCameraState.viewportCameraState = camera.viewportCameraState
             publishCameraState()
         }
     }
 
     private func publishCameraState() {
-        let cameraState = viewportStateStore.viewportState.camera
+        let cameraState = currentCameraState().viewportCameraState
         guard cameraState.isMeaningfullyDifferent(from: lastPublishedCameraState) else { return }
         lastPublishedCameraState = cameraState
         cameraStateSink(cameraState)
     }
 
     private func currentCameraState() -> CameraState {
-        let camera = CameraState()
-        camera.viewportCameraState = viewportStateStore.viewportState.camera
-        return camera
+        return liveCameraState
     }
 
-    private func persistCameraState(_ camera: CameraState) {
-        viewportStateStore.updateCameraState(camera.viewportCameraState)
-    }
 }

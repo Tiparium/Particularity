@@ -12,6 +12,8 @@ struct ParticleUniforms {
     var sphereSize: Float
     var viewportHeight: Float
     var projectionYScale: Float
+    var spectrumOffset: Float
+    var particleTypeCount: UInt32
     var showOptimizationInfo: UInt32
     var padding: UInt32 = 0
 }

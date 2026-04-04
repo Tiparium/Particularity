@@ -44,7 +44,7 @@ private struct InteractionSnapshotDump: Encodable {
 
 enum InteractionSnapshotFormat {
     static func physics(_ state: PhysicsModuleState) -> String {
-        "count=\(state.particleCount) random=\(state.randomDistribution) types=\(state.particleTypes) direction=(\(format(state.movementDirection.x)),\(format(state.movementDirection.y)),\(format(state.movementDirection.z))) timeScale=\(format(state.timeScale))"
+        "count=\(state.particleCount) random=\(state.randomDistribution) types=\(state.particleTypes) intercommunicate=\(state.allParticlesIntercommunicate) direction=(\(format(state.movementDirection.x)),\(format(state.movementDirection.y)),\(format(state.movementDirection.z))) timeScale=\(format(state.timeScale))"
     }
 
     static func visual(_ state: VisualModuleState) -> String {
@@ -60,11 +60,11 @@ enum InteractionSnapshotFormat {
     }
 
     static func viewport(_ state: SimulationViewportState) -> String {
-        "transport=\(state.transportState.rawValue) count=\(state.particleCount) random=\(state.randomDistribution) types=\(state.particleTypes) direction=(\(format(Double(state.movementDirection.x))),\(format(Double(state.movementDirection.y))),\(format(Double(state.movementDirection.z)))) timeScale=\(format(Double(state.timeScale))) sphereSize=\(format(Double(state.sphereSize))) spectrumOffset=\(format(Double(state.spectrumOffset))) showOptimizationInfo=\(state.showOptimizationInfo) blockingMode=\(state.optimizationBlockingMode.rawValue)"
+        "transport=\(state.transportState.rawValue) count=\(state.particleCount) random=\(state.randomDistribution) types=\(state.particleTypes) intercommunicate=\(state.allParticlesIntercommunicate) direction=(\(format(Double(state.movementDirection.x))),\(format(Double(state.movementDirection.y))),\(format(Double(state.movementDirection.z)))) timeScale=\(format(Double(state.timeScale))) sphereSize=\(format(Double(state.sphereSize))) spectrumOffset=\(format(Double(state.spectrumOffset))) showOptimizationInfo=\(state.showOptimizationInfo) showLeaderCommunicationLog=\(state.showLeaderCommunicationLog) blockingMode=\(state.optimizationBlockingMode.rawValue)"
     }
 
     static func renderState(_ state: SimulationRuntime.RenderState) -> String {
-        "activeParticleCount=\(state.activeParticleCount) particleCapacity=\(state.particleCapacity) hasPositionBuffer=\(state.particlePositionBuffer != nil) hasColorBuffer=\(state.particleColorBuffer != nil) hasDebugLineBuffer=\(state.debugLineBuffer != nil) debugRenderSegments=\(state.debugRenderSegments.count)"
+        "activeParticleCount=\(state.activeParticleCount) particleCapacity=\(state.particleCapacity) hasParticleBuffer=\(state.particleBuffer != nil) hasDebugLineBuffer=\(state.debugLineBuffer != nil) debugRenderSegments=\(state.debugRenderSegments.count)"
     }
 
     static func activeModules(_ modules: ActiveModuleSet) -> String {

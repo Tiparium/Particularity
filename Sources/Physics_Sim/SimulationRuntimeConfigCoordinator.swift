@@ -10,36 +10,37 @@ final class SimulationRuntimeConfigCoordinator: ObservableObject {
 
     private let session: SimulationSession
     private let editorSettingsStore: MainWindowEditorSettingsStore
+    private let physicsModuleSettingsStore: MainWindowPhysicsModuleSettingsStore
     private let moduleCatalogStore: MainWindowModuleCatalogStore
     private var cancellables: Set<AnyCancellable> = []
 
     init(
         session: SimulationSession,
         editorSettingsStore: MainWindowEditorSettingsStore,
-        moduleCatalogStore: MainWindowModuleCatalogStore,
-        memoryBudgetPreset: MemoryBudgetPreset = .m1Pro
+        physicsModuleSettingsStore: MainWindowPhysicsModuleSettingsStore,
+        moduleCatalogStore: MainWindowModuleCatalogStore
     ) {
         self.session = session
         self.editorSettingsStore = editorSettingsStore
+        self.physicsModuleSettingsStore = physicsModuleSettingsStore
         self.moduleCatalogStore = moduleCatalogStore
 
-        let initialSimulationState = Self.makeSimulationState(
+        let initialSimulationState = SimulationConfigurationDerivation.simulationState(
             transportState: .stopped,
             editorState: editorSettingsStore.editorState,
             availableFiles: moduleCatalogStore.availableFiles
         )
-        let initialActiveModules = Self.makeActiveModules(
+        let initialActiveModules = SimulationConfigurationDerivation.activeModules(
             editorState: editorSettingsStore.editorState,
             availableFiles: moduleCatalogStore.availableFiles
         )
         self.transportState = .stopped
         self.simulationState = initialSimulationState
         self.activeModules = initialActiveModules
-        self.validationReport = Self.makeValidationReport(
+        self.validationReport = SimulationConfigurationDerivation.validationReport(
             editorState: editorSettingsStore.editorState,
-            simulationState: initialSimulationState,
-            activeModules: initialActiveModules,
-            memoryBudgetPreset: memoryBudgetPreset
+            transportState: .stopped,
+            availableFiles: moduleCatalogStore.availableFiles
         )
 
         editorSettingsStore.$editorState
@@ -54,6 +55,7 @@ final class SimulationRuntimeConfigCoordinator: ObservableObject {
         moduleCatalogStore.$availableFiles
             .sink { [weak self] availableFiles in
                 guard let self else { return }
+                self.editorSettingsStore.normalizeAssignedModulePaths(availableFiles: availableFiles)
                 self.recomputeAndApply(
                     editorState: self.editorSettingsStore.editorState,
                     availableFiles: availableFiles
@@ -61,10 +63,19 @@ final class SimulationRuntimeConfigCoordinator: ObservableObject {
             }
             .store(in: &cancellables)
 
+        physicsModuleSettingsStore.$snapshot
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.session.updateTypeMatrixLocalSettings(self.physicsModuleSettingsStore.typeMatrixLocalSettings())
+            }
+            .store(in: &cancellables)
+
+        editorSettingsStore.normalizeAssignedModulePaths(availableFiles: moduleCatalogStore.availableFiles)
         recomputeAndApply(
             editorState: editorSettingsStore.editorState,
             availableFiles: moduleCatalogStore.availableFiles
         )
+        session.updateTypeMatrixLocalSettings(physicsModuleSettingsStore.typeMatrixLocalSettings())
     }
 
     func refreshModules() {
@@ -129,20 +140,19 @@ final class SimulationRuntimeConfigCoordinator: ObservableObject {
         editorState: SimulationEditorState,
         availableFiles: [ModuleFile]
     ) {
-        let nextSimulationState = Self.makeSimulationState(
+        let nextSimulationState = SimulationConfigurationDerivation.simulationState(
             transportState: transportState,
             editorState: editorState,
             availableFiles: availableFiles
         )
-        let nextActiveModules = Self.makeActiveModules(
+        let nextActiveModules = SimulationConfigurationDerivation.activeModules(
             editorState: editorState,
             availableFiles: availableFiles
         )
-        let nextValidationReport = Self.makeValidationReport(
+        let nextValidationReport = SimulationConfigurationDerivation.validationReport(
             editorState: editorState,
-            simulationState: nextSimulationState,
-            activeModules: nextActiveModules,
-            memoryBudgetPreset: currentMemoryBudgetPreset
+            transportState: transportState,
+            availableFiles: availableFiles
         )
 
         simulationState = nextSimulationState
@@ -173,111 +183,5 @@ final class SimulationRuntimeConfigCoordinator: ObservableObject {
         } catch {
             // Leave validation/reporting to the published state. Avoid turning a bad config into a UI-side crash path.
         }
-    }
-
-    private var currentMemoryBudgetPreset: MemoryBudgetPreset {
-        ProgramSettingsStore.memoryBudgetPreset
-    }
-
-    private static func makeSimulationState(
-        transportState: SimulationTransportState,
-        editorState: SimulationEditorState,
-        availableFiles: [ModuleFile]
-    ) -> SimulationViewportState {
-        SimulationViewportState(
-            transportState: transportState,
-            particleCount: editorState.physicsState.particleCount,
-            randomDistribution: editorState.physicsState.randomDistribution,
-            particleTypes: editorState.physicsState.particleTypes,
-            movementDirection: SIMD3<Float>(
-                Float(editorState.physicsState.movementDirection.x),
-                Float(editorState.physicsState.movementDirection.y),
-                Float(editorState.physicsState.movementDirection.z)
-            ),
-            timeScale: Float(editorState.physicsState.timeScale),
-            sphereSize: Float(editorState.visualState.sphereSize),
-            spectrumOffset: Float(editorState.visualState.spectrumOffset),
-            showOptimizationInfo: makeResolvedVisualSupportsOptimizationDebug(
-                editorState: editorState,
-                availableFiles: availableFiles
-            ) && editorState.visualState.showOptimizationInfo,
-            optimizationBlockingMode: editorState.optimizationState.blockingMode
-        )
-    }
-
-    private static func makeActiveModules(
-        editorState: SimulationEditorState,
-        availableFiles: [ModuleFile]
-    ) -> ActiveModuleSet {
-        ActiveModuleSet(
-            physics: resolveModule(for: .physics, editorState: editorState, availableFiles: availableFiles),
-            visual: resolveModule(for: .visual, editorState: editorState, availableFiles: availableFiles),
-            optimization: resolveModule(for: .optimization, editorState: editorState, availableFiles: availableFiles)
-        )
-    }
-
-    private static func makeValidationReport(
-        editorState: SimulationEditorState,
-        simulationState: SimulationViewportState,
-        activeModules: ActiveModuleSet,
-        memoryBudgetPreset: MemoryBudgetPreset
-    ) -> RuntimeValidationReport {
-        let projectedBytes = projectedMemoryBytes(editorState: editorState)
-
-        if let issue = ModuleCompatibility.incompatibilityReason(for: activeModules, state: simulationState) {
-            return RuntimeValidationReport(issue: issue, projectedBytes: projectedBytes)
-        }
-
-        if editorState.optimizationState.showLeaderCommunicationLog,
-           activeModules.optimization.name != ModuleCatalog.defaultOptimization.name {
-            return RuntimeValidationReport(
-                issue: "Leader communication log is only available with \(ModuleCatalog.defaultOptimization.name).",
-                projectedBytes: projectedBytes
-            )
-        }
-
-        if projectedBytes > memoryBudgetPreset.budgetBytes {
-            return RuntimeValidationReport(
-                issue: "Projected simulation memory exceeds the \(memoryBudgetPreset.title) budget.",
-                projectedBytes: projectedBytes
-            )
-        }
-
-        return RuntimeValidationReport(issue: nil, projectedBytes: projectedBytes)
-    }
-
-    private static func projectedMemoryBytes(editorState: SimulationEditorState) -> UInt64 {
-        let particleCount = max(1, editorState.physicsState.particleCount)
-        let baseParticleStride = 40
-        let visualStride = 16
-        let optimizationStride = 16
-        let typeBudget = 32 * 32
-        let debugBudget = editorState.optimizationState.showLeaderCommunicationLog ? 8 * 1024 * 1024 : 0
-        let reserved = particleCount * (baseParticleStride + visualStride + optimizationStride) + typeBudget + debugBudget
-        return UInt64(reserved)
-    }
-
-    private static func makeResolvedVisualSupportsOptimizationDebug(
-        editorState: SimulationEditorState,
-        availableFiles: [ModuleFile]
-    ) -> Bool {
-        resolveModule(for: .visual, editorState: editorState, availableFiles: availableFiles).acceptsOptimizationDebugInfo
-            && resolveModule(for: .optimization, editorState: editorState, availableFiles: availableFiles).name == ModuleCatalog.defaultOptimization.name
-    }
-
-    private static func resolveModule(
-        for kind: ModuleKind,
-        editorState: SimulationEditorState,
-        availableFiles: [ModuleFile]
-    ) -> ModuleDescriptor {
-        guard let path = editorState.assignedModulePaths[kind.rawValue] else {
-            return ModuleCatalog.fallback(for: kind.rawValue)
-        }
-        let assignedURL = URL(fileURLWithPath: path)
-        guard let file = availableFiles.first(where: { $0.url == assignedURL }),
-              let descriptor = file.descriptor else {
-            return ModuleCatalog.fallback(for: kind.rawValue)
-        }
-        return descriptor
     }
 }

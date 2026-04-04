@@ -6,6 +6,7 @@ final class MainWindowDiagnosticsStore: ObservableObject {
 
     @Published private(set) var performanceMetrics = SimulationPerformanceMetrics()
     @Published private(set) var viewportRuntimeError: String?
+    @Published private(set) var leaderCommunicationLogEntries: [LeaderCommunicationLogEntry] = []
 
     func updatePerformanceMetrics(_ nextMetrics: SimulationPerformanceMetrics) {
         performanceMetrics = nextMetrics
@@ -15,8 +16,13 @@ final class MainWindowDiagnosticsStore: ObservableObject {
         viewportRuntimeError = nextError
     }
 
+    func updateLeaderCommunicationLogEntries(_ nextEntries: [LeaderCommunicationLogEntry]) {
+        leaderCommunicationLogEntries = nextEntries
+    }
+
     func resetViewportDiagnostics() {
         performanceMetrics = SimulationPerformanceMetrics()
         viewportRuntimeError = nil
+        leaderCommunicationLogEntries = []
     }
 }

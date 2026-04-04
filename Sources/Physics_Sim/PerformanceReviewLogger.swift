@@ -23,6 +23,7 @@ private struct PerformanceReviewSettingsPayload: Equatable {
     let particleCount: Int
     let randomDistribution: Bool
     let particleTypes: Int
+    let allParticlesIntercommunicate: Bool
     let movementDirectionX: Double
     let movementDirectionY: Double
     let movementDirectionZ: Double
@@ -101,6 +102,7 @@ private extension PerformanceReviewSettingsPayload {
         "particles=\(particleCount) " +
         "random=\(randomDistribution) " +
         "types=\(particleTypes) " +
+        "intercommunicate=\(allParticlesIntercommunicate) " +
         "direction=(\(Self.format(movementDirectionX)),\(Self.format(movementDirectionY)),\(Self.format(movementDirectionZ))) " +
         "timeScale=\(Self.format(timeScale)) " +
         "sphereSize=\(Self.format(sphereSize)) " +
@@ -138,6 +140,7 @@ struct PerformanceReviewSample: Codable {
     let particleCount: Int
     let randomDistribution: Bool
     let particleTypes: Int
+    let allParticlesIntercommunicate: Bool
     let movementDirectionX: Double
     let movementDirectionY: Double
     let movementDirectionZ: Double
@@ -159,6 +162,7 @@ struct PerformanceReviewSample: Codable {
             particleCount: particleCount,
             randomDistribution: randomDistribution,
             particleTypes: particleTypes,
+            allParticlesIntercommunicate: allParticlesIntercommunicate,
             movementDirectionX: movementDirectionX,
             movementDirectionY: movementDirectionY,
             movementDirectionZ: movementDirectionZ,
@@ -226,6 +230,7 @@ final class PerformanceReviewLogger: ObservableObject {
     private var persistedBytesEstimate: Int = 0
     private var lastSettingsByFileName: [String: PerformanceReviewSettingsPayload] = [:]
     private var headersByFileName: [String: PerformanceReviewFileHeader] = [:]
+    private var startedFiles: Set<String> = []
     private var lastObservedSettings: PerformanceReviewSettingsPayload?
     private var settingsChurnDeadline: Date?
     private var lastSettingsChurnSampleAt: Date?
@@ -270,7 +275,7 @@ final class PerformanceReviewLogger: ObservableObject {
                 .removeDuplicates()
                 .sink { [weak self] _ in
                     guard let self else { return }
-                    self.registerSettingsChangeIfNeeded(trigger: "simulation_state_changed")
+                    self.registerSettingsChangeIfNeeded()
                 }
                 .store(in: &cancellables)
 
@@ -278,7 +283,7 @@ final class PerformanceReviewLogger: ObservableObject {
                 .dropFirst()
                 .removeDuplicates()
                 .sink { [weak self] _ in
-                    self?.registerSettingsChangeIfNeeded(trigger: "module_combo_changed")
+                    self?.registerSettingsChangeIfNeeded()
                 }
                 .store(in: &cancellables)
         }
@@ -318,11 +323,11 @@ final class PerformanceReviewLogger: ObservableObject {
             for (fileName, bufferedEntries) in bufferedEntriesByFileName {
                 let fileURL = directory.appendingPathComponent(fileName, isDirectory: false)
                 let existingBody = existingLogBody(at: fileURL)
-                let appendedBody = bufferedEntries.reduce(into: existingBody) { partial, entry in
+                let prependedBody = bufferedEntries.reduce(into: "") { partial, entry in
                     partial += String(decoding: entry.encodedLine, as: UTF8.self)
                 }
                 let header = headerText(for: fileName, fallbackTimestamp: bufferedEntries.first?.timestamp ?? formatter.string(from: Date()))
-                let combinedData = Data((header + appendedBody).utf8)
+                let combinedData = Data((header + prependedBody + existingBody).utf8)
                 try combinedData.write(to: fileURL, options: Data.WritingOptions.atomic)
             }
 
@@ -337,6 +342,7 @@ final class PerformanceReviewLogger: ObservableObject {
         currentComboFileName = nil
         lastSettingsByFileName.removeAll(keepingCapacity: false)
         headersByFileName.removeAll(keepingCapacity: false)
+        startedFiles.removeAll(keepingCapacity: false)
         refreshPersistedBudgetUsage()
         updateBudgetOccupancy()
     }
@@ -394,7 +400,7 @@ final class PerformanceReviewLogger: ObservableObject {
         pendingSamples.sort { $0.deadline < $1.deadline }
     }
 
-    private func registerSettingsChangeIfNeeded(trigger: String) {
+    private func registerSettingsChangeIfNeeded() {
         guard isEnabled else { return }
         guard let snapshotProvider, let sample = snapshotProvider() else { return }
 
@@ -487,6 +493,9 @@ final class PerformanceReviewLogger: ObservableObject {
             metrics: sample.metricsPayload
         )
         appendLogEntry(sampleEntry, fileName: sample.comboFileName)
+        if entryType == "start" {
+            startedFiles.insert(sample.comboFileName)
+        }
     }
 
     private func trimBufferedEntriesIfNeeded() {
@@ -532,7 +541,7 @@ final class PerformanceReviewLogger: ObservableObject {
         if trigger.hasPrefix("transport_paused") || trigger.hasPrefix("transport_stopped") {
             return "stop"
         }
-        if trigger.hasPrefix("transport_running") || headersByFileName[fileName] != nil && lastSettingsByFileName[fileName] == nil {
+        if trigger.hasPrefix("transport_running") || !startedFiles.contains(fileName) {
             return "start"
         }
         return "sample"
