@@ -18,6 +18,27 @@ struct SceneState: Codable, Equatable, Sendable {
 
 struct ViewportState: Codable, Equatable, Sendable {
     var camera: ViewportCameraState = ViewportCameraState()
+    var slowRotationEnabled = false
+
+    private enum CodingKeys: String, CodingKey {
+        case camera
+    }
+
+    init(camera: ViewportCameraState = ViewportCameraState(), slowRotationEnabled: Bool = false) {
+        self.camera = camera
+        self.slowRotationEnabled = slowRotationEnabled
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        camera = try container.decodeIfPresent(ViewportCameraState.self, forKey: .camera) ?? ViewportCameraState()
+        slowRotationEnabled = false
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(camera, forKey: .camera)
+    }
 }
 
 extension ViewportCameraState {
@@ -74,6 +95,14 @@ final class MainWindowViewportStateStore: ObservableObject {
 
     func updateCameraState(_ nextState: ViewportCameraState) {
         applyCameraState(nextState)
+    }
+
+    func setSlowRotationEnabled(_ isEnabled: Bool) {
+        guard viewportState.slowRotationEnabled != isEnabled else { return }
+        var nextViewportState = viewportState
+        nextViewportState.slowRotationEnabled = isEnabled
+        viewportState = nextViewportState
+        schedulePersistence()
     }
 
     func updateSceneState(_ nextState: SceneState) {

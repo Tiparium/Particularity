@@ -88,6 +88,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        MainWindowChromeStateStore.shared.flushPersistence()
         MainWindowViewportStateStore.shared.flushPersistence()
         PerformanceReviewLogger.shared.flushBufferedSamples()
     }
@@ -114,6 +115,7 @@ struct PhysicsSimApp: App {
                     LaunchFailureView(message: error.localizedDescription)
                 }
             }
+            .tint(AppControlPalette.accent)
             .frame(minWidth: 900, minHeight: 620)
             .task {
                 guard contentDependencies == nil else { return }
@@ -292,7 +294,7 @@ private struct LaunchProgressView: View {
 
     private func iconColor(for candidate: LaunchProgressStage) -> Color {
         if candidate == stage {
-            return .accentColor
+            return AppControlPalette.accent
         }
         if isComplete(candidate) {
             return Color.green.opacity(0.9)

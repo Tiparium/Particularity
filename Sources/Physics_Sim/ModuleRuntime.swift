@@ -25,31 +25,30 @@ struct PhysicsModuleState {
     var timeScale: Double = 1.0
 }
 
+enum TimeScaleControlMapping {
+    static let sliderRange: ClosedRange<Double> = 0...2
+    static let textEntryRange: ClosedRange<Double> = 0...16
+    static let sliderStep: Double = 0.01
+
+    private static let runtimeScalePerControlUnit: Double = 0.25
+
+    static func controlValue(forRuntimeScale runtimeScale: Double) -> Double {
+        max(0, runtimeScale / runtimeScalePerControlUnit)
+    }
+
+    static func runtimeScale(forControlValue controlValue: Double) -> Double {
+        max(0, controlValue * runtimeScalePerControlUnit)
+    }
+}
+
 struct VisualModuleState {
     var sphereSize: Double = 0.008
     var spectrumOffset: Double = 0.0
     var showOptimizationInfo = false
 }
 
-enum OptimizationBlockingMode: String, CaseIterable, Identifiable {
-    case nonBlocking
-    case fullBlocking
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .nonBlocking:
-            return "Non-Blocking"
-        case .fullBlocking:
-            return "Full Blocking"
-        }
-    }
-}
-
 struct OptimizationModuleState {
     var showLeaderCommunicationLog = false
-    var blockingMode: OptimizationBlockingMode = .fullBlocking
 }
 
 struct DebugSettingsState {
@@ -220,7 +219,6 @@ struct SimulationViewportState: Equatable {
     var spectrumOffset: Float
     var showOptimizationInfo: Bool
     var showLeaderCommunicationLog: Bool
-    var optimizationBlockingMode: OptimizationBlockingMode
 }
 
 struct LeaderCommunicationLogEntry: Identifiable, Equatable {
@@ -230,7 +228,6 @@ struct LeaderCommunicationLogEntry: Identifiable, Equatable {
     let interactionCount: Int
     let workItemStart: UInt64
     let workItemCount: UInt64
-    let blockingMode: OptimizationBlockingMode
 
     init(
         id: UUID = UUID(),
@@ -238,8 +235,7 @@ struct LeaderCommunicationLogEntry: Identifiable, Equatable {
         firstTargetIndex: Int,
         interactionCount: Int,
         workItemStart: UInt64,
-        workItemCount: UInt64,
-        blockingMode: OptimizationBlockingMode
+        workItemCount: UInt64
     ) {
         self.id = id
         self.recordedAt = recordedAt
@@ -247,7 +243,6 @@ struct LeaderCommunicationLogEntry: Identifiable, Equatable {
         self.interactionCount = interactionCount
         self.workItemStart = workItemStart
         self.workItemCount = workItemCount
-        self.blockingMode = blockingMode
     }
 }
 

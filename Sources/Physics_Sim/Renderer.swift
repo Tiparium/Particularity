@@ -56,7 +56,11 @@ final class Renderer: NSObject, MTKViewDelegate {
     private var frameRateTracker = RendererFrameRateTracker(windowSeconds: 3.0)
     private var activeKeys: Set<String> = []
     private let keyboardAngularSpeed: Float = 1.2
+    private let slowRotationAngularSpeed: Float = 0.16
+    private let slowRotationResumeDelay: TimeInterval = 3.0
     private let liveCameraState = CameraState()
+    private var lastManualCameraInteractionTime: TimeInterval = -.infinity
+    private var lastSlowRotationEnabled = false
 
     init(
         mtkView: MTKView,
@@ -164,6 +168,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     }
 
     func orbitByDrag(deltaX: Float, deltaY: Float) {
+        registerManualCameraInteraction()
         let camera = currentCameraState()
         camera.orbit(yawDelta: deltaX * 0.01, pitchDelta: deltaY * 0.01)
         liveCameraState.viewportCameraState = camera.viewportCameraState
@@ -171,6 +176,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     }
 
     func dollyByScroll(deltaY: Float) {
+        registerManualCameraInteraction()
         let camera = currentCameraState()
         camera.dolly(delta: deltaY * 0.0035)
         liveCameraState.viewportCameraState = camera.viewportCameraState
@@ -178,6 +184,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     }
 
     func dollyByMagnification(_ magnification: Float) {
+        registerManualCameraInteraction()
         let camera = currentCameraState()
         camera.dolly(delta: -magnification * 0.6)
         liveCameraState.viewportCameraState = camera.viewportCameraState
@@ -185,6 +192,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     }
 
     func resetCamera() {
+        registerManualCameraInteraction()
         let camera = currentCameraState()
         camera.reset()
         commitCameraState()
@@ -206,16 +214,14 @@ final class Renderer: NSObject, MTKViewDelegate {
         try session.updateActiveModules(nextModules)
     }
 
-    func setMetricsEnabled(_ enabled: Bool) {
-        session.setMetricsEnabled(enabled)
-    }
-
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
 
     func draw(in view: MTKView) {
         let now = ProcessInfo.processInfo.systemUptime
         frameRateTracker.recordFrame(at: now)
+        syncSlowRotationState(at: now)
         updateKeyboardOrbit(deltaTime: 1.0 / 60.0)
+        updateSlowRotation(deltaTime: 1.0 / 60.0, now: now)
 
         guard
             let drawable = view.currentDrawable,
@@ -303,6 +309,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         if activeKeys.contains("w") { pitchDelta += keyboardAngularSpeed * deltaTime }
         if activeKeys.contains("s") { pitchDelta -= keyboardAngularSpeed * deltaTime }
         if yawDelta != 0 || pitchDelta != 0 {
+            registerManualCameraInteraction()
             let camera = currentCameraState()
             camera.orbit(yawDelta: yawDelta, pitchDelta: pitchDelta)
             liveCameraState.viewportCameraState = camera.viewportCameraState
@@ -310,11 +317,32 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
     }
 
+    private func syncSlowRotationState(at now: TimeInterval) {
+        let slowRotationEnabled = viewportStateStore.viewportState.slowRotationEnabled
+        if slowRotationEnabled && !lastSlowRotationEnabled {
+            lastManualCameraInteractionTime = now - slowRotationResumeDelay
+        }
+        lastSlowRotationEnabled = slowRotationEnabled
+    }
+
+    private func updateSlowRotation(deltaTime: Float, now: TimeInterval) {
+        guard viewportStateStore.viewportState.slowRotationEnabled else { return }
+        guard now - lastManualCameraInteractionTime >= slowRotationResumeDelay else { return }
+        let camera = currentCameraState()
+        camera.orbit(yawDelta: slowRotationAngularSpeed * deltaTime, pitchDelta: 0)
+        liveCameraState.viewportCameraState = camera.viewportCameraState
+        publishCameraState()
+    }
+
     private func publishCameraState() {
         let cameraState = currentCameraState().viewportCameraState
         guard cameraState.isMeaningfullyDifferent(from: lastPublishedCameraState) else { return }
         lastPublishedCameraState = cameraState
         cameraStateSink(cameraState)
+    }
+
+    private func registerManualCameraInteraction() {
+        lastManualCameraInteractionTime = ProcessInfo.processInfo.systemUptime
     }
 
     private func currentCameraState() -> CameraState {

@@ -64,9 +64,11 @@ final class SimulationRuntimeConfigCoordinator: ObservableObject {
             .store(in: &cancellables)
 
         physicsModuleSettingsStore.$snapshot
-            .sink { [weak self] _ in
+            .sink { [weak self] snapshot in
                 guard let self else { return }
-                self.session.updateTypeMatrixLocalSettings(self.physicsModuleSettingsStore.typeMatrixLocalSettings())
+                self.session.updateTypeMatrixLocalSettings(
+                    self.physicsModuleSettingsStore.typeMatrixLocalSettings(from: snapshot)
+                )
             }
             .store(in: &cancellables)
 

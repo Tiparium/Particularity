@@ -52,7 +52,7 @@ enum InteractionSnapshotFormat {
     }
 
     static func optimization(_ state: OptimizationModuleState) -> String {
-        "blockingMode=\(state.blockingMode.rawValue) showLeaderCommunicationLog=\(state.showLeaderCommunicationLog)"
+        "showLeaderCommunicationLog=\(state.showLeaderCommunicationLog)"
     }
 
     static func debug(_ state: DebugSettingsState) -> String {
@@ -60,7 +60,7 @@ enum InteractionSnapshotFormat {
     }
 
     static func viewport(_ state: SimulationViewportState) -> String {
-        "transport=\(state.transportState.rawValue) count=\(state.particleCount) random=\(state.randomDistribution) types=\(state.particleTypes) intercommunicate=\(state.allParticlesIntercommunicate) direction=(\(format(Double(state.movementDirection.x))),\(format(Double(state.movementDirection.y))),\(format(Double(state.movementDirection.z)))) timeScale=\(format(Double(state.timeScale))) sphereSize=\(format(Double(state.sphereSize))) spectrumOffset=\(format(Double(state.spectrumOffset))) showOptimizationInfo=\(state.showOptimizationInfo) showLeaderCommunicationLog=\(state.showLeaderCommunicationLog) blockingMode=\(state.optimizationBlockingMode.rawValue)"
+        "transport=\(state.transportState.rawValue) count=\(state.particleCount) random=\(state.randomDistribution) types=\(state.particleTypes) intercommunicate=\(state.allParticlesIntercommunicate) direction=(\(format(Double(state.movementDirection.x))),\(format(Double(state.movementDirection.y))),\(format(Double(state.movementDirection.z)))) timeScale=\(format(Double(state.timeScale))) sphereSize=\(format(Double(state.sphereSize))) spectrumOffset=\(format(Double(state.spectrumOffset))) showOptimizationInfo=\(state.showOptimizationInfo) showLeaderCommunicationLog=\(state.showLeaderCommunicationLog)"
     }
 
     static func renderState(_ state: SimulationRuntime.RenderState) -> String {

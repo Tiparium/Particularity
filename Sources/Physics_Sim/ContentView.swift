@@ -3,72 +3,6 @@ import UniformTypeIdentifiers
 import Foundation
 import AppKit
 
-private enum DockZone: String, CaseIterable, Identifiable, Codable {
-    case left
-    case center
-    case right
-
-    var id: String { rawValue }
-    var title: String {
-        switch self {
-        case .left: return "Left Panel"
-        case .center: return "Center"
-        case .right: return "Right Panel"
-        }
-    }
-}
-
-private enum DockPanelType: String, CaseIterable, Codable {
-    case moduleSlots
-    case physicsSettings
-    case visualSettings
-    case optimizationSettings
-    case fileView
-    case inspector
-    case leaderCommunicationLog
-
-    var title: String {
-        switch self {
-        case .moduleSlots: return "Module Slots"
-        case .physicsSettings: return "Physics Settings"
-        case .visualSettings: return "Visual Settings"
-        case .optimizationSettings: return "Optimization Settings"
-        case .fileView: return "File View"
-        case .inspector: return "Debug Inspector"
-        case .leaderCommunicationLog: return "Leader Communication Log"
-        }
-    }
-
-    var subtype: DockPanelSubtype {
-        switch self {
-        case .moduleSlots, .physicsSettings, .visualSettings, .optimizationSettings, .fileView:
-            return .core
-        case .inspector, .leaderCommunicationLog:
-            return .diagnostics
-        }
-    }
-}
-
-private enum DockPanelSubtype: String, CaseIterable, Identifiable {
-    case core
-    case diagnostics
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .core: return "Core"
-        case .diagnostics: return "Diagnostics"
-        }
-    }
-}
-
-private struct DockPanel: Identifiable, Codable, Equatable {
-    let id: UUID
-    let type: DockPanelType
-    var zone: DockZone
-}
-
 private struct DockPanelPreview: Identifiable {
     let id: UUID
     let panel: DockPanel
@@ -76,68 +10,18 @@ private struct DockPanelPreview: Identifiable {
     let isShifted: Bool
 }
 
-private enum HeaderControlVariant {
-    case neutral
-    case accent
-    case destructive
-}
-
-private struct HeaderControlSurface: View {
-    let iconName: String
-    let variant: HeaderControlVariant
-    let isHovered: Bool
-
-    var body: some View {
-        Image(systemName: iconName)
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(foregroundColor)
-            .frame(width: 36, height: 32)
-            .background(
-                RoundedRectangle(cornerRadius: 7)
-                    .fill(backgroundColor)
-            )
-    }
-
-    private var foregroundColor: Color {
-        switch variant {
-        case .neutral:
-            return isHovered ? .primary : .secondary
-        case .accent:
-            return isHovered ? .primary : .secondary
-        case .destructive:
-            return isHovered ? Color.red.opacity(0.95) : .secondary
-        }
-    }
-
-    private var backgroundColor: Color {
-        switch variant {
-        case .neutral:
-            return Color(nsColor: .quaternaryLabelColor).opacity(isHovered ? 0.24 : 0.16)
-        case .accent:
-            return isHovered ? Color.accentColor.opacity(0.18) : Color(nsColor: .quaternaryLabelColor).opacity(0.16)
-        case .destructive:
-            return isHovered ? Color.red.opacity(0.30) : Color(nsColor: .quaternaryLabelColor).opacity(0.16)
-        }
-    }
-}
-
 private struct HeaderControlButton: View {
     let iconName: String
-    let variant: HeaderControlVariant
+    let variant: AppControlVariant
     let isHovered: Bool
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            HeaderControlSurface(iconName: iconName, variant: variant, isHovered: isHovered)
+            AppIconControlSurface(iconName: iconName, variant: variant, isHovered: isHovered, isPressed: false)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(AppInteractiveButtonStyle())
     }
-}
-
-private struct DockLayoutState: Codable {
-    let panels: [DockPanel]
-    let collapsedPanelIDs: [UUID]
 }
 
 private struct PanelDragSession {
@@ -259,6 +143,7 @@ private struct DockPanelDropDelegate: DropDelegate {
 
 struct MainWindowContentDependencies {
     let session: SimulationSession
+    let chromeStateStore: MainWindowChromeStateStore
     let editorSettingsStore: MainWindowEditorSettingsStore
     let viewportStateStore: MainWindowViewportStateStore
     let physicsModuleSettingsStore: MainWindowPhysicsModuleSettingsStore
@@ -291,6 +176,7 @@ struct MainWindowContentDependencies {
         await Task.yield()
         return MainWindowContentDependencies(
             session: session,
+            chromeStateStore: WindowSimulationSessionStore.shared.mainWindowChromeStateStore(),
             editorSettingsStore: editorSettingsStore,
             viewportStateStore: WindowSimulationSessionStore.shared.mainWindowViewportStateStore(),
             physicsModuleSettingsStore: physicsModuleSettingsStore,
@@ -304,128 +190,73 @@ struct MainWindowContentDependencies {
 }
 
 struct ContentView: View {
-    private let dockLayoutStorageKey = "PhysicsSim.DockLayoutState.v1"
     private let particleCountEngineCap = 10_000_000
     private let particleCountUICap = 100_000
-    @AppStorage("layout.dock.leftWidth") private var storedLeftDockWidth = 280.0
-    @AppStorage("layout.dock.rightWidth") private var storedRightDockWidth = 280.0
-    @AppStorage("layout.dock.centerHeight") private var storedCenterDockHeight = 240.0
-    @State private var panels: [DockPanel] = [
-        DockPanel(id: UUID(), type: .moduleSlots, zone: .left),
-        DockPanel(id: UUID(), type: .inspector, zone: .center),
-        DockPanel(id: UUID(), type: .physicsSettings, zone: .right),
-        DockPanel(id: UUID(), type: .visualSettings, zone: .right),
-        DockPanel(id: UUID(), type: .optimizationSettings, zone: .right),
-    ]
-
-    @State private var selectedFileID: String?
     @State private var isImporterPresented = false
     @State private var importerTargetKind: ModuleKind = .physics
-    @State private var hoveredCollapsePanelID: UUID?
     @State private var hoveredGrabPanelID: UUID?
     @State private var hoveredClosePanelID: UUID?
     @State private var panelDragSession: PanelDragSession?
     @State private var panelDragInteractionState = DragInteractionState(clickThenDragEndBehavior: .explicitOnly)
-    @State private var collapsedPanelIDs: Set<UUID> = []
     @State private var menuInsertionType: DockPanelType?
     @State private var menuHoverZone: DockZone?
     @State private var panelFramesByZone: [DockZone: [UUID: CGRect]] = [:]
     @State private var zoneFramesInRoot: [DockZone: CGRect] = [:]
     @State private var viewportGeneration: Int = 0
-    @State private var leftDockWidth = 280.0
-    @State private var rightDockWidth = 280.0
-    @State private var centerDockHeight = 240.0
-    @State private var leftResizeOriginWidth: CGFloat?
-    @State private var rightResizeOriginWidth: CGFloat?
-    @State private var centerResizeOriginHeight: CGFloat?
-    @State private var hoveredResizeAxis: DockResizeAxis?
     private let session: SimulationSession
-    @ObservedObject private var editorSettingsStore: MainWindowEditorSettingsStore
-    @ObservedObject private var viewportStateStore: MainWindowViewportStateStore
-    @ObservedObject private var physicsModuleSettingsStore: MainWindowPhysicsModuleSettingsStore
-    @ObservedObject private var moduleCatalogStore: MainWindowModuleCatalogStore
-    @ObservedObject private var runtimeConfigCoordinator: SimulationRuntimeConfigCoordinator
-    @ObservedObject private var diagnosticsStore: MainWindowDiagnosticsStore
-    @ObservedObject private var interactionSnapshotRecorder: InteractionSnapshotRecorder
-    @ObservedObject private var performanceReviewLogger: PerformanceReviewLogger
+    @ObservedObject private var chromeStateStore: MainWindowChromeStateStore
+    private let editorSettingsStore: MainWindowEditorSettingsStore
+    private let viewportStateStore: MainWindowViewportStateStore
+    private let physicsModuleSettingsStore: MainWindowPhysicsModuleSettingsStore
+    private let moduleCatalogStore: MainWindowModuleCatalogStore
+    private let runtimeConfigCoordinator: SimulationRuntimeConfigCoordinator
+    private let diagnosticsStore: MainWindowDiagnosticsStore
+    private let interactionSnapshotRecorder: InteractionSnapshotRecorder
+    private let performanceReviewLogger: PerformanceReviewLogger
 
     init(dependencies: MainWindowContentDependencies) {
         self.session = dependencies.session
-        _editorSettingsStore = ObservedObject(wrappedValue: dependencies.editorSettingsStore)
-        _viewportStateStore = ObservedObject(wrappedValue: dependencies.viewportStateStore)
-        _physicsModuleSettingsStore = ObservedObject(wrappedValue: dependencies.physicsModuleSettingsStore)
-        _moduleCatalogStore = ObservedObject(wrappedValue: dependencies.moduleCatalogStore)
-        _runtimeConfigCoordinator = ObservedObject(wrappedValue: dependencies.runtimeConfigCoordinator)
-        _diagnosticsStore = ObservedObject(wrappedValue: dependencies.diagnosticsStore)
-        _interactionSnapshotRecorder = ObservedObject(wrappedValue: dependencies.interactionSnapshotRecorder)
-        _performanceReviewLogger = ObservedObject(wrappedValue: dependencies.performanceReviewLogger)
+        _chromeStateStore = ObservedObject(wrappedValue: dependencies.chromeStateStore)
+        self.editorSettingsStore = dependencies.editorSettingsStore
+        self.viewportStateStore = dependencies.viewportStateStore
+        self.physicsModuleSettingsStore = dependencies.physicsModuleSettingsStore
+        self.moduleCatalogStore = dependencies.moduleCatalogStore
+        self.runtimeConfigCoordinator = dependencies.runtimeConfigCoordinator
+        self.diagnosticsStore = dependencies.diagnosticsStore
+        self.interactionSnapshotRecorder = dependencies.interactionSnapshotRecorder
+        self.performanceReviewLogger = dependencies.performanceReviewLogger
     }
 
-    private var defaultPanels: [DockPanel] {
-        [
-            DockPanel(id: UUID(), type: .moduleSlots, zone: .left),
-            DockPanel(id: UUID(), type: .inspector, zone: .center),
-            DockPanel(id: UUID(), type: .physicsSettings, zone: .right),
-            DockPanel(id: UUID(), type: .visualSettings, zone: .right),
-            DockPanel(id: UUID(), type: .optimizationSettings, zone: .right),
-        ]
+    private var panels: [DockPanel] {
+        chromeStateStore.panels
     }
 
-    private var legacyDefaultLayoutSignature: Set<String> {
-        [
-            "moduleSlots:left",
-            "physicsSettings:left",
-            "visualSettings:left",
-            "optimizationSettings:left",
-            "inspector:center",
-        ]
-    }
-
-    private var fileBrowserDefaultLayoutSignature: Set<String> {
-        [
-            "moduleSlots:left",
-            "inspector:center",
-            "fileView:right",
-        ]
-    }
-
-    private var currentDefaultLayoutSignature: Set<String> {
-        [
-            "moduleSlots:left",
-            "inspector:center",
-            "physicsSettings:right",
-            "visualSettings:right",
-            "optimizationSettings:right",
-        ]
+    private var collapsedPanelIDs: Set<UUID> {
+        chromeStateStore.collapsedPanelIDs
     }
 
     var body: some View {
-        GeometryReader { geo in
-            let maxSideWidth = max(260, min(460, geo.size.width * 0.35))
-            let maxCenterDockHeight = max(200, min(420, geo.size.height * 0.45))
-
+        GeometryReader { _ in
             ZStack {
                 Color(nsColor: .windowBackgroundColor)
                     .ignoresSafeArea()
 
-                HSplitView {
-                    dockColumn(.left)
-                        .frame(
-                            minWidth: 220,
-                            idealWidth: min(max(CGFloat(storedLeftDockWidth), 220), maxSideWidth),
-                            maxWidth: maxSideWidth
-                        )
-
-                    centerColumn(maxCenterDockHeight: maxCenterDockHeight)
-                        .frame(maxWidth: .infinity)
-
-                    dockColumn(.right)
-                        .frame(
-                            minWidth: 220,
-                            idealWidth: min(max(CGFloat(storedRightDockWidth), 220), maxSideWidth),
-                            maxWidth: maxSideWidth
-                        )
-                }
+                PersistentThreePaneSplitView(
+                    defaultLeftWidth: 280,
+                    defaultRightWidth: 280,
+                    initialLeftWidth: chromeStateStore.savedLeftDockWidth(fallback: 280),
+                    initialRightWidth: chromeStateStore.savedRightDockWidth(fallback: 280),
+                    leftPanelVisible: chromeStateStore.leftPanelVisible,
+                    rightPanelVisible: chromeStateStore.rightPanelVisible,
+                    minSideWidth: 220,
+                    maxSideWidthRatio: 0.35,
+                    onWidthsChanged: { left, right in
+                        chromeStateStore.setSideDockWidths(left: left, right: right)
+                    },
+                    left: dockColumn(.left),
+                    center: centerColumn(),
+                    right: dockColumn(.right)
+                )
                 .padding(12)
 
                 if ProgramSettingsStore.uiPanelDragInputMode == .clickThenDrag,
@@ -469,9 +300,8 @@ struct ContentView: View {
             )
         }
         .onAppear {
-            loadDockLayoutState()
             moduleCatalogStore.refresh()
-            syncSelectedFileSelection()
+            chromeStateStore.ensureSelectedFileID(availableFiles: moduleCatalogStore.availableFiles)
             PerformanceReviewLogger.shared.configure(
                 runtimeConfigCoordinator: runtimeConfigCoordinator,
                 snapshotProvider: makePerformanceReviewSample
@@ -480,12 +310,6 @@ struct ContentView: View {
         .onAppear {
             fputs("APP_READY\n", stderr)
             fflush(stderr)
-        }
-        .onChange(of: panels) {
-            persistDockLayoutState()
-        }
-        .onChange(of: collapsedPanelIDs) {
-            persistDockLayoutState()
         }
         .onReceive(NotificationCenter.default.publisher(for: .requestAddDockPanel)) { note in
             guard let raw = note.userInfo?[AppMenuEventKey.panelType] as? String,
@@ -507,8 +331,8 @@ struct ContentView: View {
             viewportGeneration &+= 1
             diagnosticsStore.resetViewportDiagnostics()
         }
-        .onChange(of: moduleCatalogStore.availableFiles) {
-            syncSelectedFileSelection()
+        .onReceive(moduleCatalogStore.$availableFiles) { availableFiles in
+            chromeStateStore.ensureSelectedFileID(availableFiles: availableFiles)
         }
         .onExitCommand {
             cancelMenuInsertionMode()
@@ -527,119 +351,33 @@ struct ContentView: View {
         }
     }
 
-    private func centerColumn(maxCenterDockHeight: CGFloat) -> some View {
-        VSplitView {
-            SimulationCenterPane(
+    private func centerColumn() -> some View {
+        PersistentVerticalSplitView(
+            defaultBottomHeight: 240,
+            initialBottomHeight: chromeStateStore.savedCenterDockHeight(fallback: 240),
+            bottomPanelVisible: chromeStateStore.bottomPanelVisible,
+            minBottomHeight: 180,
+            maxBottomHeightRatio: 0.45,
+            onBottomHeightChanged: { height in
+                chromeStateStore.setCenterDockHeight(height)
+            },
+            top: SimulationCenterPane(
                 session: session,
                 viewportStateStore: viewportStateStore,
-                editorSettingsStore: editorSettingsStore,
                 runtimeConfigCoordinator: runtimeConfigCoordinator,
                 diagnosticsStore: diagnosticsStore,
                 viewportGeneration: viewportGeneration,
-                debugMetricsAreVisible: debugMetricsAreVisible
-            )
-            .frame(minHeight: 320)
-
-            dropZoneSurface(for: .center, panels: panelsInZone(.center))
-                .frame(
-                    minHeight: 180,
-                    idealHeight: min(max(CGFloat(storedCenterDockHeight), 180), maxCenterDockHeight),
-                    maxHeight: maxCenterDockHeight
-                )
-        }
-    }
-
-    private enum DockResizeAxis {
-        case left
-        case right
-        case center
-    }
-
-    private func dockResizeHandle(_ axis: DockResizeAxis, containerSize: CGSize) -> some View {
-        Rectangle()
-            .fill(Color.clear)
-            .frame(width: axis == .center ? nil : 8, height: axis == .center ? 8 : nil)
-            .overlay {
-                RoundedRectangle(cornerRadius: 999)
-                    .fill((hoveredResizeAxis == axis ? Color.accentColor : Color.secondary).opacity(hoveredResizeAxis == axis ? 0.72 : 0.28))
-                    .frame(width: axis == .center ? 72 : 3, height: axis == .center ? 3 : 72)
-            }
-            .contentShape(Rectangle())
-            .hoverCursor(axis == .center ? .resizeUpDown : .resizeLeftRight)
-            .onHover { hovering in
-                hoveredResizeAxis = hovering ? axis : (hoveredResizeAxis == axis ? nil : hoveredResizeAxis)
-            }
-            .gesture(resizeGesture(for: axis, containerSize: containerSize))
-    }
-
-    private func resizeGesture(for axis: DockResizeAxis, containerSize: CGSize) -> some Gesture {
-        DragGesture(minimumDistance: 1)
-            .onChanged { value in
-                switch axis {
-                case .left:
-                    let origin = leftResizeOriginWidth ?? clampedDockWidth(CGFloat(leftDockWidth), containerWidth: containerSize.width)
-                    leftResizeOriginWidth = origin
-                    leftDockWidth = Double(clampedDockWidth(origin + value.translation.width, containerWidth: containerSize.width))
-                case .right:
-                    let origin = rightResizeOriginWidth ?? clampedDockWidth(CGFloat(rightDockWidth), containerWidth: containerSize.width)
-                    rightResizeOriginWidth = origin
-                    rightDockWidth = Double(clampedDockWidth(origin - value.translation.width, containerWidth: containerSize.width))
-                case .center:
-                    let origin = centerResizeOriginHeight ?? clampedDockHeight(CGFloat(centerDockHeight), containerHeight: containerSize.height)
-                    centerResizeOriginHeight = origin
-                    centerDockHeight = Double(clampedDockHeight(origin - value.translation.height, containerHeight: containerSize.height))
-                }
-            }
-            .onEnded { _ in
-                storedLeftDockWidth = leftDockWidth
-                storedRightDockWidth = rightDockWidth
-                storedCenterDockHeight = centerDockHeight
-                leftResizeOriginWidth = nil
-                rightResizeOriginWidth = nil
-                centerResizeOriginHeight = nil
-            }
-    }
-
-    private func clampedDockWidth(_ width: CGFloat, containerWidth: CGFloat) -> CGFloat {
-        let maxWidth = max(260, min(460, containerWidth * 0.35))
-        return min(max(width, 220), maxWidth)
-    }
-
-    private func clampedDockHeight(_ height: CGFloat, containerHeight: CGFloat) -> CGFloat {
-        let maxHeight = max(200, min(420, containerHeight * 0.45))
-        return min(max(height, 180), maxHeight)
-    }
-
-    private var transportBar: some View {
-        HStack(spacing: 10) {
-            Button("Start") {
-                runtimeConfigCoordinator.startSimulation()
-            }
-            .disabled(transportState != .stopped || !validationReport.canStart)
-
-            Button(transportState == .running ? "Pause" : "Play") {
-                runtimeConfigCoordinator.togglePausePlay()
-            }
-            .frame(minWidth: 64)
-            .disabled(
-                transportState == .stopped
-                || (transportState == .paused && !validationReport.canStart)
-            )
-
-            Button("Stop") {
-                runtimeConfigCoordinator.stopSimulation()
-            }
-            .disabled(transportState == .stopped)
-
-            Spacer()
-
-            Text(validationReport.canStart ? "Ready" : "Blocked")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(validationReport.canStart ? Color.green.opacity(0.9) : Color.red.opacity(0.9))
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+                anyDockPanelsVisible: chromeStateStore.anyDockPanelsVisible,
+                leftPanelVisible: chromeStateStore.leftPanelVisible,
+                rightPanelVisible: chromeStateStore.rightPanelVisible,
+                bottomPanelVisible: chromeStateStore.bottomPanelVisible,
+                onToggleAllDockPanelsVisibility: { chromeStateStore.toggleAllDockPanelsVisibility() },
+                onToggleLeftPanelVisibility: { chromeStateStore.toggleLeftPanelVisibility() },
+                onToggleRightPanelVisibility: { chromeStateStore.toggleRightPanelVisibility() },
+                onToggleBottomPanelVisibility: { chromeStateStore.toggleBottomPanelVisibility() }
+            ),
+            bottom: dropZoneSurface(for: .center, panels: panelsInZone(.center))
+        )
     }
 
     private func dockColumn(_ zone: DockZone) -> some View {
@@ -664,7 +402,7 @@ struct ContentView: View {
         )
         return Group {
             if zone == .center {
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: 4) {
                     zoneHeader(for: zone)
 
                     ScrollView(.horizontal) {
@@ -695,15 +433,17 @@ struct ContentView: View {
                                 .frame(width: 260, height: 80)
                         }
                         }
-                        .padding(8)
+                        .padding(.horizontal, 8)
+                        .padding(.top, 4)
+                        .padding(.bottom, 8)
                     }
                 }
             } else {
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: 4) {
                     zoneHeader(for: zone)
 
                     ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 10) {
                         ForEach(previews) { preview in
                             panelCard(preview.panel, isGhost: preview.isGhost, isShifted: preview.isShifted)
                                 .background {
@@ -729,7 +469,9 @@ struct ContentView: View {
                                 .frame(height: 80)
                         }
                         }
-                        .padding(8)
+                        .padding(.horizontal, 8)
+                        .padding(.top, 4)
+                        .padding(.bottom, 8)
                     }
                 }
             }
@@ -740,7 +482,7 @@ struct ContentView: View {
             if isDropTarget || isAddMode {
                 RoundedRectangle(cornerRadius: 12)
                     .fill(
-                        Color.accentColor.opacity(
+                        AppControlPalette.accent.opacity(
                             isDropTarget ? 0.14 : (isAddMode ? 0.07 : 0.10)
                         )
                     )
@@ -751,7 +493,7 @@ struct ContentView: View {
             RoundedRectangle(cornerRadius: 12)
                 .stroke(
                     isDropTarget || isAddMode
-                        ? Color.accentColor.opacity(0.85)
+                        ? AppControlPalette.accent.opacity(0.85)
                         : Color(nsColor: .separatorColor).opacity(0.45),
                     lineWidth: (isDropTarget || isAddMode) ? 2 : 1
                 )
@@ -787,18 +529,14 @@ struct ContentView: View {
                 }
             }
         }
-        .overlay {
-            if isAddMode {
-                Color.clear
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        if let insertionType = menuInsertionType {
-                            addPanel(type: insertionType, to: zone)
-                            cancelMenuInsertionMode()
-                        }
-                    }
-            }
-        }
+        .highPriorityGesture(
+            TapGesture().onEnded {
+                guard let insertionType = menuInsertionType else { return }
+                addPanel(type: insertionType, to: zone)
+                cancelMenuInsertionMode()
+            },
+            including: isAddMode ? .gesture : .subviews
+        )
         .onDrop(of: [.text], delegate: dropDelegate)
     }
 
@@ -826,47 +564,48 @@ struct ContentView: View {
                     }
                 }
             } label: {
-                HeaderControlSurface(
-                    iconName: "plus",
-                    variant: .neutral,
-                    isHovered: false
-                )
+                AppMenuIconLabel(iconName: "plus", variant: .neutral)
             }
             .menuStyle(.borderlessButton)
             .help("Add panel")
             .disabled(isPanelDragActive)
+
         }
         .padding(.horizontal, 6)
-        .padding(.top, 6)
-        .padding(.bottom, 2)
+        .padding(.top, 2)
+        .padding(.bottom, 0)
     }
 
     private func panelCard(_ panel: DockPanel, isGhost: Bool = false, isShifted: Bool = false) -> some View {
         let isPanelDragActive = panelDragSession != nil
+        let isExpanded = Binding(
+            get: { !collapsedPanelIDs.contains(panel.id) },
+            set: { nextValue in
+                chromeStateStore.setPanelCollapsed(panel.id, isCollapsed: !nextValue)
+                interactionSnapshotRecorder.record(
+                    event: "ui.toggle_panel_collapsed",
+                    details: [
+                        "panelID": panel.id.uuidString,
+                        "isCollapsed": "\(!nextValue)",
+                    ]
+                )
+            }
+        )
         return VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text(panel.type.title)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(isGhost ? .secondary : .primary)
-                Spacer()
-                if !isGhost {
-                    HeaderControlButton(
-                        iconName: collapsedPanelIDs.contains(panel.id) ? "chevron.down" : "chevron.up",
-                        variant: .neutral,
-                        isHovered: hoveredCollapsePanelID == panel.id
-                    ) {
-                        togglePanelCollapsed(panel.id)
-                    }
-                    .help(collapsedPanelIDs.contains(panel.id) ? "Expand panel" : "Collapse panel")
-                    .onHover { hovering in
-                        hoveredCollapsePanelID = hovering ? panel.id : (hoveredCollapsePanelID == panel.id ? nil : hoveredCollapsePanelID)
-                    }
-                    .disabled(isPanelDragActive)
-                }
-                HeaderControlSurface(
+            CollapsibleSectionHeader(
+                title: panel.type.title,
+                isExpanded: isGhost ? .constant(true) : isExpanded,
+                titleFont: .subheadline.weight(.semibold),
+                titleColor: isGhost ? .secondary : .primary,
+                minHeight: 32,
+                cornerRadius: 7,
+                backgroundOpacity: 0.16
+            ) {
+                AppIconControlSurface(
                     iconName: "hand.draw",
                     variant: .accent,
-                    isHovered: hoveredGrabPanelID == panel.id
+                    isHovered: hoveredGrabPanelID == panel.id,
+                    isPressed: false
                 )
                 .contentShape(Rectangle())
                 .opacity(isGhost ? 0.0 : 1.0)
@@ -920,6 +659,7 @@ struct ContentView: View {
                 .onHover { hovering in
                     hoveredGrabPanelID = hovering ? panel.id : (hoveredGrabPanelID == panel.id ? nil : hoveredGrabPanelID)
                 }
+
                 if !isGhost {
                     HeaderControlButton(
                         iconName: "xmark",
@@ -935,13 +675,16 @@ struct ContentView: View {
                     .disabled(isPanelDragActive)
                 }
             }
+            .allowsHitTesting(!isGhost)
 
-            if !collapsedPanelIDs.contains(panel.id) || isGhost {
+            if isExpanded.wrappedValue || isGhost {
                 panelBodyContent(for: panel)
                 .allowsHitTesting(!isPanelDragActive || isGhost)
             }
         }
-        .padding(10)
+        .padding(.horizontal, 10)
+        .padding(.top, 8)
+        .padding(.bottom, 10)
         .background(
             RoundedRectangle(cornerRadius: 10)
                 .fill(.regularMaterial)
@@ -950,7 +693,7 @@ struct ContentView: View {
         .overlay(
             RoundedRectangle(cornerRadius: 10)
                 .stroke(
-                    isGhost ? Color.accentColor.opacity(0.7) : Color(nsColor: .separatorColor).opacity(0.4),
+                    isGhost ? AppControlPalette.accent.opacity(0.7) : Color(nsColor: .separatorColor).opacity(0.4),
                     style: isGhost
                         ? StrokeStyle(lineWidth: 1.5, dash: [6, 4])
                         : StrokeStyle(lineWidth: 1)
@@ -989,8 +732,8 @@ struct ContentView: View {
         case .moduleSlots:
             ModuleSlotsPanel(
                 editorSettingsStore: editorSettingsStore,
-                availableFiles: moduleCatalogStore.availableFiles,
-                selectedFile: selectedFile,
+                moduleCatalogStore: moduleCatalogStore,
+                chromeStateStore: chromeStateStore,
                 importerTargetKind: $importerTargetKind,
                 isImporterPresented: $isImporterPresented
             )
@@ -999,8 +742,8 @@ struct ContentView: View {
                 kind: .physics,
                 editorSettingsStore: editorSettingsStore,
                 physicsModuleSettingsStore: physicsModuleSettingsStore,
-                availableFiles: moduleCatalogStore.availableFiles,
-                transportState: runtimeConfigCoordinator.transportState,
+                moduleCatalogStore: moduleCatalogStore,
+                runtimeConfigCoordinator: runtimeConfigCoordinator,
                 particleCountUICap: particleCountUICap,
                 particleCountEngineCap: particleCountEngineCap
             )
@@ -1009,8 +752,8 @@ struct ContentView: View {
                 kind: .visual,
                 editorSettingsStore: editorSettingsStore,
                 physicsModuleSettingsStore: physicsModuleSettingsStore,
-                availableFiles: moduleCatalogStore.availableFiles,
-                transportState: runtimeConfigCoordinator.transportState,
+                moduleCatalogStore: moduleCatalogStore,
+                runtimeConfigCoordinator: runtimeConfigCoordinator,
                 particleCountUICap: particleCountUICap,
                 particleCountEngineCap: particleCountEngineCap
             )
@@ -1019,207 +762,35 @@ struct ContentView: View {
                 kind: .optimization,
                 editorSettingsStore: editorSettingsStore,
                 physicsModuleSettingsStore: physicsModuleSettingsStore,
-                availableFiles: moduleCatalogStore.availableFiles,
-                transportState: runtimeConfigCoordinator.transportState,
+                moduleCatalogStore: moduleCatalogStore,
+                runtimeConfigCoordinator: runtimeConfigCoordinator,
                 particleCountUICap: particleCountUICap,
                 particleCountEngineCap: particleCountEngineCap
             )
         case .fileView:
             FileViewPanel(
                 editorSettingsStore: editorSettingsStore,
-                availableFiles: moduleCatalogStore.availableFiles,
-                selectedFile: selectedFile,
-                onRefresh: moduleCatalogStore.refresh
+                moduleCatalogStore: moduleCatalogStore,
+                chromeStateStore: chromeStateStore
             )
         case .inspector:
             InspectorPanel(
                 interactionSnapshotRecorder: interactionSnapshotRecorder,
                 performanceReviewLogger: performanceReviewLogger,
-                transportState: runtimeConfigCoordinator.transportState,
-                validationReport: runtimeConfigCoordinator.validationReport,
-                performanceMetrics: performanceMetrics,
-                panelsCount: panels.count,
-                collapsedPanelsCount: collapsedPanelIDs.count,
-                debugMetricsAreVisible: debugMetricsAreVisible,
-                viewportRuntimeError: viewportRuntimeError,
+                runtimeConfigCoordinator: runtimeConfigCoordinator,
+                diagnosticsStore: diagnosticsStore,
+                chromeStateStore: chromeStateStore,
                 onStartInteractionSnapshot: startInteractionSnapshotRecording,
                 onSetPerformanceReviewLoggingEnabled: { performanceReviewLogger.setEnabled($0) }
             )
         case .leaderCommunicationLog:
-            LeaderCommunicationLogPanel(entries: diagnosticsStore.leaderCommunicationLogEntries)
-        }
-    }
-
-    private var inspectorBlock: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Performance")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-
-            HStack {
-                Text("Memory Used")
-                    .font(.caption)
-                Spacer()
-                Text(byteCountString(performanceMetrics.memoryUsedBytes))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-
-            HStack {
-                Text("FPS")
-                    .font(.caption)
-                Spacer()
-                Text(formattedRate(performanceMetrics.averageFPS))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-
-            HStack {
-                Text("UPS")
-                    .font(.caption)
-                Spacer()
-                Text(formattedRate(performanceMetrics.averageUPS))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-
-            HStack {
-                Text("Leader Interactions/s")
-                    .font(.caption)
-                Spacer()
-                Text(formattedInteractionRate(performanceMetrics.leaderInteractionsPerSecond))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-
-            Text("Rolling average over the last \(Int(performanceMetrics.sampleWindowSeconds))s.")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-
-            Divider()
-
-            Text("Session")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-
-            HStack {
-                Text("Transport")
-                    .font(.caption)
-                Spacer()
-                Text(transportState.title)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-
-            HStack {
-                Text("Panels")
-                    .font(.caption)
-                Spacer()
-                Text("\(panels.count)")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-
-            HStack {
-                Text("Collapsed")
-                    .font(.caption)
-                Spacer()
-                Text("\(collapsedPanelIDs.count)")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-
-            HStack {
-                Text("Selected File")
-                    .font(.caption)
-                Spacer()
-                Text(selectedFile?.url.lastPathComponent ?? "None")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-
-            HStack {
-                Text("Drag Active")
-                    .font(.caption)
-                Spacer()
-                Text(panelDragSession == nil ? "No" : "Yes")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-
-            Divider()
-
-            Text("Resolved Modules")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-
-            ForEach(ModuleKind.allCases) { kind in
-                HStack {
-                    Text(kind.shortTitle)
-                        .font(.caption)
-                    Spacer()
-                    Text(resolvedModule(for: kind).name)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-            }
-
-            Divider()
-
-            Text("Validation")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-
-            HStack {
-                Text("Projected Memory")
-                    .font(.caption)
-                Spacer()
-                Text(byteCountString(validationReport.projectedBytes))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-
-            if let issue = viewportRuntimeError ?? validationReport.issue {
-                Text(issue)
-                    .font(.caption2)
-                    .foregroundStyle(Color.red.opacity(0.9))
-            } else {
-                Text("Configuration is valid for startup.")
-                    .font(.caption2)
-                    .foregroundStyle(Color.green.opacity(0.9))
-            }
+            LeaderCommunicationLogPanel(diagnosticsStore: diagnosticsStore)
         }
     }
 
     private var selectedFile: ModuleFile? {
-        guard let selectedFileID else { return nil }
+        guard let selectedFileID = chromeStateStore.selectedFileID else { return nil }
         return moduleCatalogStore.availableFiles.first(where: { $0.id == selectedFileID })
-    }
-
-    private var availableFiles: [ModuleFile] {
-        moduleCatalogStore.availableFiles
-    }
-
-    private var modulesRootURL: URL {
-        moduleCatalogStore.modulesRootURL
-    }
-
-    private var activeModuleSet: ActiveModuleSet {
-        runtimeConfigCoordinator.activeModules
-    }
-
-    private var validationReport: RuntimeValidationReport {
-        runtimeConfigCoordinator.validationReport
-    }
-
-    private var performanceMetrics: SimulationPerformanceMetrics {
-        diagnosticsStore.performanceMetrics
-    }
-
-    private var viewportRuntimeError: String? {
-        diagnosticsStore.viewportRuntimeError
     }
 
     private var debugMetricsAreVisible: Bool {
@@ -1237,7 +808,7 @@ struct ContentView: View {
     }
 
     private func addPanel(type: DockPanelType, to zone: DockZone) {
-        panels.append(DockPanel(id: UUID(), type: type, zone: zone))
+        chromeStateStore.addPanel(type: type, to: zone)
         interactionSnapshotRecorder.record(
             event: "ui.add_panel",
             details: [
@@ -1248,8 +819,7 @@ struct ContentView: View {
     }
 
     private func removePanel(_ id: UUID) {
-        panels.removeAll { $0.id == id }
-        collapsedPanelIDs.remove(id)
+        chromeStateStore.removePanel(id: id)
         interactionSnapshotRecorder.record(
             event: "ui.remove_panel",
             details: ["panelID": id.uuidString]
@@ -1259,49 +829,10 @@ struct ContentView: View {
         }
     }
 
-    private func togglePanelCollapsed(_ id: UUID) {
-        if collapsedPanelIDs.contains(id) {
-            collapsedPanelIDs.remove(id)
-        } else {
-            collapsedPanelIDs.insert(id)
-        }
-        interactionSnapshotRecorder.record(
-            event: "ui.toggle_panel_collapsed",
-            details: [
-                "panelID": id.uuidString,
-                "isCollapsed": "\(collapsedPanelIDs.contains(id))",
-            ]
-        )
-    }
-
     private func movePanel(id: UUID, to zone: DockZone, at insertionIndex: Int?) {
-        guard let sourceIndex = panels.firstIndex(where: { $0.id == id }) else { return }
-        var moved = panels.remove(at: sourceIndex)
-        moved.zone = zone
-
-        let destinationCandidates = panels.enumerated().compactMap { pair -> Int? in
-            pair.element.zone == zone ? pair.offset : nil
-        }
-        let indexInZone = min(max(insertionIndex ?? destinationCandidates.count, 0), destinationCandidates.count)
-
-        if destinationCandidates.isEmpty {
-            panels.append(moved)
-            interactionSnapshotRecorder.record(
-                event: "ui.move_panel",
-                details: [
-                    "panelID": id.uuidString,
-                    "zone": zone.rawValue,
-                    "insertionIndex": "\(insertionIndex ?? destinationCandidates.count)",
-                ]
-            )
-            return
-        }
-
-        if indexInZone >= destinationCandidates.count {
-            panels.insert(moved, at: destinationCandidates.last! + 1)
-        } else {
-            panels.insert(moved, at: destinationCandidates[indexInZone])
-        }
+        chromeStateStore.movePanel(id: id, to: zone, at: insertionIndex)
+        let destinationCount = panels.filter { $0.zone == zone }.count
+        let indexInZone = min(max(insertionIndex ?? destinationCount, 0), destinationCount)
         interactionSnapshotRecorder.record(
             event: "ui.move_panel",
             details: [
@@ -1332,16 +863,9 @@ struct ContentView: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 10)
-                .stroke(Color.accentColor.opacity(0.55), lineWidth: 1)
+                .stroke(AppControlPalette.accent.opacity(0.55), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.15), radius: 10, x: 0, y: 4)
-    }
-
-    private func syncSelectedFileSelection() {
-        let availableFiles = moduleCatalogStore.availableFiles
-        if selectedFileID == nil || !availableFiles.contains(where: { $0.id == selectedFileID }) {
-            selectedFileID = availableFiles.first?.id
-        }
     }
 
     private func refreshModuleFiles() {
@@ -1400,11 +924,11 @@ struct ContentView: View {
             debugSettingsState: InteractionSnapshotFormat.debug(editorState.debugSettings),
             validationIssue: runtimeConfigCoordinator.validationReport.issue,
             projectedBytes: runtimeConfigCoordinator.validationReport.projectedBytes,
-            viewportRuntimeError: viewportRuntimeError,
+            viewportRuntimeError: diagnosticsStore.viewportRuntimeError,
             selectedFile: selectedFile?.url.path,
             debugMetricsVisible: debugMetricsAreVisible,
             panels: panelStates,
-            performanceMetrics: InteractionSnapshotFormat.performanceMetrics(performanceMetrics)
+            performanceMetrics: InteractionSnapshotFormat.performanceMetrics(diagnosticsStore.performanceMetrics)
         )
     }
 
@@ -1412,7 +936,7 @@ struct ContentView: View {
         let editorState = editorSettingsStore.editorState
         let activeModules = runtimeConfigCoordinator.activeModules
         let transportState = runtimeConfigCoordinator.transportState
-        let metrics = performanceMetrics
+        let metrics = diagnosticsStore.performanceMetrics
 
         return PerformanceReviewSample(
             physicsModule: activeModules.physics.name,
@@ -1430,7 +954,6 @@ struct ContentView: View {
             sphereSize: editorState.visualState.sphereSize,
             spectrumOffset: editorState.visualState.spectrumOffset,
             showOptimizationInfo: editorState.visualState.showOptimizationInfo,
-            blockingMode: editorState.optimizationState.blockingMode.rawValue,
             showLeaderCommunicationLog: editorState.optimizationState.showLeaderCommunicationLog,
             protectLeaderFromUnload: editorState.debugSettings.protectLeaderFromUnload,
             projectedBytes: runtimeConfigCoordinator.validationReport.projectedBytes,
@@ -1566,71 +1089,8 @@ struct ContentView: View {
         resetDragState()
     }
 
-    private func persistDockLayoutState() {
-        let payload = DockLayoutState(
-            panels: panels,
-            collapsedPanelIDs: Array(collapsedPanelIDs)
-        )
-        guard let data = try? JSONEncoder().encode(payload) else { return }
-        UserDefaults.standard.set(data, forKey: dockLayoutStorageKey)
-    }
-
-    private func loadDockLayoutState() {
-        guard let data = UserDefaults.standard.data(forKey: dockLayoutStorageKey),
-              let decoded = try? JSONDecoder().decode(DockLayoutState.self, from: data) else {
-            return
-        }
-        if !decoded.panels.isEmpty {
-            let signature = layoutSignature(for: decoded.panels)
-            if signature == legacyDefaultLayoutSignature || signature == fileBrowserDefaultLayoutSignature {
-                panels = defaultPanels
-            } else {
-                panels = decoded.panels
-            }
-        }
-        collapsedPanelIDs = Set(decoded.collapsedPanelIDs)
-    }
-
-    private func layoutSignature(for panels: [DockPanel]) -> Set<String> {
-        Set(panels.map { "\($0.type.rawValue):\($0.zone.rawValue)" })
-    }
-
-    private func resolvedModule(for kind: ModuleKind) -> ModuleDescriptor {
-        guard let assignedURL = assignedModules[kind],
-              let file = moduleCatalogStore.availableFiles.first(where: { $0.url == assignedURL }),
-              let descriptor = file.descriptor else {
-            return ModuleCatalog.fallback(for: kind.rawValue)
-        }
-        return descriptor
-    }
-
-    private func byteCountString(_ bytes: UInt64) -> String {
-        ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .memory)
-    }
-
-    private func formattedRate(_ value: Double) -> String {
-        String(format: "%.1f", value)
-    }
-
-    private func formattedInteractionRate(_ value: Double) -> String {
-        if value >= 1_000_000 {
-            return String(format: "%.2fM", value / 1_000_000)
-        }
-        if value >= 1_000 {
-            return String(format: "%.1fK", value / 1_000)
-        }
-        return String(format: "%.0f", value)
-    }
-
     private var transportState: SimulationTransportState { runtimeConfigCoordinator.transportState }
     private var physicsState: PhysicsModuleState { editorSettingsStore.editorState.physicsState }
-
-    private var assignedModules: [ModuleKind: URL] {
-        Dictionary(uniqueKeysWithValues: ModuleKind.allCases.compactMap { kind in
-            guard let path = editorSettingsStore.assignedModulePath(for: kind) else { return nil }
-            return (kind, URL(fileURLWithPath: path))
-        })
-    }
 }
 
 @MainActor
@@ -1706,15 +1166,20 @@ private enum EditorViewSupport {
 private struct SimulationCenterPane: View {
     let session: SimulationSession
     @ObservedObject var viewportStateStore: MainWindowViewportStateStore
-    @ObservedObject var editorSettingsStore: MainWindowEditorSettingsStore
     @ObservedObject var runtimeConfigCoordinator: SimulationRuntimeConfigCoordinator
     @ObservedObject var diagnosticsStore: MainWindowDiagnosticsStore
     let viewportGeneration: Int
-    let debugMetricsAreVisible: Bool
+    let anyDockPanelsVisible: Bool
+    let leftPanelVisible: Bool
+    let rightPanelVisible: Bool
+    let bottomPanelVisible: Bool
+    let onToggleAllDockPanelsVisibility: () -> Void
+    let onToggleLeftPanelVisibility: () -> Void
+    let onToggleRightPanelVisibility: () -> Void
+    let onToggleBottomPanelVisibility: () -> Void
 
     private var transportState: SimulationTransportState { runtimeConfigCoordinator.transportState }
     private var validationReport: RuntimeValidationReport { runtimeConfigCoordinator.validationReport }
-    private var performanceMetrics: SimulationPerformanceMetrics { diagnosticsStore.performanceMetrics }
     private var viewportRuntimeError: String? { diagnosticsStore.viewportRuntimeError }
 
     var body: some View {
@@ -1733,18 +1198,67 @@ private struct SimulationCenterPane: View {
                 Button("Start") {
                     runtimeConfigCoordinator.startSimulation()
                 }
+                .buttonStyle(AppFramedButtonStyle(.prominent))
                 .disabled(transportState != .stopped || !validationReport.canStart)
 
                 Button(transportState == .running ? "Pause" : "Play") {
                     runtimeConfigCoordinator.togglePausePlay()
                 }
                 .frame(minWidth: 64)
+                .buttonStyle(AppFramedButtonStyle())
                 .disabled(transportState == .stopped || (transportState == .paused && !validationReport.canStart))
 
                 Button("Stop") {
                     runtimeConfigCoordinator.stopSimulation()
                 }
+                .buttonStyle(AppFramedButtonStyle())
                 .disabled(transportState == .stopped)
+
+                Divider()
+                    .frame(height: 18)
+
+                AppIconButton(
+                    iconName: anyDockPanelsVisible ? "rectangle.split.3x1" : "rectangle.split.3x1.fill",
+                    helpText: anyDockPanelsVisible ? "Hide all dock panels" : "Show all dock panels"
+                ) {
+                    onToggleAllDockPanelsVisibility()
+                }
+
+                AppIconButton(
+                    iconName: "sidebar.left",
+                    helpText: leftPanelVisible ? "Hide left panel" : "Show left panel",
+                    isDimmed: leftPanelVisible
+                ) {
+                    onToggleLeftPanelVisibility()
+                }
+
+                AppIconButton(
+                    iconName: "sidebar.right",
+                    helpText: rightPanelVisible ? "Hide right panel" : "Show right panel",
+                    isDimmed: rightPanelVisible
+                ) {
+                    onToggleRightPanelVisibility()
+                }
+
+                AppIconButton(
+                    iconName: bottomPanelVisible ? "rectangle.topthird.inset.filled" : "rectangle.bottomthird.inset.filled",
+                    helpText: bottomPanelVisible ? "Hide bottom panel" : "Show bottom panel",
+                    isDimmed: bottomPanelVisible
+                ) {
+                    onToggleBottomPanelVisibility()
+                }
+
+                Divider()
+                    .frame(height: 18)
+
+                AppSwitchToggle(
+                    "Slow Rotation",
+                    isOn: Binding(
+                        get: { viewportStateStore.viewportState.slowRotationEnabled },
+                        set: { viewportStateStore.setSlowRotationEnabled($0) }
+                    ),
+                    helpText: viewportStateStore.viewportState.slowRotationEnabled ? "Disable slow rotation" : "Enable slow rotation"
+                )
 
                 Spacer()
 
@@ -1773,14 +1287,13 @@ private struct SimulationCenterPane: View {
             .padding(.vertical, 8)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
 
-            MetalViewportView(
+            SimulationViewportSurface(
                 session: session,
                 viewportStateStore: viewportStateStore,
                 transportState: transportState,
-                metricsEnabled: debugMetricsAreVisible,
+                viewportGeneration: viewportGeneration,
                 diagnosticsStore: diagnosticsStore
             )
-            .id(viewportGeneration)
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
             .overlay(
@@ -1800,12 +1313,43 @@ private struct SimulationCenterPane: View {
     }
 }
 
+private struct SimulationViewportSurface: View {
+    let session: SimulationSession
+    let viewportStateStore: MainWindowViewportStateStore
+    let transportState: SimulationTransportState
+    let viewportGeneration: Int
+    let diagnosticsStore: MainWindowDiagnosticsStore
+
+    var body: some View {
+        MetalViewportView(
+            session: session,
+            viewportStateStore: viewportStateStore,
+            transportState: transportState,
+            diagnosticsStore: diagnosticsStore
+        )
+        .id(viewportGeneration)
+        .transaction { transaction in
+            transaction.animation = nil
+            transaction.disablesAnimations = true
+        }
+    }
+}
+
 private struct ModuleSlotsPanel: View {
     @ObservedObject var editorSettingsStore: MainWindowEditorSettingsStore
-    let availableFiles: [ModuleFile]
-    let selectedFile: ModuleFile?
+    @ObservedObject var moduleCatalogStore: MainWindowModuleCatalogStore
+    @ObservedObject var chromeStateStore: MainWindowChromeStateStore
     @Binding var importerTargetKind: ModuleKind
     @Binding var isImporterPresented: Bool
+
+    private var availableFiles: [ModuleFile] {
+        moduleCatalogStore.availableFiles
+    }
+
+    private var selectedFile: ModuleFile? {
+        guard let selectedFileID = chromeStateStore.selectedFileID else { return nil }
+        return availableFiles.first(where: { $0.id == selectedFileID })
+    }
 
     var body: some View {
         VStack(spacing: 8) {
@@ -1835,17 +1379,21 @@ private struct ModuleSlotsPanel: View {
                                 .foregroundStyle(.secondary)
                         }
                         Spacer()
-                        if assigned != nil {
-                            Button("Clear") {
-                                editorSettingsStore.setAssignedModulePath(nil, for: kind)
+                        VStack(alignment: .trailing, spacing: 6) {
+                            if assigned != nil {
+                                Button("Clear") {
+                                    editorSettingsStore.setAssignedModulePath(nil, for: kind)
+                                }
+                                .font(.caption)
+                                .buttonStyle(AppFramedButtonStyle(.destructive))
+                            }
+                            Button("Choose File") {
+                                importerTargetKind = kind
+                                isImporterPresented = true
                             }
                             .font(.caption)
+                            .buttonStyle(AppFramedButtonStyle())
                         }
-                        Button("Choose File") {
-                            importerTargetKind = kind
-                            isImporterPresented = true
-                        }
-                        .font(.caption)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1872,10 +1420,18 @@ private struct ModuleSettingsPanelView: View {
     let kind: ModuleKind
     @ObservedObject var editorSettingsStore: MainWindowEditorSettingsStore
     @ObservedObject var physicsModuleSettingsStore: MainWindowPhysicsModuleSettingsStore
-    let availableFiles: [ModuleFile]
-    let transportState: SimulationTransportState
+    @ObservedObject var moduleCatalogStore: MainWindowModuleCatalogStore
+    @ObservedObject var runtimeConfigCoordinator: SimulationRuntimeConfigCoordinator
     let particleCountUICap: Int
     let particleCountEngineCap: Int
+
+    private var availableFiles: [ModuleFile] {
+        moduleCatalogStore.availableFiles
+    }
+
+    private var transportState: SimulationTransportState {
+        runtimeConfigCoordinator.transportState
+    }
 
     private var resolved: ModuleDescriptor {
         EditorViewSupport.resolvedModule(for: kind, store: editorSettingsStore, availableFiles: availableFiles)
@@ -1996,6 +1552,7 @@ private struct PhysicsSettingsPanel: View {
                 ),
                 range: 1...32,
                 step: 1,
+                tickBehavior: .visible,
                 valueText: { "\(Int($0.rounded()))" }
             )
             Picker("Movement", selection: .constant("slide")) {
@@ -2023,15 +1580,20 @@ private struct PhysicsSettingsPanel: View {
             EventuallyAppliedSlider(
                 title: "Time Scale",
                 appliedValue: Binding(
-                    get: { store.editorState.physicsState.timeScale },
+                    get: {
+                        TimeScaleControlMapping.controlValue(
+                            forRuntimeScale: store.editorState.physicsState.timeScale
+                        )
+                    },
                     set: {
                         var next = store.editorState.physicsState
-                        next.timeScale = $0
+                        next.timeScale = TimeScaleControlMapping.runtimeScale(forControlValue: $0)
                         store.setPhysicsState(next)
                     }
                 ),
-                range: 0...0.25,
-                step: 0.001,
+                range: TimeScaleControlMapping.sliderRange,
+                textEntryRange: TimeScaleControlMapping.textEntryRange,
+                step: TimeScaleControlMapping.sliderStep,
                 valueText: { String(format: "%.2fx", $0) }
             )
         }
@@ -2093,19 +1655,6 @@ private struct OptimizationSettingsPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            EventuallyAppliedSegmentedPicker(
-                title: "Blocking Mode",
-                appliedValue: Binding(
-                    get: { store.editorState.optimizationState.blockingMode },
-                    set: {
-                        var next = store.editorState.optimizationState
-                        next.blockingMode = $0
-                        store.setOptimizationState(next)
-                    }
-                ),
-                options: OptimizationBlockingMode.allCases,
-                optionTitle: { $0.title }
-            )
             EventuallyAppliedToggle(
                 title: "Leader Communication Log",
                 appliedValue: Binding(
@@ -2136,7 +1685,11 @@ private struct OptimizationSettingsPanel: View {
 }
 
 private struct LeaderCommunicationLogPanel: View {
-    let entries: [LeaderCommunicationLogEntry]
+    @ObservedObject var diagnosticsStore: MainWindowDiagnosticsStore
+
+    private var entries: [LeaderCommunicationLogEntry] {
+        diagnosticsStore.leaderCommunicationLogEntries
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -2155,7 +1708,7 @@ private struct LeaderCommunicationLogPanel: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("t=\(entry.recordedAt) target=\(entry.firstTargetIndex) interactions=\(entry.interactionCount)")
                                     .font(.caption.weight(.semibold))
-                                Text("workItems=\(entry.workItemStart)..<\(entry.workItemStart + entry.workItemCount) mode=\(entry.blockingMode.title)")
+                                Text("workItems=\(entry.workItemStart)..<\(entry.workItemStart + entry.workItemCount)")
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
                             }
@@ -2174,9 +1727,17 @@ private struct LeaderCommunicationLogPanel: View {
 
 private struct FileViewPanel: View {
     @ObservedObject var editorSettingsStore: MainWindowEditorSettingsStore
-    let availableFiles: [ModuleFile]
-    let selectedFile: ModuleFile?
-    let onRefresh: () -> Void
+    @ObservedObject var moduleCatalogStore: MainWindowModuleCatalogStore
+    @ObservedObject var chromeStateStore: MainWindowChromeStateStore
+
+    private var availableFiles: [ModuleFile] {
+        moduleCatalogStore.availableFiles
+    }
+
+    private var selectedFile: ModuleFile? {
+        guard let selectedFileID = chromeStateStore.selectedFileID else { return nil }
+        return availableFiles.first(where: { $0.id == selectedFileID })
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -2186,8 +1747,9 @@ private struct FileViewPanel: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                 Spacer()
-                Button("Refresh", action: onRefresh)
+                Button("Refresh", action: moduleCatalogStore.refresh)
                     .font(.caption2)
+                    .buttonStyle(AppFramedButtonStyle())
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
@@ -2203,16 +1765,25 @@ private struct FileViewPanel: View {
                                     .foregroundStyle(.secondary)
                             } else {
                                 ForEach(files) { file in
-                                    Text(file.url.lastPathComponent)
-                                        .font(.caption)
-                                        .lineLimit(1)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                        .padding(.horizontal, 8)
-                                        .padding(.vertical, 5)
-                                        .background(
-                                            RoundedRectangle(cornerRadius: 6)
-                                                .fill(Color(nsColor: .quaternaryLabelColor).opacity(0.09))
-                                        )
+                                    Button {
+                                        chromeStateStore.setSelectedFileID(file.id)
+                                    } label: {
+                                        Text(file.url.lastPathComponent)
+                                            .font(.caption)
+                                            .lineLimit(1)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 5)
+                                            .background(
+                                                RoundedRectangle(cornerRadius: 6)
+                                                    .fill(
+                                                        chromeStateStore.selectedFileID == file.id
+                                                            ? AppControlPalette.accent.opacity(0.18)
+                                                            : Color(nsColor: .quaternaryLabelColor).opacity(0.09)
+                                                    )
+                                            )
+                                    }
+                                    .buttonStyle(.plain)
                                 }
                             }
                         }
@@ -2232,11 +1803,13 @@ private struct FileViewPanel: View {
                             editorSettingsStore.setAssignedModulePath(selectedFile.url.path, for: selectedFile.kind)
                         }
                         .font(.caption)
+                        .buttonStyle(AppFramedButtonStyle())
                         if editorSettingsStore.assignedModulePath(for: selectedFile.kind) != nil {
                             Button("Clear \(selectedFile.kind.displayName)") {
                                 editorSettingsStore.setAssignedModulePath(nil, for: selectedFile.kind)
                             }
                             .font(.caption)
+                            .buttonStyle(AppFramedButtonStyle(.destructive))
                         }
                     }
                 }
@@ -2248,15 +1821,22 @@ private struct FileViewPanel: View {
 private struct InspectorPanel: View {
     @ObservedObject var interactionSnapshotRecorder: InteractionSnapshotRecorder
     @ObservedObject var performanceReviewLogger: PerformanceReviewLogger
-    let transportState: SimulationTransportState
-    let validationReport: RuntimeValidationReport
-    let performanceMetrics: SimulationPerformanceMetrics
-    let panelsCount: Int
-    let collapsedPanelsCount: Int
-    let debugMetricsAreVisible: Bool
-    let viewportRuntimeError: String?
+    @ObservedObject var runtimeConfigCoordinator: SimulationRuntimeConfigCoordinator
+    @ObservedObject var diagnosticsStore: MainWindowDiagnosticsStore
+    @ObservedObject var chromeStateStore: MainWindowChromeStateStore
     let onStartInteractionSnapshot: () -> Void
     let onSetPerformanceReviewLoggingEnabled: (Bool) -> Void
+
+    private var transportState: SimulationTransportState { runtimeConfigCoordinator.transportState }
+    private var validationReport: RuntimeValidationReport { runtimeConfigCoordinator.validationReport }
+    private var performanceMetrics: SimulationPerformanceMetrics { diagnosticsStore.performanceMetrics }
+    private var panelsCount: Int { chromeStateStore.panels.count }
+    private var collapsedPanelsCount: Int { chromeStateStore.collapsedPanelIDs.count }
+    private var debugMetricsAreVisible: Bool {
+        guard let inspectorPanel = chromeStateStore.panels.first(where: { $0.type == .inspector }) else { return false }
+        return !chromeStateStore.collapsedPanelIDs.contains(inspectorPanel.id)
+    }
+    private var viewportRuntimeError: String? { diagnosticsStore.viewportRuntimeError }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -2287,14 +1867,13 @@ private struct InspectorPanel: View {
             Text("Diagnostics")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
-            Toggle(
+            AppCheckboxToggle(
                 "Performance Review Logging",
                 isOn: Binding(
                     get: { performanceReviewLogger.isEnabled },
                     set: { onSetPerformanceReviewLoggingEnabled($0) }
                 )
             )
-            .font(.caption)
             Text(performanceReviewStatusText)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
@@ -2311,6 +1890,7 @@ private struct InspectorPanel: View {
                 onStartInteractionSnapshot()
             }
             .font(.caption)
+            .buttonStyle(AppFramedButtonStyle())
             .disabled(interactionSnapshotRecorder.isRecording)
             if let lastOutputPath = interactionSnapshotRecorder.lastOutputPath {
                 Text(lastOutputPath)

@@ -18,7 +18,6 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
     var spectrumOffset: Double
     var showOptimizationInfo: Bool
     var showLeaderCommunicationLog: Bool
-    var optimizationBlockingModeRawValue: String
     var protectLeaderFromUnload: Bool
     var assignedPhysicsModulePath: String?
     var assignedVisualModulePath: String?
@@ -37,7 +36,6 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
         spectrumOffset: 0.0,
         showOptimizationInfo: false,
         showLeaderCommunicationLog: false,
-        optimizationBlockingModeRawValue: OptimizationBlockingMode.fullBlocking.rawValue,
         protectLeaderFromUnload: true,
         assignedPhysicsModulePath: nil,
         assignedVisualModulePath: nil,
@@ -75,8 +73,7 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
 
     var optimizationState: OptimizationModuleState {
         OptimizationModuleState(
-            showLeaderCommunicationLog: showLeaderCommunicationLog,
-            blockingMode: OptimizationBlockingMode(rawValue: optimizationBlockingModeRawValue) ?? .fullBlocking
+            showLeaderCommunicationLog: showLeaderCommunicationLog
         )
     }
 
@@ -112,7 +109,6 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
             spectrumOffset: visualState.spectrumOffset,
             showOptimizationInfo: visualState.showOptimizationInfo,
             showLeaderCommunicationLog: optimizationState.showLeaderCommunicationLog,
-            optimizationBlockingModeRawValue: optimizationState.blockingMode.rawValue,
             protectLeaderFromUnload: debugSettings.protectLeaderFromUnload,
             assignedPhysicsModulePath: assignedModulePaths[Self.physicsModuleKey],
             assignedVisualModulePath: assignedModulePaths[Self.visualModuleKey],

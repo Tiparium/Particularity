@@ -15,6 +15,11 @@ struct TypeMatrixLocalPhysicsSettings: Codable, Equatable, Sendable {
     static let dampingStrengthUICap = 1.0
     static let momentumStrengthUICap = 1.0
     static let speedLimitUICap = 12.0
+    static let correctiveBehaviorBudgetSliderCap = 8_192
+    static let correctiveBehaviorBudgetHardCap = 65_535
+    static let teleportationAccumulationUICap = 1.0
+    static let teleportationRecoveryUICap = 2.0
+    static let teleportationMinimumDistanceUICapCentimeters = 100.0
 
     var innerRadiusCentimeters: Double = 2.5
     var middleRadiusCentimeters: Double = 1.5
@@ -30,6 +35,14 @@ struct TypeMatrixLocalPhysicsSettings: Codable, Equatable, Sendable {
     var momentumStrength: Double = momentumStrengthDefault
     var speedLimitEnabled = true
     var speedLimit: Double = speedLimitDefault
+    var teleportationEnabled = false
+    var teleportationGeneralInteractionBudget: Int = 48
+    var teleportationSelfInteractionBudgetLinked = true
+    var teleportationSelfInteractionBudget: Int = 48
+    var teleportationAccumulation: Double = 0.08
+    var teleportationRecoveryRate: Double = 0.18
+    var teleportationMinimumDistanceCentimeters: Double = 24.0
+    var interactionFuelEnabled = false
     var matrixValues: [Int] = TypeMatrixLocalPhysicsSettings.makeRandomMatrix()
     var regenerationNonce: UInt64 = 0
 
@@ -43,6 +56,10 @@ struct TypeMatrixLocalPhysicsSettings: Codable, Equatable, Sendable {
 
     var outerRadiusWorldUnits: Double {
         Self.worldUnits(fromCentimeters: outerRadiusCentimeters)
+    }
+
+    var teleportationMinimumDistanceWorldUnits: Double {
+        Self.worldUnits(fromCentimeters: teleportationMinimumDistanceCentimeters)
     }
 
     static func worldUnits(fromCentimeters centimeters: Double) -> Double {
@@ -105,6 +122,14 @@ struct TypeMatrixLocalPhysicsSettings: Codable, Equatable, Sendable {
         next.dampingStrength = min(max(0, next.dampingStrength), Self.dampingStrengthUICap)
         next.momentumStrength = min(max(0, next.momentumStrength), Self.momentumStrengthUICap)
         next.speedLimit = min(max(0, next.speedLimit), Self.speedLimitUICap)
+        next.teleportationGeneralInteractionBudget = min(max(0, next.teleportationGeneralInteractionBudget), Self.correctiveBehaviorBudgetHardCap)
+        next.teleportationSelfInteractionBudget = min(max(0, next.teleportationSelfInteractionBudget), Self.correctiveBehaviorBudgetHardCap)
+        next.teleportationAccumulation = min(max(0, next.teleportationAccumulation), Self.teleportationAccumulationUICap)
+        next.teleportationRecoveryRate = min(max(0, next.teleportationRecoveryRate), Self.teleportationRecoveryUICap)
+        next.teleportationMinimumDistanceCentimeters = min(
+            max(0, next.teleportationMinimumDistanceCentimeters),
+            Self.teleportationMinimumDistanceUICapCentimeters
+        )
         let requiredCount = Self.maxParticleTypes * Self.maxParticleTypes
         if next.matrixValues.count != requiredCount {
             var repaired = Array(next.matrixValues.prefix(requiredCount))
@@ -125,9 +150,14 @@ struct TypeMatrixLocalPhysicsSettings: Codable, Equatable, Sendable {
 
 extension MainWindowPhysicsModuleSettingsStore {
     func typeMatrixLocalSettings() -> TypeMatrixLocalPhysicsSettings {
+        typeMatrixLocalSettings(from: snapshot)
+    }
+
+    func typeMatrixLocalSettings(from snapshot: MainWindowPhysicsModuleSettingsSnapshot) -> TypeMatrixLocalPhysicsSettings {
         decodeSettings(
             for: TypeMatrixLocalPhysicsSettings.moduleName,
-            fallback: TypeMatrixLocalPhysicsSettings()
+            fallback: TypeMatrixLocalPhysicsSettings(),
+            from: snapshot
         ).sanitized()
     }
 
@@ -142,6 +172,17 @@ extension MainWindowPhysicsModuleSettingsStore {
             maximumValue: next.matrixMaximumValue
         )
         next.regenerationNonce &+= 1
+        InteractionSnapshotRecorder.shared.record(
+            event: "ui.regenerate_type_matrix",
+            details: [
+                "nonce": "\(next.regenerationNonce)",
+                "minimum": "\(next.matrixMinimumValue)",
+                "maximum": "\(next.matrixMaximumValue)",
+            ]
+        )
+        RuntimeEventLogger.log(
+            "type_matrix regenerate nonce=\(next.regenerationNonce) minimum=\(next.matrixMinimumValue) maximum=\(next.matrixMaximumValue)"
+        )
         setTypeMatrixLocalSettings(next)
     }
 

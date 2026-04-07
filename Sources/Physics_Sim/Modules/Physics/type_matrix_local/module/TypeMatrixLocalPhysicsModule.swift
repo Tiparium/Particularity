@@ -1,4 +1,19 @@
 import Foundation
+import simd
+
+struct TypeMatrixLocalSidecarState {
+    var teleportAccumulation: Float
+    var interactionFuel: Float
+    var reserved0: Float
+    var reserved1: Float
+
+    static let zero = TypeMatrixLocalSidecarState(
+        teleportAccumulation: 0,
+        interactionFuel: 0,
+        reserved0: 0,
+        reserved1: 0
+    )
+}
 
 enum TypeMatrixLocalPhysicsModuleRuntime {
     static func generateInteractionMatrix(

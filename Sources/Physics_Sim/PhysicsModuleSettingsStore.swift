@@ -22,6 +22,14 @@ final class MainWindowPhysicsModuleSettingsStore: ObservableObject {
     }
 
     func decodeSettings<T: Codable>(for moduleName: String, fallback: T) -> T {
+        decodeSettings(for: moduleName, fallback: fallback, from: snapshot)
+    }
+
+    func decodeSettings<T: Codable>(
+        for moduleName: String,
+        fallback: T,
+        from snapshot: MainWindowPhysicsModuleSettingsSnapshot
+    ) -> T {
         guard let blob = snapshot.blobsByModuleName[moduleName],
               let data = blob.data(using: .utf8),
               let decoded = try? decoder.decode(T.self, from: data) else {

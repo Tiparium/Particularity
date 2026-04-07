@@ -297,7 +297,6 @@ struct MetalViewportView: NSViewRepresentable {
     let session: SimulationSession
     let viewportStateStore: MainWindowViewportStateStore
     let transportState: SimulationTransportState
-    let metricsEnabled: Bool
     let diagnosticsStore: MainWindowDiagnosticsStore
 
     func makeCoordinator() -> MetalViewportCoordinator {
@@ -346,7 +345,6 @@ struct MetalViewportView: NSViewRepresentable {
         context.coordinator.errorSink = { [weak diagnosticsStore] error in
             diagnosticsStore?.updateViewportRuntimeError(error)
         }
-        renderer.setMetricsEnabled(metricsEnabled)
         metalView.delegate = renderer
         metalView.inputDelegate = context.coordinator
 
@@ -387,7 +385,6 @@ struct MetalViewportView: NSViewRepresentable {
             }
             context.coordinator.lastAppliedTransportState = transportState
         }
-        context.coordinator.renderer?.setMetricsEnabled(metricsEnabled)
     }
 
     static func dismantleNSView(_ nsView: NSView, coordinator: MetalViewportCoordinator) {

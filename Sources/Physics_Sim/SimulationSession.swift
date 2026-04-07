@@ -53,7 +53,6 @@ final class SimulationSession {
     private var currentSimulationState: SimulationViewportState
     private var activeModules: ActiveModuleSet
     private var typeMatrixLocalSettings = TypeMatrixLocalPhysicsSettings()
-    private var metricsEnabled = true
     private var lifecycleState: LifecycleState = .active
     private var suspensionStartedAt: TimeInterval?
     private var suspendTimeoutWorkItem: DispatchWorkItem?
@@ -164,13 +163,16 @@ final class SimulationSession {
         try runtime?.updateActiveModules(nextModules)
     }
 
-    func setMetricsEnabled(_ enabled: Bool) {
-        metricsEnabled = enabled
-        runtime?.setMetricsEnabled(enabled)
-    }
-
     func updateTypeMatrixLocalSettings(_ nextSettings: TypeMatrixLocalPhysicsSettings) {
         typeMatrixLocalSettings = nextSettings
+        InteractionSnapshotRecorder.shared.record(
+            event: "session.update_type_matrix_settings",
+            details: [
+                "nonce": "\(nextSettings.regenerationNonce)",
+                "minimum": "\(nextSettings.matrixMinimumValue)",
+                "maximum": "\(nextSettings.matrixMaximumValue)",
+            ]
+        )
         runtime?.updateTypeMatrixLocalSettings(nextSettings)
     }
 
@@ -303,7 +305,6 @@ final class SimulationSession {
         guard let runtime else { return }
         try runtime.updateActiveModules(activeModules)
         runtime.updateTypeMatrixLocalSettings(typeMatrixLocalSettings)
-        runtime.setMetricsEnabled(metricsEnabled)
         runtime.updateSimulationState(currentSimulationState)
     }
 }
@@ -313,12 +314,17 @@ final class WindowSimulationSessionStore {
     static let shared = WindowSimulationSessionStore()
 
     private var mainSession: SimulationSession?
+    private let mainChromeStateStore = MainWindowChromeStateStore.shared
     private let mainEditorSettingsStore = MainWindowEditorSettingsStore.shared
     private let mainViewportStateStore = MainWindowViewportStateStore.shared
     private let mainPhysicsModuleSettingsStore = MainWindowPhysicsModuleSettingsStore.shared
     private let mainModuleCatalogStore = MainWindowModuleCatalogStore.shared
     private let mainDiagnosticsStore = MainWindowDiagnosticsStore.shared
     private var mainRuntimeConfigCoordinator: SimulationRuntimeConfigCoordinator?
+
+    func mainWindowChromeStateStore() -> MainWindowChromeStateStore {
+        mainChromeStateStore
+    }
 
     func mainWindowEditorSettingsStore() -> MainWindowEditorSettingsStore {
         mainEditorSettingsStore

@@ -31,7 +31,6 @@ private struct PerformanceReviewSettingsPayload: Equatable {
     let sphereSize: Double
     let spectrumOffset: Double
     let showOptimizationInfo: Bool
-    let blockingMode: String
     let showLeaderCommunicationLog: Bool
     let protectLeaderFromUnload: Bool
 }
@@ -108,7 +107,6 @@ private extension PerformanceReviewSettingsPayload {
         "sphereSize=\(Self.format(sphereSize)) " +
         "spectrumOffset=\(Self.format(spectrumOffset)) " +
         "optimizationInfo=\(showOptimizationInfo) " +
-        "blocking=\(blockingMode) " +
         "leaderLog=\(showLeaderCommunicationLog) " +
         "protectLeader=\(protectLeaderFromUnload)"
     }
@@ -148,7 +146,6 @@ struct PerformanceReviewSample: Codable {
     let sphereSize: Double
     let spectrumOffset: Double
     let showOptimizationInfo: Bool
-    let blockingMode: String
     let showLeaderCommunicationLog: Bool
     let protectLeaderFromUnload: Bool
     let projectedBytes: UInt64
@@ -170,7 +167,6 @@ struct PerformanceReviewSample: Codable {
             sphereSize: sphereSize,
             spectrumOffset: spectrumOffset,
             showOptimizationInfo: showOptimizationInfo,
-            blockingMode: blockingMode,
             showLeaderCommunicationLog: showLeaderCommunicationLog,
             protectLeaderFromUnload: protectLeaderFromUnload
         )

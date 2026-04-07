@@ -34,6 +34,9 @@ spinner_until_pattern_or_exit() {
   local logfile="$2"
   local pattern="$3"
   local label="$4"
+  local timeout_seconds="${5:-20}"
+  local start_time
+  start_time="$(date +%s)"
   local i=0
   local frames=('|' '/' '-' '\')
   local use_animated=0
@@ -49,6 +52,16 @@ spinner_until_pattern_or_exit() {
         printf "[PASS] %s\n" "$label"
       fi
       return 0
+    fi
+    local now
+    now="$(date +%s)"
+    if (( now - start_time >= timeout_seconds )); then
+      if [[ "$use_animated" -eq 1 ]]; then
+        finish_progress_line "[WARN]" "$label (timed out waiting for ready signal)"
+      else
+        printf "[WARN] %s\n" "$(progress_label "$label timed out")" >&2
+      fi
+      return 1
     fi
     if [[ "$use_animated" -eq 1 ]]; then
       local frame="${frames[$((i % ${#frames[@]}))]}"
@@ -176,9 +189,17 @@ case "$subcmd" in
 
     "$ROOT_DIR/.build/debug/Particularity" >"$tmp_log" 2>&1 &
     app_pid=$!
-    spinner_until_pattern_or_exit "$app_pid" "$tmp_log" "APP_READY" "Launching UI"
+    if ! spinner_until_pattern_or_exit "$app_pid" "$tmp_log" "APP_READY" "Launching UI" 20; then
+      if [[ -s "$tmp_log" ]]; then
+        cat "$tmp_log" >&2
+      fi
+      cleanup_particles
+      exit 1
+    fi
+    set +e
     wait "$app_pid"
     status=$?
+    set -e
     if [[ $status -ne 0 && -s "$tmp_log" ]]; then
       cat "$tmp_log" >&2
     fi

@@ -57,6 +57,7 @@ struct TypeMatrixLocalPhysicsModuleSettingsPanel: View {
                 ),
                 range: 1...Double(TypeMatrixLocalPhysicsSettings.maxParticleTypes),
                 step: 1,
+                tickBehavior: .visible,
                 valueText: { "\(Int($0.rounded()))" }
             )
             EventuallyAppliedSlider(
@@ -114,6 +115,7 @@ struct TypeMatrixLocalPhysicsModuleSettingsPanel: View {
                 ),
                 range: Double(-TypeMatrixLocalPhysicsSettings.matrixValueUICapMagnitude)...Double(TypeMatrixLocalPhysicsSettings.matrixValueUICapMagnitude),
                 step: 1,
+                tickBehavior: .visible,
                 valueText: { "\(Int($0.rounded()))" }
             )
             EventuallyAppliedSlider(
@@ -129,6 +131,7 @@ struct TypeMatrixLocalPhysicsModuleSettingsPanel: View {
                 ),
                 range: Double(-TypeMatrixLocalPhysicsSettings.matrixValueUICapMagnitude)...Double(TypeMatrixLocalPhysicsSettings.matrixValueUICapMagnitude),
                 step: 1,
+                tickBehavior: .visible,
                 valueText: { "\(Int($0.rounded()))" }
             )
             EventuallyAppliedSlider(
@@ -240,18 +243,27 @@ struct TypeMatrixLocalPhysicsModuleSettingsPanel: View {
                     physicsModuleSettingsStore.setTypeMatrixLocalSettings(next)
                 }
             )
+            TypeMatrixCorrectiveBehaviorSection(
+                settings: settings,
+                physicsModuleSettingsStore: physicsModuleSettingsStore
+            )
             EventuallyAppliedSlider(
                 title: "Time Scale",
                 appliedValue: Binding(
-                    get: { store.editorState.physicsState.timeScale },
+                    get: {
+                        TimeScaleControlMapping.controlValue(
+                            forRuntimeScale: store.editorState.physicsState.timeScale
+                        )
+                    },
                     set: {
                         var next = store.editorState.physicsState
-                        next.timeScale = $0
+                        next.timeScale = TimeScaleControlMapping.runtimeScale(forControlValue: $0)
                         store.setPhysicsState(next)
                     }
                 ),
-                range: 0...4,
-                step: 0.01,
+                range: TimeScaleControlMapping.sliderRange,
+                textEntryRange: TimeScaleControlMapping.textEntryRange,
+                step: TimeScaleControlMapping.sliderStep,
                 valueText: { String(format: "%.2fx", $0) }
             )
             EventuallyAppliedToggle(
@@ -269,7 +281,7 @@ struct TypeMatrixLocalPhysicsModuleSettingsPanel: View {
             Button("Regenerate Matrix") {
                 physicsModuleSettingsStore.regenerateTypeMatrix()
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(AppFramedButtonStyle(.prominent))
 
             VStack(alignment: .leading, spacing: 4) {
                 Text("Simulation space is treated as a 1 meter cube. Radius controls are expressed in centimeters and capped to 12 cm in the UI.")
@@ -290,6 +302,187 @@ struct TypeMatrixLocalPhysicsModuleSettingsPanel: View {
     }
 }
 
+private struct TypeMatrixCorrectiveBehaviorSection: View {
+    let settings: TypeMatrixLocalPhysicsSettings
+    @ObservedObject var physicsModuleSettingsStore: MainWindowPhysicsModuleSettingsStore
+    @State private var teleportationExpanded = false
+    @State private var interactionFuelExpanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Corrective Behaviors")
+                .font(.caption.weight(.semibold))
+
+            TypeMatrixSubBehaviorGroup(
+                title: "Teleportation Escape",
+                enabledValue: Binding(
+                    get: { settings.teleportationEnabled },
+                    set: {
+                        var next = settings
+                        next.teleportationEnabled = $0
+                        physicsModuleSettingsStore.setTypeMatrixLocalSettings(next)
+                        if $0 { teleportationExpanded = true }
+                    }
+                ),
+                isExpanded: $teleportationExpanded
+            ) {
+                EventuallyAppliedIntSlider(
+                    title: "General Interaction Budget",
+                    appliedValue: Binding(
+                        get: { settings.teleportationGeneralInteractionBudget },
+                        set: {
+                            var next = settings
+                            next.teleportationGeneralInteractionBudget = $0
+                            if next.teleportationSelfInteractionBudgetLinked {
+                                next.teleportationSelfInteractionBudget = $0
+                            }
+                            physicsModuleSettingsStore.setTypeMatrixLocalSettings(next)
+                        }
+                    ),
+                    range: 0...TypeMatrixLocalPhysicsSettings.correctiveBehaviorBudgetSliderCap,
+                    textEntryRange: 0...TypeMatrixLocalPhysicsSettings.correctiveBehaviorBudgetHardCap,
+                    helpText: "Slider range: 0-\(TypeMatrixLocalPhysicsSettings.correctiveBehaviorBudgetSliderCap.formatted()). Manual entry can go up to \(TypeMatrixLocalPhysicsSettings.correctiveBehaviorBudgetHardCap.formatted()). Only meaningful non-self interactions count toward this budget."
+                )
+
+                EventuallyAppliedToggle(
+                    title: "Link Self-Type Budget To General",
+                    appliedValue: Binding(
+                        get: { settings.teleportationSelfInteractionBudgetLinked },
+                        set: {
+                            var next = settings
+                            next.teleportationSelfInteractionBudgetLinked = $0
+                            if $0 {
+                                next.teleportationSelfInteractionBudget = next.teleportationGeneralInteractionBudget
+                            }
+                            physicsModuleSettingsStore.setTypeMatrixLocalSettings(next)
+                        }
+                    )
+                )
+
+                EventuallyAppliedIntSlider(
+                    title: "Self-Type Interaction Budget",
+                    appliedValue: Binding(
+                        get: {
+                            settings.teleportationSelfInteractionBudgetLinked
+                                ? settings.teleportationGeneralInteractionBudget
+                                : settings.teleportationSelfInteractionBudget
+                        },
+                        set: {
+                            var next = settings
+                            next.teleportationSelfInteractionBudget = $0
+                            physicsModuleSettingsStore.setTypeMatrixLocalSettings(next)
+                        }
+                    ),
+                    range: 0...TypeMatrixLocalPhysicsSettings.correctiveBehaviorBudgetSliderCap,
+                    textEntryRange: 0...TypeMatrixLocalPhysicsSettings.correctiveBehaviorBudgetHardCap,
+                    helpText: "Slider range: 0-\(TypeMatrixLocalPhysicsSettings.correctiveBehaviorBudgetSliderCap.formatted()). Manual entry can go up to \(TypeMatrixLocalPhysicsSettings.correctiveBehaviorBudgetHardCap.formatted()). Only same-type interactions count toward this budget."
+                )
+                .disabled(settings.teleportationSelfInteractionBudgetLinked)
+
+                EventuallyAppliedSlider(
+                    title: "Teleport Accumulation",
+                    appliedValue: Binding(
+                        get: { settings.teleportationAccumulation },
+                        set: {
+                            var next = settings
+                            next.teleportationAccumulation = $0
+                            physicsModuleSettingsStore.setTypeMatrixLocalSettings(next)
+                        }
+                    ),
+                    range: 0...TypeMatrixLocalPhysicsSettings.teleportationAccumulationUICap,
+                    step: 0.01,
+                    valueText: { String(format: "%.2f", $0) }
+                )
+
+                EventuallyAppliedSlider(
+                    title: "Teleport Recovery",
+                    appliedValue: Binding(
+                        get: { settings.teleportationRecoveryRate },
+                        set: {
+                            var next = settings
+                            next.teleportationRecoveryRate = $0
+                            physicsModuleSettingsStore.setTypeMatrixLocalSettings(next)
+                        }
+                    ),
+                    range: 0...TypeMatrixLocalPhysicsSettings.teleportationRecoveryUICap,
+                    step: 0.01,
+                    valueText: { String(format: "%.2f", $0) }
+                )
+
+                EventuallyAppliedSlider(
+                    title: "Teleport Minimum Distance",
+                    appliedValue: Binding(
+                        get: { settings.teleportationMinimumDistanceCentimeters },
+                        set: {
+                            var next = settings
+                            next.teleportationMinimumDistanceCentimeters = $0
+                            physicsModuleSettingsStore.setTypeMatrixLocalSettings(next)
+                        }
+                    ),
+                    range: 0...TypeMatrixLocalPhysicsSettings.teleportationMinimumDistanceUICapCentimeters,
+                    step: 1,
+                    valueText: { String(format: "%.0f cm", $0) }
+                )
+            }
+
+            TypeMatrixSubBehaviorGroup(
+                title: "Interaction Fuel",
+                enabledValue: Binding(
+                    get: { settings.interactionFuelEnabled },
+                    set: {
+                        var next = settings
+                        next.interactionFuelEnabled = $0
+                        physicsModuleSettingsStore.setTypeMatrixLocalSettings(next)
+                        if $0 { interactionFuelExpanded = true }
+                    }
+                ),
+                isExpanded: $interactionFuelExpanded
+            ) {
+                Text("Interaction fuel is only a toggle shell in this pass.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 2)
+        .onAppear {
+            teleportationExpanded = settings.teleportationEnabled
+            interactionFuelExpanded = settings.interactionFuelEnabled
+        }
+    }
+}
+
+private struct TypeMatrixSubBehaviorGroup<Content: View>: View {
+    let title: String
+    let enabledValue: Binding<Bool>
+    @Binding var isExpanded: Bool
+    @ViewBuilder let content: Content
+
+    init(
+        title: String,
+        enabledValue: Binding<Bool>,
+        isExpanded: Binding<Bool>,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.title = title
+        self.enabledValue = enabledValue
+        self._isExpanded = isExpanded
+        self.content = content()
+    }
+
+    var body: some View {
+        ExpandableSettingsSection(
+            title: title,
+            isExpanded: $isExpanded,
+            accessory: {
+                AppCheckboxToggle(isOn: enabledValue, helpText: enabledValue.wrappedValue ? "Disable \(title)" : "Enable \(title)")
+            },
+            content: {
+                content
+            }
+        )
+    }
+}
+
 private struct TypeMatrixBehaviorControlRow: View {
     let title: String
     let enabledValue: Binding<Bool>
@@ -305,11 +498,9 @@ private struct TypeMatrixBehaviorControlRow: View {
                 Text(title)
                     .font(.caption.weight(.semibold))
                 Spacer()
-                Toggle("Enabled", isOn: enabledValue)
-                    .labelsHidden()
-                    .toggleStyle(.switch)
+                AppCheckboxToggle(isOn: enabledValue, helpText: enabledValue.wrappedValue ? "Disable \(title)" : "Enable \(title)")
                 Button("Default", action: resetToDefault)
-                    .buttonStyle(.bordered)
+                    .buttonStyle(AppFramedButtonStyle())
                     .controlSize(.small)
             }
             EventuallyAppliedSlider(

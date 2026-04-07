@@ -47,6 +47,12 @@ private struct TypeMatrixPhysicsAccumulateParams {
     var repulsionMultiplier: Float
     var interactionTraversalMode: UInt32
     var matrixSideLength: UInt32
+    var teleportationEnabled: UInt32
+    var teleportationGeneralBudget: UInt32
+    var teleportationSelfBudget: UInt32
+    var teleportationSelfBudgetLinked: UInt32
+    var teleportationAccumulation: Float
+    var teleportationRecoveryRate: Float
 }
 
 private struct TypeMatrixPhysicsApplyParams {
@@ -58,6 +64,8 @@ private struct TypeMatrixPhysicsApplyParams {
     var dampingStrength: Float
     var momentumStrength: Float
     var speedLimit: Float
+    var teleportationEnabled: UInt32
+    var teleportationMinimumDistance: Float
 }
 
 private struct TemplatePhysicsAccumulateParams {
@@ -135,6 +143,8 @@ final class SimulationRuntime: @unchecked Sendable {
     private var interactionIndicesBuffer: MTLBuffer?
     private var interactionTraversalMode: DefaultOptimizationModuleRuntime.InteractionTraversalMode = .canonicalRange
     private var typeMatrixInteractionBuffer: MTLBuffer?
+    private var typeMatrixSidecarFrontBuffer: MTLBuffer?
+    private var typeMatrixSidecarBackBuffer: MTLBuffer?
     private var debugLineBuffer: MTLBuffer?
     private var debugLineSegmentBuffer: MTLBuffer?
     private var activeParticleCount = 0
@@ -142,7 +152,6 @@ final class SimulationRuntime: @unchecked Sendable {
     private var debugHistory = SimulationDebugHistory(historyCapacity: 8, visibilityDuration: 0.11)
     private var leaderCommunicationLogEntries: [LeaderCommunicationLogEntry] = []
     private var needsParticleRebuild = true
-    private var metricsEnabled = true
     private var typeMatrixLocalSettings = TypeMatrixLocalPhysicsSettings()
     private var currentSimulationState = SimulationViewportState(
         transportState: .stopped,
@@ -155,8 +164,7 @@ final class SimulationRuntime: @unchecked Sendable {
         sphereSize: 0.025,
         spectrumOffset: 0.0,
         showOptimizationInfo: false,
-        showLeaderCommunicationLog: false,
-        optimizationBlockingMode: .fullBlocking
+        showLeaderCommunicationLog: false
     )
     private var activeModules = ActiveModuleSet(
         physics: ModuleCatalog.defaultPhysics,
@@ -182,8 +190,7 @@ final class SimulationRuntime: @unchecked Sendable {
         sphereSize: 0.025,
         spectrumOffset: 0.0,
         showOptimizationInfo: false,
-        showLeaderCommunicationLog: false,
-        optimizationBlockingMode: .fullBlocking
+        showLeaderCommunicationLog: false
     )
 
     private var metricsAccumulator = SimulationMetricsAccumulator(sampleWindowSeconds: 3.0, publishInterval: 0.25)
@@ -278,18 +285,12 @@ final class SimulationRuntime: @unchecked Sendable {
         return simulationStateSnapshot
     }
 
-    func setMetricsEnabled(_ enabled: Bool) {
-        simulationQueue.async {
-            self.metricsEnabled = enabled
-            if !enabled {
-                self.metricsAccumulator.reset()
-            }
-        }
-    }
-
     func updateTypeMatrixLocalSettings(_ nextSettings: TypeMatrixLocalPhysicsSettings) {
         simulationQueue.async {
             self.typeMatrixLocalSettings = nextSettings
+            RuntimeEventLogger.log(
+                "type_matrix runtime_update nonce=\(nextSettings.regenerationNonce) transport=\(self.currentSimulationState.transportState.rawValue) active=\(self.isTypeMatrixPhysicsActive)"
+            )
             guard self.currentSimulationState.transportState != .stopped,
                   self.isTypeMatrixPhysicsActive else {
                 return
@@ -437,7 +438,6 @@ final class SimulationRuntime: @unchecked Sendable {
 
     func publishFrameMetrics(averageFPS: Double, at now: TimeInterval) {
         simulationQueue.async {
-            guard self.metricsEnabled else { return }
             guard let metrics = self.metricsAccumulator.metricsIfDue(averageFPS: averageFPS, now: now) else { return }
 
             Task { @MainActor in
@@ -482,6 +482,8 @@ final class SimulationRuntime: @unchecked Sendable {
         interactionOffsetsBuffer = nil
         interactionIndicesBuffer = nil
         typeMatrixInteractionBuffer = nil
+        typeMatrixSidecarFrontBuffer = nil
+        typeMatrixSidecarBackBuffer = nil
         debugLineBuffer = nil
         debugLineSegmentBuffer = nil
         activeParticleCount = 0
@@ -577,7 +579,7 @@ final class SimulationRuntime: @unchecked Sendable {
             publishLeaderCommunicationLog()
         }
 
-        if metricsEnabled, leaderInteractionCount > 0 {
+        if leaderInteractionCount > 0 {
             metricsAccumulator.recordLeaderInteractions(leaderInteractionCount, at: now)
         }
 
@@ -615,6 +617,12 @@ final class SimulationRuntime: @unchecked Sendable {
                 physicsEncoder.endEncoding()
                 return
             }
+            guard let sidecarFrontBuffer = typeMatrixSidecarFrontBuffer,
+                  let sidecarBackBuffer = typeMatrixSidecarBackBuffer else {
+                zeroParticleImpulseChannel()
+                physicsEncoder.endEncoding()
+                return
+            }
 
             physicsEncoder.setComputePipelineState(typeMatrixPhysicsAccumulatePipeline)
             physicsEncoder.setBuffer(sourceParticleBuffer, offset: 0, index: 0)
@@ -622,6 +630,8 @@ final class SimulationRuntime: @unchecked Sendable {
             physicsEncoder.setBuffer(interactionOffsetsBuffer, offset: 0, index: 2)
             physicsEncoder.setBuffer(interactionIndicesBuffer, offset: 0, index: 3)
             physicsEncoder.setBuffer(typeMatrixInteractionBuffer, offset: 0, index: 4)
+            physicsEncoder.setBuffer(sidecarFrontBuffer, offset: 0, index: 5)
+            physicsEncoder.setBuffer(sidecarBackBuffer, offset: 0, index: 6)
             var params = TypeMatrixPhysicsAccumulateParams(
                 particleCount: UInt32(activeParticleCount),
                 particleTypeCount: UInt32(max(1, currentSimulationState.particleTypes)),
@@ -631,9 +641,17 @@ final class SimulationRuntime: @unchecked Sendable {
                 attractionMultiplier: Float(typeMatrixLocalSettings.attractionMultiplier),
                 repulsionMultiplier: Float(typeMatrixLocalSettings.repulsionMultiplier),
                 interactionTraversalMode: interactionTraversalMode.rawValue,
-                matrixSideLength: UInt32(TypeMatrixLocalPhysicsSettings.maxParticleTypes)
+                matrixSideLength: UInt32(TypeMatrixLocalPhysicsSettings.maxParticleTypes),
+                teleportationEnabled: typeMatrixLocalSettings.teleportationEnabled ? 1 : 0,
+                teleportationGeneralBudget: UInt32(typeMatrixLocalSettings.teleportationGeneralInteractionBudget),
+                teleportationSelfBudget: UInt32(typeMatrixLocalSettings.teleportationSelfInteractionBudgetLinked
+                    ? typeMatrixLocalSettings.teleportationGeneralInteractionBudget
+                    : typeMatrixLocalSettings.teleportationSelfInteractionBudget),
+                teleportationSelfBudgetLinked: typeMatrixLocalSettings.teleportationSelfInteractionBudgetLinked ? 1 : 0,
+                teleportationAccumulation: Float(typeMatrixLocalSettings.teleportationAccumulation),
+                teleportationRecoveryRate: Float(typeMatrixLocalSettings.teleportationRecoveryRate)
             )
-            physicsEncoder.setBytes(&params, length: MemoryLayout<TypeMatrixPhysicsAccumulateParams>.stride, index: 5)
+            physicsEncoder.setBytes(&params, length: MemoryLayout<TypeMatrixPhysicsAccumulateParams>.stride, index: 7)
             let threadsPerGroup = MTLSize(
                 width: min(typeMatrixPhysicsAccumulatePipeline.maxTotalThreadsPerThreadgroup, physicsThreadsPerGroup),
                 height: 1,
@@ -698,9 +716,14 @@ final class SimulationRuntime: @unchecked Sendable {
         now: TimeInterval
     ) {
         if isTypeMatrixPhysicsActive {
+            guard let typeMatrixSidecarBackBuffer else {
+                physicsEncoder.endEncoding()
+                return
+            }
             physicsEncoder.setComputePipelineState(typeMatrixPhysicsApplyPipeline)
             physicsEncoder.setBuffer(sourceParticleBuffer, offset: 0, index: 0)
             physicsEncoder.setBuffer(destinationParticleBuffer, offset: 0, index: 1)
+            physicsEncoder.setBuffer(typeMatrixSidecarBackBuffer, offset: 0, index: 2)
             var params = TypeMatrixPhysicsApplyParams(
                 particleCount: UInt32(activeParticleCount),
                 deltaTime: fixedTimeStep * currentSimulationState.timeScale,
@@ -709,9 +732,11 @@ final class SimulationRuntime: @unchecked Sendable {
                 speedLimitEnabled: typeMatrixLocalSettings.speedLimitEnabled ? 1 : 0,
                 dampingStrength: Float(typeMatrixLocalSettings.dampingStrength),
                 momentumStrength: Float(typeMatrixLocalSettings.momentumStrength),
-                speedLimit: Float(typeMatrixLocalSettings.speedLimit)
+                speedLimit: Float(typeMatrixLocalSettings.speedLimit),
+                teleportationEnabled: typeMatrixLocalSettings.teleportationEnabled ? 1 : 0,
+                teleportationMinimumDistance: Float(typeMatrixLocalSettings.teleportationMinimumDistanceWorldUnits)
             )
-            physicsEncoder.setBytes(&params, length: MemoryLayout<TypeMatrixPhysicsApplyParams>.stride, index: 2)
+            physicsEncoder.setBytes(&params, length: MemoryLayout<TypeMatrixPhysicsApplyParams>.stride, index: 3)
             let threadsPerGroup = MTLSize(
                 width: min(typeMatrixPhysicsApplyPipeline.maxTotalThreadsPerThreadgroup, physicsThreadsPerGroup),
                 height: 1,
@@ -763,9 +788,7 @@ final class SimulationRuntime: @unchecked Sendable {
             physicsEncoder.dispatchThreads(threadCount, threadsPerThreadgroup: threadsPerGroup)
             physicsEncoder.endEncoding()
         }
-        if metricsEnabled {
-            metricsAccumulator.recordPhysicsStep(at: now)
-        }
+        metricsAccumulator.recordPhysicsStep(at: now)
     }
 
     private func appendLeaderCommunicationLogEntry(
@@ -780,8 +803,7 @@ final class SimulationRuntime: @unchecked Sendable {
             firstTargetIndex: firstTargetIndex,
             interactionCount: interactionCount,
             workItemStart: startWorkItem,
-            workItemCount: workItemCount,
-            blockingMode: currentSimulationState.optimizationBlockingMode
+            workItemCount: workItemCount
         )
         leaderCommunicationLogEntries.append(entry)
         if leaderCommunicationLogEntries.count > 160 {
@@ -835,6 +857,24 @@ final class SimulationRuntime: @unchecked Sendable {
             particleBackBuffer = existing
         } else {
             particleBackBuffer = device.makeBuffer(bytes: particles, length: particleLength)
+        }
+
+        let sidecarLength = max(1, MemoryLayout<TypeMatrixLocalSidecarState>.stride * particles.count)
+        let zeroSidecar = Array(repeating: TypeMatrixLocalSidecarState.zero, count: particles.count)
+        if let existing = typeMatrixSidecarFrontBuffer, existing.length >= sidecarLength {
+            let pointer = existing.contents().bindMemory(to: TypeMatrixLocalSidecarState.self, capacity: particles.count)
+            pointer.update(from: zeroSidecar, count: particles.count)
+            typeMatrixSidecarFrontBuffer = existing
+        } else {
+            typeMatrixSidecarFrontBuffer = device.makeBuffer(bytes: zeroSidecar, length: sidecarLength)
+        }
+
+        if let existing = typeMatrixSidecarBackBuffer, existing.length >= sidecarLength {
+            let pointer = existing.contents().bindMemory(to: TypeMatrixLocalSidecarState.self, capacity: particles.count)
+            pointer.update(from: zeroSidecar, count: particles.count)
+            typeMatrixSidecarBackBuffer = existing
+        } else {
+            typeMatrixSidecarBackBuffer = device.makeBuffer(bytes: zeroSidecar, length: sidecarLength)
         }
 
         let offsetsLength = max(1, MemoryLayout<UInt32>.stride * interactionPlan.offsets.count)
@@ -941,6 +981,10 @@ final class SimulationRuntime: @unchecked Sendable {
         let previousFront = particleFrontBuffer
         particleFrontBuffer = particleBackBuffer
         particleBackBuffer = previousFront
+
+        let previousTypeMatrixSidecarFront = typeMatrixSidecarFrontBuffer
+        typeMatrixSidecarFrontBuffer = typeMatrixSidecarBackBuffer
+        typeMatrixSidecarBackBuffer = previousTypeMatrixSidecarFront
     }
 
     private var isTypeMatrixPhysicsActive: Bool {
@@ -954,12 +998,8 @@ final class SimulationRuntime: @unchecked Sendable {
     private func uploadTypeMatrixInteractionBuffer(from sourceMatrix: [Int]) {
         let matrix = sourceMatrix.map(Int32.init)
         let length = max(1, MemoryLayout<Int32>.stride * matrix.count)
-        if let existing = typeMatrixInteractionBuffer, existing.length >= length {
-            let pointer = existing.contents().bindMemory(to: Int32.self, capacity: matrix.count)
-            pointer.update(from: matrix, count: matrix.count)
-            typeMatrixInteractionBuffer = existing
-        } else {
-            typeMatrixInteractionBuffer = device.makeBuffer(bytes: matrix, length: length)
-        }
+        // Never mutate the live GPU matrix buffer in place. Swapping in a fresh buffer
+        // lets in-flight command buffers keep their old snapshot safely.
+        typeMatrixInteractionBuffer = device.makeBuffer(bytes: matrix, length: length)
     }
 }

@@ -25,8 +25,7 @@ enum SimulationConfigurationDerivation {
                 editorState: editorState,
                 availableFiles: availableFiles
             ) && editorState.visualState.showOptimizationInfo,
-            showLeaderCommunicationLog: editorState.optimizationState.showLeaderCommunicationLog,
-            optimizationBlockingMode: editorState.optimizationState.blockingMode
+            showLeaderCommunicationLog: editorState.optimizationState.showLeaderCommunicationLog
         )
     }
 
