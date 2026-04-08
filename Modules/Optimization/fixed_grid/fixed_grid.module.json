@@ -1,5 +1,5 @@
 {
-  "name": "UniformGrid",
+  "name": "Fixed Grid Optimization Module",
   "kind": "optimization",
   "version": 1
 }

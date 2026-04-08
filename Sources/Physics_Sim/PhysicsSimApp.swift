@@ -184,6 +184,27 @@ struct PhysicsSimApp: App {
                                 userInfo: [AppMenuEventKey.panelType: "moduleSlots"]
                             )
                         }
+                        Button("Physics Settings") {
+                            NotificationCenter.default.post(
+                                name: .requestAddDockPanel,
+                                object: nil,
+                                userInfo: [AppMenuEventKey.panelType: "physicsSettings"]
+                            )
+                        }
+                        Button("Visual Settings") {
+                            NotificationCenter.default.post(
+                                name: .requestAddDockPanel,
+                                object: nil,
+                                userInfo: [AppMenuEventKey.panelType: "visualSettings"]
+                            )
+                        }
+                        Button("Optimization Settings") {
+                            NotificationCenter.default.post(
+                                name: .requestAddDockPanel,
+                                object: nil,
+                                userInfo: [AppMenuEventKey.panelType: "optimizationSettings"]
+                            )
+                        }
                         Button("File View") {
                             NotificationCenter.default.post(
                                 name: .requestAddDockPanel,

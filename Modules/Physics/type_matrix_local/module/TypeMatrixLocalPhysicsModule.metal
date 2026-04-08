@@ -6,7 +6,6 @@ struct TypeMatrixPhysicsAccumulateParams {
     float outerRadius;
     float attractionMultiplier;
     float repulsionMultiplier;
-    uint interactionTraversalMode;
     uint matrixSideLength;
     uint teleportationEnabled;
     uint teleportationGeneralBudget;
@@ -118,12 +117,15 @@ static float3 random_unit_direction_from_seed(uint seed) {
 kernel void type_matrix_accumulate_impulse(
     device const ParticleState *sourceParticles [[buffer(0)]],
     device ParticleState *destinationParticles [[buffer(1)]],
-    device const uint *interactionOffsets [[buffer(2)]],
-    device const uint *interactionIndices [[buffer(3)]],
-    device const int *interactionMatrix [[buffer(4)]],
-    device const TypeMatrixLocalSidecarState *sourceSidecar [[buffer(5)]],
-    device TypeMatrixLocalSidecarState *destinationSidecar [[buffer(6)]],
-    constant TypeMatrixPhysicsAccumulateParams& params [[buffer(7)]],
+    device const uint *interactionGroupIndices [[buffer(2)]],
+    device const uint *interactionRangeOffsets [[buffer(3)]],
+    device const uint *interactionRangeTargets [[buffer(4)]],
+    device const InteractionRangeEntry *interactionRanges [[buffer(5)]],
+    device const uint *interactionIndices [[buffer(6)]],
+    device const int *interactionMatrix [[buffer(7)]],
+    device const TypeMatrixLocalSidecarState *sourceSidecar [[buffer(8)]],
+    device TypeMatrixLocalSidecarState *destinationSidecar [[buffer(9)]],
+    constant TypeMatrixPhysicsAccumulateParams& params [[buffer(10)]],
     uint id [[thread_position_in_grid]]
 ) {
     if (id >= params.particleCount) {
@@ -160,76 +162,82 @@ kernel void type_matrix_accumulate_impulse(
     uint overBudgetInteractionCount = 0;
     bool hadNonZeroInteraction = false;
 
-    for (uint interactionOffset = interactionOffsets[id]; interactionOffset < interactionOffsets[id + 1]; ++interactionOffset) {
-        uint targetIndex = params.interactionTraversalMode == 1
-            ? interactionOffset - interactionOffsets[id]
-            : interactionIndices[interactionOffset];
-        if (targetIndex == id || targetIndex >= params.particleCount) {
-            continue;
-        }
-
-        ParticleState target = sourceParticles[targetIndex];
-        if (particle_active(target) == 0) {
-            continue;
-        }
-
-        float3 delta = wrapped_delta(target.position.xyz, sourcePosition);
-        float distanceSquared = dot(delta, delta);
-        if (distanceSquared < 0.000001) {
-            continue;
-        }
-
-        float distance = sqrt(distanceSquared);
-        if (distance > outerLimit) {
-            continue;
-        }
-
-        float3 direction = normalize(delta);
-        float3 contribution = float3(0.0);
-        if (distance <= innerLimit) {
-            float repulsionT = 1.0 - normalized_falloff(distance, innerLimit);
-            contribution = -params.repulsionMultiplier * repulsionT * direction;
-            hadNonZeroInteraction = hadNonZeroInteraction || abs(params.repulsionMultiplier * repulsionT) > 0.000001;
-        } else {
-            uint targetType = min(particle_type(target), params.particleTypeCount - 1);
-            int matrixValue = interactionMatrix[sourceType * params.matrixSideLength + targetType];
-            float scaledMatrixValue = float(matrixValue);
-            if (matrixValue > 0) {
-                scaledMatrixValue *= params.attractionMultiplier;
-            } else if (matrixValue < 0) {
-                scaledMatrixValue *= params.repulsionMultiplier;
+    uint groupIndex = interactionGroupIndices[id];
+    uint rangeStart = interactionRangeOffsets[groupIndex];
+    uint rangeEnd = interactionRangeOffsets[groupIndex + 1];
+    for (uint rangeIndex = rangeStart; rangeIndex < rangeEnd; ++rangeIndex) {
+        uint targetGroupIndex = interactionRangeTargets[rangeIndex];
+        InteractionRangeEntry rangeEntry = interactionRanges[targetGroupIndex];
+        uint interactionEnd = rangeEntry.startIndex + rangeEntry.count;
+        for (uint interactionOffset = rangeEntry.startIndex; interactionOffset < interactionEnd; ++interactionOffset) {
+            uint targetIndex = interactionIndices[interactionOffset];
+            if (targetIndex == id || targetIndex >= params.particleCount) {
+                continue;
             }
 
-            float interactionSpan = params.middleRadius + params.outerRadius;
-            float interactionT = normalized_falloff(distance - innerLimit, interactionSpan);
-            float3 matrixVector = scaledMatrixValue * interactionT * direction;
+            ParticleState target = sourceParticles[targetIndex];
+            if (particle_active(target) == 0) {
+                continue;
+            }
 
-            if (distance <= middleLimit) {
-                float middleT = blend_factor(distance, innerLimit, params.middleRadius);
-                contribution = matrixVector * middleT;
+            float3 delta = wrapped_delta(target.position.xyz, sourcePosition);
+            float distanceSquared = dot(delta, delta);
+            if (distanceSquared < 0.000001) {
+                continue;
+            }
+
+            float distance = sqrt(distanceSquared);
+            if (distance > outerLimit) {
+                continue;
+            }
+
+            float3 direction = normalize(delta);
+            float3 contribution = float3(0.0);
+            if (distance <= innerLimit) {
+                float repulsionT = 1.0 - normalized_falloff(distance, innerLimit);
+                contribution = -params.repulsionMultiplier * repulsionT * direction;
+                hadNonZeroInteraction = hadNonZeroInteraction || abs(params.repulsionMultiplier * repulsionT) > 0.000001;
             } else {
-                contribution = matrixVector;
-            }
-            hadNonZeroInteraction = hadNonZeroInteraction || length_squared(contribution) > 0.000001;
-        }
-
-        if (params.teleportationEnabled != 0) {
-            uint targetType = min(particle_type(target), params.particleTypeCount - 1);
-            bool sameTypeInteraction = targetType == sourceType;
-            if (sameTypeInteraction) {
-                sameTypeInteractionCount += 1;
-                if (sameTypeInteractionCount > params.teleportationSelfBudget) {
-                    overBudgetInteractionCount += 1;
+                uint targetType = min(particle_type(target), params.particleTypeCount - 1);
+                int matrixValue = interactionMatrix[sourceType * params.matrixSideLength + targetType];
+                float scaledMatrixValue = float(matrixValue);
+                if (matrixValue > 0) {
+                    scaledMatrixValue *= params.attractionMultiplier;
+                } else if (matrixValue < 0) {
+                    scaledMatrixValue *= params.repulsionMultiplier;
                 }
-            } else {
-                nonSelfInteractionCount += 1;
-                if (nonSelfInteractionCount > params.teleportationGeneralBudget) {
-                    overBudgetInteractionCount += 1;
+
+                float interactionSpan = params.middleRadius + params.outerRadius;
+                float interactionT = normalized_falloff(distance - innerLimit, interactionSpan);
+                float3 matrixVector = scaledMatrixValue * interactionT * direction;
+
+                if (distance <= middleLimit) {
+                    float middleT = blend_factor(distance, innerLimit, params.middleRadius);
+                    contribution = matrixVector * middleT;
+                } else {
+                    contribution = matrixVector;
+                }
+                hadNonZeroInteraction = hadNonZeroInteraction || length_squared(contribution) > 0.000001;
+            }
+
+            if (params.teleportationEnabled != 0) {
+                uint targetType = min(particle_type(target), params.particleTypeCount - 1);
+                bool sameTypeInteraction = targetType == sourceType;
+                if (sameTypeInteraction) {
+                    sameTypeInteractionCount += 1;
+                    if (sameTypeInteractionCount > params.teleportationSelfBudget) {
+                        overBudgetInteractionCount += 1;
+                    }
+                } else {
+                    nonSelfInteractionCount += 1;
+                    if (nonSelfInteractionCount > params.teleportationGeneralBudget) {
+                        overBudgetInteractionCount += 1;
+                    }
                 }
             }
-        }
 
-        accumulatedImpulse += contribution;
+            accumulatedImpulse += contribution;
+        }
     }
 
     if (params.teleportationEnabled != 0) {

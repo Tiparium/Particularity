@@ -18,10 +18,33 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
     var spectrumOffset: Double
     var showOptimizationInfo: Bool
     var showLeaderCommunicationLog: Bool
+    var fixedGridSubdivisions: Int
+    var fixedGridSubspaceCap: Int
     var protectLeaderFromUnload: Bool
     var assignedPhysicsModulePath: String?
     var assignedVisualModulePath: String?
     var assignedOptimizationModulePath: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case particleCount
+        case randomDistribution
+        case particleTypes
+        case allParticlesIntercommunicate
+        case movementDirectionX
+        case movementDirectionY
+        case movementDirectionZ
+        case timeScale
+        case sphereSize
+        case spectrumOffset
+        case showOptimizationInfo
+        case showLeaderCommunicationLog
+        case fixedGridSubdivisions
+        case fixedGridSubspaceCap
+        case protectLeaderFromUnload
+        case assignedPhysicsModulePath
+        case assignedVisualModulePath
+        case assignedOptimizationModulePath
+    }
 
     static let `default` = MainWindowSimulationStateSnapshot(
         particleCount: 20_000,
@@ -36,11 +59,77 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
         spectrumOffset: 0.0,
         showOptimizationInfo: false,
         showLeaderCommunicationLog: false,
+        fixedGridSubdivisions: 8,
+        fixedGridSubspaceCap: 2,
         protectLeaderFromUnload: true,
         assignedPhysicsModulePath: nil,
         assignedVisualModulePath: nil,
         assignedOptimizationModulePath: nil
     )
+
+    init(
+        particleCount: Int,
+        randomDistribution: Bool,
+        particleTypes: Int,
+        allParticlesIntercommunicate: Bool,
+        movementDirectionX: Double,
+        movementDirectionY: Double,
+        movementDirectionZ: Double,
+        timeScale: Double,
+        sphereSize: Double,
+        spectrumOffset: Double,
+        showOptimizationInfo: Bool,
+        showLeaderCommunicationLog: Bool,
+        fixedGridSubdivisions: Int,
+        fixedGridSubspaceCap: Int,
+        protectLeaderFromUnload: Bool,
+        assignedPhysicsModulePath: String?,
+        assignedVisualModulePath: String?,
+        assignedOptimizationModulePath: String?
+    ) {
+        self.particleCount = particleCount
+        self.randomDistribution = randomDistribution
+        self.particleTypes = particleTypes
+        self.allParticlesIntercommunicate = allParticlesIntercommunicate
+        self.movementDirectionX = movementDirectionX
+        self.movementDirectionY = movementDirectionY
+        self.movementDirectionZ = movementDirectionZ
+        self.timeScale = timeScale
+        self.sphereSize = sphereSize
+        self.spectrumOffset = spectrumOffset
+        self.showOptimizationInfo = showOptimizationInfo
+        self.showLeaderCommunicationLog = showLeaderCommunicationLog
+        self.fixedGridSubdivisions = fixedGridSubdivisions
+        self.fixedGridSubspaceCap = fixedGridSubspaceCap
+        self.protectLeaderFromUnload = protectLeaderFromUnload
+        self.assignedPhysicsModulePath = assignedPhysicsModulePath
+        self.assignedVisualModulePath = assignedVisualModulePath
+        self.assignedOptimizationModulePath = assignedOptimizationModulePath
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let fallback = Self.default
+
+        particleCount = try container.decode(Int.self, forKey: .particleCount)
+        randomDistribution = try container.decode(Bool.self, forKey: .randomDistribution)
+        particleTypes = try container.decode(Int.self, forKey: .particleTypes)
+        allParticlesIntercommunicate = try container.decode(Bool.self, forKey: .allParticlesIntercommunicate)
+        movementDirectionX = try container.decode(Double.self, forKey: .movementDirectionX)
+        movementDirectionY = try container.decode(Double.self, forKey: .movementDirectionY)
+        movementDirectionZ = try container.decode(Double.self, forKey: .movementDirectionZ)
+        timeScale = try container.decode(Double.self, forKey: .timeScale)
+        sphereSize = try container.decode(Double.self, forKey: .sphereSize)
+        spectrumOffset = try container.decode(Double.self, forKey: .spectrumOffset)
+        showOptimizationInfo = try container.decode(Bool.self, forKey: .showOptimizationInfo)
+        showLeaderCommunicationLog = try container.decode(Bool.self, forKey: .showLeaderCommunicationLog)
+        fixedGridSubdivisions = try container.decodeIfPresent(Int.self, forKey: .fixedGridSubdivisions) ?? fallback.fixedGridSubdivisions
+        fixedGridSubspaceCap = try container.decodeIfPresent(Int.self, forKey: .fixedGridSubspaceCap) ?? fallback.fixedGridSubspaceCap
+        protectLeaderFromUnload = try container.decode(Bool.self, forKey: .protectLeaderFromUnload)
+        assignedPhysicsModulePath = try container.decodeIfPresent(String.self, forKey: .assignedPhysicsModulePath)
+        assignedVisualModulePath = try container.decodeIfPresent(String.self, forKey: .assignedVisualModulePath)
+        assignedOptimizationModulePath = try container.decodeIfPresent(String.self, forKey: .assignedOptimizationModulePath)
+    }
 
     var editorState: SimulationEditorState {
         SimulationEditorState(
@@ -73,7 +162,9 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
 
     var optimizationState: OptimizationModuleState {
         OptimizationModuleState(
-            showLeaderCommunicationLog: showLeaderCommunicationLog
+            showLeaderCommunicationLog: showLeaderCommunicationLog,
+            fixedGridSubdivisions: fixedGridSubdivisions,
+            fixedGridSubspaceCap: fixedGridSubspaceCap
         )
     }
 
@@ -109,6 +200,8 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
             spectrumOffset: visualState.spectrumOffset,
             showOptimizationInfo: visualState.showOptimizationInfo,
             showLeaderCommunicationLog: optimizationState.showLeaderCommunicationLog,
+            fixedGridSubdivisions: optimizationState.fixedGridSubdivisions,
+            fixedGridSubspaceCap: optimizationState.fixedGridSubspaceCap,
             protectLeaderFromUnload: debugSettings.protectLeaderFromUnload,
             assignedPhysicsModulePath: assignedModulePaths[Self.physicsModuleKey],
             assignedVisualModulePath: assignedModulePaths[Self.visualModuleKey],

@@ -1,42 +1,75 @@
 import Foundation
 
+struct InteractionRangeEntry: Equatable, Sendable {
+    var startIndex: UInt32
+    var count: UInt32
+}
+
+struct OptimizationInteractionPlanData: Sendable {
+    var groupIndices: [UInt32]
+    var rangeOffsets: [UInt32]
+    var rangeTargets: [UInt32]
+    var ranges: [InteractionRangeEntry]
+    var indices: [UInt32]
+}
+
 enum DefaultOptimizationModuleRuntime {
-    enum InteractionTraversalMode: UInt32 {
-        case explicitIndices = 0
-        case canonicalRange = 1
-    }
-
-    struct InteractionPlanData {
-        var traversalMode: InteractionTraversalMode
-        var offsets: [UInt32]
-        var indices: [UInt32]
-    }
-
     static let computeShaderSource = """
     struct OptimizationDebugLineParams {
         uint segmentCount;
         uint particleCount;
-        uint traversalMode;
         uint _padding0;
+        uint _padding1;
     };
 
     struct OptimizationDebugLineSegment {
         uint sourceParticleIndex;
-        uint interactionOffset;
         uint interactionCount;
         uint firstVertexIndex;
+        uint _padding0;
+        uint _padding1;
+        uint _padding2;
+        uint _padding3;
     };
 
     struct OptimizationLineVertex {
         float3 position;
     };
 
+    static uint resolve_interaction_target_index(
+        device const uint *groupIndices,
+        device const uint *rangeOffsets,
+        device const uint *rangeTargets,
+        device const InteractionRangeEntry *ranges,
+        device const uint *interactionIndices,
+        uint sourceParticleIndex,
+        uint interactionIndex
+    ) {
+        uint groupIndex = groupIndices[sourceParticleIndex];
+        uint rangeOffset = rangeOffsets[groupIndex];
+        uint rangeEnd = rangeOffsets[groupIndex + 1];
+        uint remaining = interactionIndex;
+        for (uint rangeIndex = rangeOffset; rangeIndex < rangeEnd; ++rangeIndex) {
+            uint targetGroupIndex = rangeTargets[rangeIndex];
+            InteractionRangeEntry rangeEntry = ranges[targetGroupIndex];
+            if (remaining < rangeEntry.count) {
+                return interactionIndices[rangeEntry.startIndex + remaining];
+            }
+            remaining -= rangeEntry.count;
+        }
+        return 0;
+    }
+
     kernel void build_debug_lines(
         device const ParticleState *particles [[buffer(0)]],
-        device const uint *interactionIndices [[buffer(1)]],
-        device OptimizationLineVertex *lineVertices [[buffer(2)]],
-        constant OptimizationDebugLineParams& params [[buffer(3)]],
-        device const OptimizationDebugLineSegment *segments [[buffer(4)]],
+        device const uint *interactionGroupIndices [[buffer(1)]],
+        device const uint *interactionRangeOffsets [[buffer(2)]],
+        device const uint *interactionRangeTargets [[buffer(3)]],
+        device const InteractionRangeEntry *interactionRanges [[buffer(4)]],
+        device const uint *interactionIndices [[buffer(5)]],
+        device OptimizationLineVertex *lineVertices [[buffer(6)]],
+        constant OptimizationDebugLineParams& params [[buffer(7)]],
+        device const OptimizationDebugLineSegment *segments [[buffer(8)]],
         uint id [[thread_position_in_grid]]
     ) {
         if (params.segmentCount == 0) {
@@ -62,31 +95,48 @@ enum DefaultOptimizationModuleRuntime {
         uint localVertexIndex = id - segment.firstVertexIndex;
         uint interactionIndex = localVertexIndex / 2;
         uint particleIndex = segment.sourceParticleIndex;
+        float3 sourcePosition = particles[segment.sourceParticleIndex].position.xyz;
+        float3 outputPosition = sourcePosition;
+
         if ((localVertexIndex % 2) != 0) {
-            if (params.traversalMode == 1) {
-                particleIndex = min(interactionIndex, params.particleCount - 1);
-            } else {
-                particleIndex = interactionIndices[segment.interactionOffset + interactionIndex];
+            particleIndex = resolve_interaction_target_index(
+                interactionGroupIndices,
+                interactionRangeOffsets,
+                interactionRangeTargets,
+                interactionRanges,
+                interactionIndices,
+                segment.sourceParticleIndex,
+                interactionIndex
+            );
+            if (particleIndex >= params.particleCount) {
+                return;
             }
+            outputPosition = particles[particleIndex].position.xyz;
         }
 
-        lineVertices[id].position = particles[particleIndex].position.xyz;
+        lineVertices[id].position = outputPosition;
     }
     """
 
-    static func rebuildInteractionPlan(particleCount: Int) -> InteractionPlanData {
+    static func rebuildInteractionPlan(particleCount: Int) -> OptimizationInteractionPlanData {
         let safeParticleCount = max(1, particleCount)
+        let groupIndices = Array(repeating: UInt32(0), count: safeParticleCount)
+        let indices = (0..<safeParticleCount).map(UInt32.init)
+        let rangeOffsets: [UInt32] = [0, 1]
+        let rangeTargets: [UInt32] = [0]
+        let ranges = [
+            InteractionRangeEntry(
+                startIndex: 0,
+                count: UInt32(safeParticleCount)
+            )
+        ]
 
-        var offsets: [UInt32] = []
-        offsets.reserveCapacity(safeParticleCount + 1)
-        for index in 0...safeParticleCount {
-            offsets.append(UInt32(index * safeParticleCount))
-        }
-
-        return InteractionPlanData(
-            traversalMode: .canonicalRange,
-            offsets: offsets,
-            indices: []
+        return OptimizationInteractionPlanData(
+            groupIndices: groupIndices,
+            rangeOffsets: rangeOffsets,
+            rangeTargets: rangeTargets,
+            ranges: ranges,
+            indices: indices
         )
     }
 }

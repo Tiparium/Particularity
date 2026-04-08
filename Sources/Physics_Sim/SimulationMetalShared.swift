@@ -12,6 +12,11 @@ enum SimulationMetalSharedSource {
         uint4 metadata;
     };
 
+    struct InteractionRangeEntry {
+        uint startIndex;
+        uint count;
+    };
+
     inline uint particle_type(thread const ParticleState& particle) {
         return particle.metadata.x;
     }
