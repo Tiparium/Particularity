@@ -51,6 +51,21 @@ struct OptimizationModuleState {
     var showLeaderCommunicationLog = false
     var fixedGridSubdivisions: Int = 8
     var fixedGridSubspaceCap: Int = 2
+    var fixedGridNeighborReadMode: FixedGridNeighborReadMode = .scratch
+}
+
+enum FixedGridNeighborReadMode: String, CaseIterable, Equatable, Sendable {
+    case raw
+    case scratch
+
+    var title: String {
+        switch self {
+        case .raw:
+            return "Raw"
+        case .scratch:
+            return "Scratch"
+        }
+    }
 }
 
 struct DebugSettingsState {
@@ -238,6 +253,7 @@ struct SimulationViewportState: Equatable {
     var showLeaderCommunicationLog: Bool
     var fixedGridSubdivisions: Int
     var fixedGridSubspaceCap: Int
+    var fixedGridNeighborReadMode: FixedGridNeighborReadMode
 }
 
 struct LeaderCommunicationLogEntry: Identifiable, Equatable {

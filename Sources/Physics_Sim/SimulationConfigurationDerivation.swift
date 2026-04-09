@@ -36,7 +36,8 @@ enum SimulationConfigurationDerivation {
                     max(1, editorState.optimizationState.fixedGridSubspaceCap),
                     max(1, editorState.optimizationState.fixedGridSubdivisions)
                 )
-            )
+            ),
+            fixedGridNeighborReadMode: editorState.optimizationState.fixedGridNeighborReadMode
         )
     }
 
@@ -136,6 +137,11 @@ enum SimulationConfigurationDerivation {
                     subspaceCap: editorState.optimizationState.fixedGridSubspaceCap
                 )
             )
+            if editorState.optimizationState.fixedGridNeighborReadMode == .scratch {
+                reserved += FixedGridOptimizationModuleRuntime.projectedScratchBytes(
+                    particleCount: particleCount
+                )
+            }
         }
 
         return reserved

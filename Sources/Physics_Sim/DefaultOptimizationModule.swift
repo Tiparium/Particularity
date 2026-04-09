@@ -18,7 +18,7 @@ enum DefaultOptimizationModuleRuntime {
     struct OptimizationDebugLineParams {
         uint segmentCount;
         uint particleCount;
-        uint _padding0;
+        uint neighborReadMode;
         uint _padding1;
     };
 
@@ -61,15 +61,17 @@ enum DefaultOptimizationModuleRuntime {
     }
 
     kernel void build_debug_lines(
-        device const ParticleState *particles [[buffer(0)]],
+        device const ParticleState *canonicalParticles [[buffer(0)]],
         device const uint *interactionGroupIndices [[buffer(1)]],
         device const uint *interactionRangeOffsets [[buffer(2)]],
         device const uint *interactionRangeTargets [[buffer(3)]],
         device const InteractionRangeEntry *interactionRanges [[buffer(4)]],
         device const uint *interactionIndices [[buffer(5)]],
-        device OptimizationLineVertex *lineVertices [[buffer(6)]],
-        constant OptimizationDebugLineParams& params [[buffer(7)]],
-        device const OptimizationDebugLineSegment *segments [[buffer(8)]],
+        device const ParticleState *scratchParticles [[buffer(6)]],
+        device const uint *scratchToCanonical [[buffer(7)]],
+        device OptimizationLineVertex *lineVertices [[buffer(8)]],
+        constant OptimizationDebugLineParams& params [[buffer(9)]],
+        device const OptimizationDebugLineSegment *segments [[buffer(10)]],
         uint id [[thread_position_in_grid]]
     ) {
         if (params.segmentCount == 0) {
@@ -95,7 +97,7 @@ enum DefaultOptimizationModuleRuntime {
         uint localVertexIndex = id - segment.firstVertexIndex;
         uint interactionIndex = localVertexIndex / 2;
         uint particleIndex = segment.sourceParticleIndex;
-        float3 sourcePosition = particles[segment.sourceParticleIndex].position.xyz;
+        float3 sourcePosition = canonicalParticles[segment.sourceParticleIndex].position.xyz;
         float3 outputPosition = sourcePosition;
 
         if ((localVertexIndex % 2) != 0) {
@@ -111,7 +113,12 @@ enum DefaultOptimizationModuleRuntime {
             if (particleIndex >= params.particleCount) {
                 return;
             }
-            outputPosition = particles[particleIndex].position.xyz;
+            outputPosition = interaction_read_particle(
+                particleIndex,
+                canonicalParticles,
+                scratchParticles,
+                params.neighborReadMode
+            ).position.xyz;
         }
 
         lineVertices[id].position = outputPosition;

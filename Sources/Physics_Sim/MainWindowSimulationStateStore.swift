@@ -20,6 +20,7 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
     var showLeaderCommunicationLog: Bool
     var fixedGridSubdivisions: Int
     var fixedGridSubspaceCap: Int
+    var fixedGridNeighborReadMode: String
     var protectLeaderFromUnload: Bool
     var assignedPhysicsModulePath: String?
     var assignedVisualModulePath: String?
@@ -40,6 +41,7 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
         case showLeaderCommunicationLog
         case fixedGridSubdivisions
         case fixedGridSubspaceCap
+        case fixedGridNeighborReadMode
         case protectLeaderFromUnload
         case assignedPhysicsModulePath
         case assignedVisualModulePath
@@ -61,6 +63,7 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
         showLeaderCommunicationLog: false,
         fixedGridSubdivisions: 8,
         fixedGridSubspaceCap: 2,
+        fixedGridNeighborReadMode: FixedGridNeighborReadMode.scratch.rawValue,
         protectLeaderFromUnload: true,
         assignedPhysicsModulePath: nil,
         assignedVisualModulePath: nil,
@@ -82,6 +85,7 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
         showLeaderCommunicationLog: Bool,
         fixedGridSubdivisions: Int,
         fixedGridSubspaceCap: Int,
+        fixedGridNeighborReadMode: String,
         protectLeaderFromUnload: Bool,
         assignedPhysicsModulePath: String?,
         assignedVisualModulePath: String?,
@@ -101,6 +105,7 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
         self.showLeaderCommunicationLog = showLeaderCommunicationLog
         self.fixedGridSubdivisions = fixedGridSubdivisions
         self.fixedGridSubspaceCap = fixedGridSubspaceCap
+        self.fixedGridNeighborReadMode = fixedGridNeighborReadMode
         self.protectLeaderFromUnload = protectLeaderFromUnload
         self.assignedPhysicsModulePath = assignedPhysicsModulePath
         self.assignedVisualModulePath = assignedVisualModulePath
@@ -125,6 +130,7 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
         showLeaderCommunicationLog = try container.decode(Bool.self, forKey: .showLeaderCommunicationLog)
         fixedGridSubdivisions = try container.decodeIfPresent(Int.self, forKey: .fixedGridSubdivisions) ?? fallback.fixedGridSubdivisions
         fixedGridSubspaceCap = try container.decodeIfPresent(Int.self, forKey: .fixedGridSubspaceCap) ?? fallback.fixedGridSubspaceCap
+        fixedGridNeighborReadMode = try container.decodeIfPresent(String.self, forKey: .fixedGridNeighborReadMode) ?? fallback.fixedGridNeighborReadMode
         protectLeaderFromUnload = try container.decode(Bool.self, forKey: .protectLeaderFromUnload)
         assignedPhysicsModulePath = try container.decodeIfPresent(String.self, forKey: .assignedPhysicsModulePath)
         assignedVisualModulePath = try container.decodeIfPresent(String.self, forKey: .assignedVisualModulePath)
@@ -164,7 +170,8 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
         OptimizationModuleState(
             showLeaderCommunicationLog: showLeaderCommunicationLog,
             fixedGridSubdivisions: fixedGridSubdivisions,
-            fixedGridSubspaceCap: fixedGridSubspaceCap
+            fixedGridSubspaceCap: fixedGridSubspaceCap,
+            fixedGridNeighborReadMode: FixedGridNeighborReadMode(rawValue: fixedGridNeighborReadMode) ?? .scratch
         )
     }
 
@@ -202,6 +209,7 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
             showLeaderCommunicationLog: optimizationState.showLeaderCommunicationLog,
             fixedGridSubdivisions: optimizationState.fixedGridSubdivisions,
             fixedGridSubspaceCap: optimizationState.fixedGridSubspaceCap,
+            fixedGridNeighborReadMode: optimizationState.fixedGridNeighborReadMode.rawValue,
             protectLeaderFromUnload: debugSettings.protectLeaderFromUnload,
             assignedPhysicsModulePath: assignedModulePaths[Self.physicsModuleKey],
             assignedVisualModulePath: assignedModulePaths[Self.visualModuleKey],

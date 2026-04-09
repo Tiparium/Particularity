@@ -32,6 +32,7 @@ private struct PerformanceReviewSettingsPayload: Equatable {
     let spectrumOffset: Double
     let showOptimizationInfo: Bool
     let showLeaderCommunicationLog: Bool
+    let fixedGridNeighborReadMode: String
     let protectLeaderFromUnload: Bool
 }
 
@@ -108,6 +109,7 @@ private extension PerformanceReviewSettingsPayload {
         "spectrumOffset=\(Self.format(spectrumOffset)) " +
         "optimizationInfo=\(showOptimizationInfo) " +
         "leaderLog=\(showLeaderCommunicationLog) " +
+        "fixedGridReadMode=\(fixedGridNeighborReadMode) " +
         "protectLeader=\(protectLeaderFromUnload)"
     }
 
@@ -147,6 +149,7 @@ struct PerformanceReviewSample: Codable {
     let spectrumOffset: Double
     let showOptimizationInfo: Bool
     let showLeaderCommunicationLog: Bool
+    let fixedGridNeighborReadMode: String
     let protectLeaderFromUnload: Bool
     let projectedBytes: UInt64
     let memoryUsedBytes: UInt64
@@ -168,6 +171,7 @@ struct PerformanceReviewSample: Codable {
             spectrumOffset: spectrumOffset,
             showOptimizationInfo: showOptimizationInfo,
             showLeaderCommunicationLog: showLeaderCommunicationLog,
+            fixedGridNeighborReadMode: fixedGridNeighborReadMode,
             protectLeaderFromUnload: protectLeaderFromUnload
         )
     }

@@ -955,6 +955,7 @@ struct ContentView: View {
             spectrumOffset: editorState.visualState.spectrumOffset,
             showOptimizationInfo: editorState.visualState.showOptimizationInfo,
             showLeaderCommunicationLog: editorState.optimizationState.showLeaderCommunicationLog,
+            fixedGridNeighborReadMode: editorState.optimizationState.fixedGridNeighborReadMode.rawValue,
             protectLeaderFromUnload: editorState.debugSettings.protectLeaderFromUnload,
             projectedBytes: runtimeConfigCoordinator.validationReport.projectedBytes,
             memoryUsedBytes: metrics.memoryUsedBytes,
@@ -1719,7 +1720,21 @@ private struct OptimizationSettingsPanel: View {
                     range: 1...max(1, store.editorState.optimizationState.fixedGridSubdivisions)
                 )
 
-                Text("Wrapped fixed-grid traversal publishes multi-range candidate spans without moving particles in memory.")
+                EventuallyAppliedSegmentedPicker(
+                    title: "Neighbor Read Mode",
+                    appliedValue: Binding(
+                        get: { store.editorState.optimizationState.fixedGridNeighborReadMode },
+                        set: {
+                            var next = store.editorState.optimizationState
+                            next.fixedGridNeighborReadMode = $0
+                            store.setOptimizationState(next)
+                        }
+                    ),
+                    options: FixedGridNeighborReadMode.allCases,
+                    optionTitle: { $0.title }
+                )
+
+                Text("Wrapped fixed-grid traversal publishes multi-range candidate spans. Raw mode reads canonical particle storage directly; scratch mode reads a packed fixed-grid scratch view.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             } else {

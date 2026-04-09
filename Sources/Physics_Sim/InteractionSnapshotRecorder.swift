@@ -52,7 +52,7 @@ enum InteractionSnapshotFormat {
     }
 
     static func optimization(_ state: OptimizationModuleState) -> String {
-        "showLeaderCommunicationLog=\(state.showLeaderCommunicationLog) fixedGridSubdivisions=\(state.fixedGridSubdivisions) fixedGridSubspaceCap=\(state.fixedGridSubspaceCap)"
+        "showLeaderCommunicationLog=\(state.showLeaderCommunicationLog) fixedGridSubdivisions=\(state.fixedGridSubdivisions) fixedGridSubspaceCap=\(state.fixedGridSubspaceCap) fixedGridNeighborReadMode=\(state.fixedGridNeighborReadMode.rawValue)"
     }
 
     static func debug(_ state: DebugSettingsState) -> String {
@@ -60,7 +60,7 @@ enum InteractionSnapshotFormat {
     }
 
     static func viewport(_ state: SimulationViewportState) -> String {
-        "transport=\(state.transportState.rawValue) count=\(state.particleCount) random=\(state.randomDistribution) types=\(state.particleTypes) intercommunicate=\(state.allParticlesIntercommunicate) direction=(\(format(Double(state.movementDirection.x))),\(format(Double(state.movementDirection.y))),\(format(Double(state.movementDirection.z)))) timeScale=\(format(Double(state.timeScale))) sphereSize=\(format(Double(state.sphereSize))) spectrumOffset=\(format(Double(state.spectrumOffset))) showOptimizationInfo=\(state.showOptimizationInfo) showLeaderCommunicationLog=\(state.showLeaderCommunicationLog) fixedGridSubdivisions=\(state.fixedGridSubdivisions) fixedGridSubspaceCap=\(state.fixedGridSubspaceCap)"
+        "transport=\(state.transportState.rawValue) count=\(state.particleCount) random=\(state.randomDistribution) types=\(state.particleTypes) intercommunicate=\(state.allParticlesIntercommunicate) direction=(\(format(Double(state.movementDirection.x))),\(format(Double(state.movementDirection.y))),\(format(Double(state.movementDirection.z)))) timeScale=\(format(Double(state.timeScale))) sphereSize=\(format(Double(state.sphereSize))) spectrumOffset=\(format(Double(state.spectrumOffset))) showOptimizationInfo=\(state.showOptimizationInfo) showLeaderCommunicationLog=\(state.showLeaderCommunicationLog) fixedGridSubdivisions=\(state.fixedGridSubdivisions) fixedGridSubspaceCap=\(state.fixedGridSubspaceCap) fixedGridNeighborReadMode=\(state.fixedGridNeighborReadMode.rawValue)"
     }
 
     static func renderState(_ state: SimulationRuntime.RenderState) -> String {

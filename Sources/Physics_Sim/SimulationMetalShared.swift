@@ -17,6 +17,32 @@ enum SimulationMetalSharedSource {
         uint count;
     };
 
+    constant uint interaction_neighbor_read_mode_raw = 0u;
+    constant uint interaction_neighbor_read_mode_scratch = 1u;
+
+    inline uint interaction_resolve_canonical_index(
+        uint candidateIndex,
+        device const uint *scratchToCanonical,
+        uint neighborReadMode
+    ) {
+        if (neighborReadMode == interaction_neighbor_read_mode_scratch) {
+            return scratchToCanonical[candidateIndex];
+        }
+        return candidateIndex;
+    }
+
+    inline ParticleState interaction_read_particle(
+        uint candidateIndex,
+        device const ParticleState *canonicalParticles,
+        device const ParticleState *scratchParticles,
+        uint neighborReadMode
+    ) {
+        if (neighborReadMode == interaction_neighbor_read_mode_scratch) {
+            return scratchParticles[candidateIndex];
+        }
+        return canonicalParticles[candidateIndex];
+    }
+
     inline uint particle_type(thread const ParticleState& particle) {
         return particle.metadata.x;
     }

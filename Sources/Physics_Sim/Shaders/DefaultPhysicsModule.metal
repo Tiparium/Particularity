@@ -2,7 +2,7 @@ struct PhysicsAccumulateParams {
     uint particleCount;
     float _padding1;
     float _padding2;
-    uint _padding3;
+    uint neighborReadMode;
 };
 
 struct PhysicsApplyParams {
@@ -31,7 +31,9 @@ kernel void physics_accumulate_impulse(
     device const uint *interactionRangeTargets [[buffer(4)]],
     device const InteractionRangeEntry *interactionRanges [[buffer(5)]],
     device const uint *interactionIndices [[buffer(6)]],
-    constant PhysicsAccumulateParams& params [[buffer(7)]],
+    device const ParticleState *scratchParticles [[buffer(7)]],
+    device const uint *scratchToCanonical [[buffer(8)]],
+    constant PhysicsAccumulateParams& params [[buffer(9)]],
     uint id [[thread_position_in_grid]]
 ) {
     if (id >= params.particleCount) {
@@ -55,10 +57,23 @@ kernel void physics_accumulate_impulse(
         uint interactionEnd = rangeEntry.startIndex + rangeEntry.count;
         for (uint interactionOffset = rangeEntry.startIndex; interactionOffset < interactionEnd; ++interactionOffset) {
             uint targetIndex = interactionIndices[interactionOffset];
-            if (targetIndex == id || targetIndex >= params.particleCount) {
+            if (targetIndex >= params.particleCount) {
                 continue;
             }
-            ParticleState target = sourceParticles[targetIndex];
+            uint targetCanonicalIndex = interaction_resolve_canonical_index(
+                targetIndex,
+                scratchToCanonical,
+                params.neighborReadMode
+            );
+            if (targetCanonicalIndex == id || targetCanonicalIndex >= params.particleCount) {
+                continue;
+            }
+            ParticleState target = interaction_read_particle(
+                targetIndex,
+                sourceParticles,
+                scratchParticles,
+                params.neighborReadMode
+            );
             if (particle_active(target) == 0) {
                 continue;
             }

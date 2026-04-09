@@ -4,6 +4,7 @@ import simd
 struct FixedGridOptimizationSettings: Equatable, Sendable {
     var subdivisions: Int
     var subspaceCap: Int
+    var neighborReadMode: FixedGridNeighborReadMode = .scratch
 
     var clampedSubdivisions: Int {
         min(max(1, subdivisions), FixedGridOptimizationModuleRuntime.maxSubdivisions)
@@ -28,7 +29,7 @@ enum FixedGridOptimizationModuleRuntime {
     struct FixedGridAssignParticlesParams {
         uint particleCount;
         uint subdivisions;
-        uint _padding0;
+        uint neighborReadMode;
         uint _padding1;
     };
 
@@ -158,7 +159,9 @@ enum FixedGridOptimizationModuleRuntime {
         device const uint *groupIndices [[buffer(1)]],
         device atomic_uint *cellWriteHeads [[buffer(2)]],
         device uint *interactionIndices [[buffer(3)]],
-        constant FixedGridAssignParticlesParams& params [[buffer(4)]],
+        device ParticleState *scratchParticles [[buffer(4)]],
+        device uint *scratchToCanonical [[buffer(5)]],
+        constant FixedGridAssignParticlesParams& params [[buffer(6)]],
         uint id [[thread_position_in_grid]]
     ) {
         if (id >= params.particleCount) {
@@ -172,7 +175,13 @@ enum FixedGridOptimizationModuleRuntime {
 
         uint cellIndex = groupIndices[id];
         uint writeIndex = atomic_fetch_add_explicit(&cellWriteHeads[cellIndex], 1u, memory_order_relaxed);
-        interactionIndices[writeIndex] = id;
+        if (params.neighborReadMode == interaction_neighbor_read_mode_scratch) {
+            scratchParticles[writeIndex] = particle;
+            scratchToCanonical[writeIndex] = id;
+            interactionIndices[writeIndex] = writeIndex;
+        } else {
+            interactionIndices[writeIndex] = id;
+        }
     }
     """
 
@@ -213,7 +222,8 @@ enum FixedGridOptimizationModuleRuntime {
         return FixedGridInteractionTopology(
             settings: FixedGridOptimizationSettings(
                 subdivisions: subdivisions,
-                subspaceCap: subspaceCap
+                subspaceCap: subspaceCap,
+                neighborReadMode: settings.neighborReadMode
             ),
             rangeOffsets: rangeOffsets,
             rangeTargets: rangeTargets
@@ -241,6 +251,13 @@ enum FixedGridOptimizationModuleRuntime {
             UInt64(totalCellCount) * UInt64(MemoryLayout<UInt32>.stride) * 4
 
         return rangeOffsetsBytes + rangeTargetsBytes + dynamicRangesBytes + plannerScratchBytes
+    }
+
+    static func projectedScratchBytes(particleCount: Int) -> UInt64 {
+        let slotCount = max(1, particleCount)
+        let particleBytes = UInt64(slotCount) * UInt64(MemoryLayout<ParticleState>.stride)
+        let reverseMapBytes = UInt64(slotCount) * UInt64(MemoryLayout<UInt32>.stride)
+        return particleBytes + reverseMapBytes
     }
 
     static func cellIndex(

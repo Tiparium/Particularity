@@ -27,7 +27,7 @@ private struct SimulationPhysicsAccumulateParams {
     var particleCount: UInt32
     var interactionRadius: Float
     var impulseScale: Float
-    var padding0: UInt32 = 0
+    var neighborReadMode: UInt32 = 0
 }
 
 private struct SimulationPhysicsApplyParams {
@@ -40,6 +40,8 @@ private struct SimulationPhysicsApplyParams {
 private struct TypeMatrixPhysicsAccumulateParams {
     var particleCount: UInt32
     var particleTypeCount: UInt32
+    var neighborReadMode: UInt32
+    var padding0: UInt32 = 0
     var innerRadius: Float
     var middleRadius: Float
     var outerRadius: Float
@@ -71,7 +73,7 @@ private struct TemplatePhysicsAccumulateParams {
     var particleCount: UInt32
     var interactionRadius: Float
     var impulseScale: Float
-    var padding0: UInt32 = 0
+    var neighborReadMode: UInt32 = 0
 }
 
 private struct TemplatePhysicsApplyParams {
@@ -84,14 +86,14 @@ private struct TemplatePhysicsApplyParams {
 private struct SimulationDebugLineParams {
     var segmentCount: UInt32
     var particleCount: UInt32
-    var padding0: UInt32 = 0
+    var neighborReadMode: UInt32 = 0
     var padding1: UInt32 = 0
 }
 
 private struct FixedGridAssignParticlesParams {
     var particleCount: UInt32
     var subdivisions: UInt32
-    var padding0: UInt32 = 0
+    var neighborReadMode: UInt32 = 0
     var padding1: UInt32 = 0
 }
 
@@ -173,6 +175,8 @@ final class SimulationRuntime: @unchecked Sendable {
     private var interactionRangeTargetsBuffer: MTLBuffer?
     private var interactionRangesBuffer: MTLBuffer?
     private var interactionIndicesBuffer: MTLBuffer?
+    private var interactionScratchParticlesBuffer: MTLBuffer?
+    private var interactionScratchToCanonicalBuffer: MTLBuffer?
     private var fixedGridCellCountsBuffer: MTLBuffer?
     private var fixedGridCellOffsetsBuffer: MTLBuffer?
     private var fixedGridCellWriteHeadsBuffer: MTLBuffer?
@@ -205,7 +209,8 @@ final class SimulationRuntime: @unchecked Sendable {
         showOptimizationInfo: false,
         showLeaderCommunicationLog: false,
         fixedGridSubdivisions: FixedGridOptimizationModuleRuntime.defaultSubdivisions,
-        fixedGridSubspaceCap: 2
+        fixedGridSubspaceCap: 2,
+        fixedGridNeighborReadMode: .scratch
     )
     private var activeModules = ActiveModuleSet(
         physics: ModuleCatalog.defaultPhysics,
@@ -233,7 +238,8 @@ final class SimulationRuntime: @unchecked Sendable {
         showOptimizationInfo: false,
         showLeaderCommunicationLog: false,
         fixedGridSubdivisions: FixedGridOptimizationModuleRuntime.defaultSubdivisions,
-        fixedGridSubspaceCap: 2
+        fixedGridSubspaceCap: 2,
+        fixedGridNeighborReadMode: .scratch
     )
 
     private var metricsAccumulator = SimulationMetricsAccumulator(sampleWindowSeconds: 3.0, publishInterval: 0.25)
@@ -434,6 +440,8 @@ final class SimulationRuntime: @unchecked Sendable {
         let optimizationTopologyChanged =
             previous.fixedGridSubdivisions != nextState.fixedGridSubdivisions
             || previous.fixedGridSubspaceCap != nextState.fixedGridSubspaceCap
+        let optimizationReadModeChanged =
+            previous.fixedGridNeighborReadMode != nextState.fixedGridNeighborReadMode
 
         if nextState.transportState == .stopped {
             simulationWorkInFlight = false
@@ -449,6 +457,10 @@ final class SimulationRuntime: @unchecked Sendable {
 
             if optimizationTopologyChanged {
                 cachedFixedGridTopology = nil
+                needsInteractionPlanRefresh = true
+            }
+
+            if optimizationReadModeChanged {
                 needsInteractionPlanRefresh = true
             }
 
@@ -581,6 +593,8 @@ final class SimulationRuntime: @unchecked Sendable {
         interactionRangeTargetsBuffer = nil
         interactionRangesBuffer = nil
         interactionIndicesBuffer = nil
+        interactionScratchParticlesBuffer = nil
+        interactionScratchToCanonicalBuffer = nil
         fixedGridCellCountsBuffer = nil
         fixedGridCellOffsetsBuffer = nil
         fixedGridCellWriteHeadsBuffer = nil
@@ -705,13 +719,24 @@ final class SimulationRuntime: @unchecked Sendable {
                 debugLineEncoder.setBuffer(interactionRangeTargetsBuffer, offset: 0, index: 3)
                 debugLineEncoder.setBuffer(interactionRangesBuffer, offset: 0, index: 4)
                 debugLineEncoder.setBuffer(interactionIndicesBuffer, offset: 0, index: 5)
-                debugLineEncoder.setBuffer(currentDebugLineBuffer, offset: 0, index: 6)
+                if let interactionScratchParticlesBuffer {
+                    debugLineEncoder.setBuffer(interactionScratchParticlesBuffer, offset: 0, index: 6)
+                } else {
+                    debugLineEncoder.setBuffer(particleFrontBuffer, offset: 0, index: 6)
+                }
+                if let interactionScratchToCanonicalBuffer {
+                    debugLineEncoder.setBuffer(interactionScratchToCanonicalBuffer, offset: 0, index: 7)
+                } else {
+                    debugLineEncoder.setBuffer(interactionIndicesBuffer, offset: 0, index: 7)
+                }
+                debugLineEncoder.setBuffer(currentDebugLineBuffer, offset: 0, index: 8)
                 var params = SimulationDebugLineParams(
                     segmentCount: UInt32(debugHistory.renderSegments.count),
-                    particleCount: UInt32(activeParticleCount)
+                    particleCount: UInt32(activeParticleCount),
+                    neighborReadMode: activeNeighborReadModeRawValue
                 )
-                debugLineEncoder.setBytes(&params, length: MemoryLayout<SimulationDebugLineParams>.stride, index: 7)
-                debugLineEncoder.setBuffer(debugLineSegmentBuffer, offset: 0, index: 8)
+                debugLineEncoder.setBytes(&params, length: MemoryLayout<SimulationDebugLineParams>.stride, index: 9)
+                debugLineEncoder.setBuffer(debugLineSegmentBuffer, offset: 0, index: 10)
                 let vertexCount = max(1, debugHistory.renderSegments.reduce(0) { $0 + $1.vertexCount })
                 let threads = MTLSize(width: vertexCount, height: 1, depth: 1)
                 let threadgroup = MTLSize(width: min(debugLinePipeline.maxTotalThreadsPerThreadgroup, 64), height: 1, depth: 1)
@@ -769,6 +794,9 @@ final class SimulationRuntime: @unchecked Sendable {
         interactionRangesBuffer: MTLBuffer,
         interactionIndicesBuffer: MTLBuffer
     ) {
+        let scratchParticlesBuffer = interactionScratchParticlesBuffer ?? sourceParticleBuffer
+        let scratchToCanonicalBuffer = interactionScratchToCanonicalBuffer ?? interactionIndicesBuffer
+
         if isTypeMatrixPhysicsActive {
             guard let typeMatrixInteractionBuffer else {
                 zeroParticleImpulseChannel()
@@ -790,12 +818,15 @@ final class SimulationRuntime: @unchecked Sendable {
             physicsEncoder.setBuffer(interactionRangeTargetsBuffer, offset: 0, index: 4)
             physicsEncoder.setBuffer(interactionRangesBuffer, offset: 0, index: 5)
             physicsEncoder.setBuffer(interactionIndicesBuffer, offset: 0, index: 6)
-            physicsEncoder.setBuffer(typeMatrixInteractionBuffer, offset: 0, index: 7)
-            physicsEncoder.setBuffer(sidecarFrontBuffer, offset: 0, index: 8)
-            physicsEncoder.setBuffer(sidecarBackBuffer, offset: 0, index: 9)
+            physicsEncoder.setBuffer(scratchParticlesBuffer, offset: 0, index: 7)
+            physicsEncoder.setBuffer(scratchToCanonicalBuffer, offset: 0, index: 8)
+            physicsEncoder.setBuffer(typeMatrixInteractionBuffer, offset: 0, index: 9)
+            physicsEncoder.setBuffer(sidecarFrontBuffer, offset: 0, index: 10)
+            physicsEncoder.setBuffer(sidecarBackBuffer, offset: 0, index: 11)
             var params = TypeMatrixPhysicsAccumulateParams(
                 particleCount: UInt32(activeParticleCount),
                 particleTypeCount: UInt32(max(1, currentSimulationState.particleTypes)),
+                neighborReadMode: activeNeighborReadModeRawValue,
                 innerRadius: Float(typeMatrixLocalSettings.innerRadiusWorldUnits),
                 middleRadius: Float(typeMatrixLocalSettings.middleRadiusWorldUnits),
                 outerRadius: Float(typeMatrixLocalSettings.outerRadiusWorldUnits),
@@ -811,7 +842,7 @@ final class SimulationRuntime: @unchecked Sendable {
                 teleportationAccumulation: Float(typeMatrixLocalSettings.teleportationAccumulation),
                 teleportationRecoveryRate: Float(typeMatrixLocalSettings.teleportationRecoveryRate)
             )
-            physicsEncoder.setBytes(&params, length: MemoryLayout<TypeMatrixPhysicsAccumulateParams>.stride, index: 10)
+            physicsEncoder.setBytes(&params, length: MemoryLayout<TypeMatrixPhysicsAccumulateParams>.stride, index: 12)
             let threadsPerGroup = MTLSize(
                 width: min(typeMatrixPhysicsAccumulatePipeline.maxTotalThreadsPerThreadgroup, physicsThreadsPerGroup),
                 height: 1,
@@ -832,12 +863,15 @@ final class SimulationRuntime: @unchecked Sendable {
             physicsEncoder.setBuffer(interactionRangeTargetsBuffer, offset: 0, index: 4)
             physicsEncoder.setBuffer(interactionRangesBuffer, offset: 0, index: 5)
             physicsEncoder.setBuffer(interactionIndicesBuffer, offset: 0, index: 6)
+            physicsEncoder.setBuffer(scratchParticlesBuffer, offset: 0, index: 7)
+            physicsEncoder.setBuffer(scratchToCanonicalBuffer, offset: 0, index: 8)
             var params = TemplatePhysicsAccumulateParams(
                 particleCount: UInt32(activeParticleCount),
                 interactionRadius: 0.18,
-                impulseScale: 0.004
+                impulseScale: 0.004,
+                neighborReadMode: activeNeighborReadModeRawValue
             )
-            physicsEncoder.setBytes(&params, length: MemoryLayout<TemplatePhysicsAccumulateParams>.stride, index: 7)
+            physicsEncoder.setBytes(&params, length: MemoryLayout<TemplatePhysicsAccumulateParams>.stride, index: 9)
             let threadsPerGroup = MTLSize(
                 width: min(templatePhysicsAccumulatePipeline.maxTotalThreadsPerThreadgroup, physicsThreadsPerGroup),
                 height: 1,
@@ -857,12 +891,15 @@ final class SimulationRuntime: @unchecked Sendable {
         physicsEncoder.setBuffer(interactionRangeTargetsBuffer, offset: 0, index: 4)
         physicsEncoder.setBuffer(interactionRangesBuffer, offset: 0, index: 5)
         physicsEncoder.setBuffer(interactionIndicesBuffer, offset: 0, index: 6)
+        physicsEncoder.setBuffer(scratchParticlesBuffer, offset: 0, index: 7)
+        physicsEncoder.setBuffer(scratchToCanonicalBuffer, offset: 0, index: 8)
         var params = SimulationPhysicsAccumulateParams(
             particleCount: UInt32(activeParticleCount),
             interactionRadius: 0.42,
-            impulseScale: 0.018 * currentSimulationState.timeScale
+            impulseScale: 0.018 * currentSimulationState.timeScale,
+            neighborReadMode: activeNeighborReadModeRawValue
         )
-        physicsEncoder.setBytes(&params, length: MemoryLayout<SimulationPhysicsAccumulateParams>.stride, index: 7)
+        physicsEncoder.setBytes(&params, length: MemoryLayout<SimulationPhysicsAccumulateParams>.stride, index: 9)
         let threadsPerGroup = MTLSize(
             width: min(defaultPhysicsAccumulatePipeline.maxTotalThreadsPerThreadgroup, physicsThreadsPerGroup),
             height: 1,
@@ -1117,7 +1154,8 @@ final class SimulationRuntime: @unchecked Sendable {
     private func ensureFixedGridInteractionTopology() -> FixedGridInteractionTopology {
         let settings = FixedGridOptimizationSettings(
             subdivisions: currentSimulationState.fixedGridSubdivisions,
-            subspaceCap: currentSimulationState.fixedGridSubspaceCap
+            subspaceCap: currentSimulationState.fixedGridSubspaceCap,
+            neighborReadMode: .raw
         )
         if let cachedFixedGridTopology, cachedFixedGridTopology.settings == settings {
             return cachedFixedGridTopology
@@ -1169,6 +1207,18 @@ final class SimulationRuntime: @unchecked Sendable {
         if interactionIndicesBuffer == nil || interactionIndicesBuffer?.length ?? 0 < indicesLength {
             interactionIndicesBuffer = device.makeBuffer(length: indicesLength)
         }
+
+        if activeFixedGridNeighborReadMode == .scratch {
+            let scratchParticlesLength = max(1, MemoryLayout<ParticleState>.stride * particleSlotCount)
+            if interactionScratchParticlesBuffer == nil || interactionScratchParticlesBuffer?.length ?? 0 < scratchParticlesLength {
+                interactionScratchParticlesBuffer = device.makeBuffer(length: scratchParticlesLength)
+            }
+
+            let scratchToCanonicalLength = max(1, MemoryLayout<UInt32>.stride * particleSlotCount)
+            if interactionScratchToCanonicalBuffer == nil || interactionScratchToCanonicalBuffer?.length ?? 0 < scratchToCanonicalLength {
+                interactionScratchToCanonicalBuffer = device.makeBuffer(length: scratchToCanonicalLength)
+            }
+        }
     }
 
     private func encodeFixedGridInteractionPlanning(
@@ -1192,7 +1242,8 @@ final class SimulationRuntime: @unchecked Sendable {
         var cellParams = FixedGridCellCountParams(cellCount: UInt32(cellCount))
         var assignParams = FixedGridAssignParticlesParams(
             particleCount: UInt32(particleCount),
-            subdivisions: UInt32(topology.settings.clampedSubdivisions)
+            subdivisions: UInt32(topology.settings.clampedSubdivisions),
+            neighborReadMode: activeNeighborReadModeRawValue
         )
 
         let cellThreads = MTLSize(width: cellCount, height: 1, depth: 1)
@@ -1272,7 +1323,17 @@ final class SimulationRuntime: @unchecked Sendable {
             scatterEncoder.setBuffer(interactionGroupIndicesBuffer, offset: 0, index: 1)
             scatterEncoder.setBuffer(fixedGridCellWriteHeadsBuffer, offset: 0, index: 2)
             scatterEncoder.setBuffer(interactionIndicesBuffer, offset: 0, index: 3)
-            scatterEncoder.setBytes(&assignParams, length: MemoryLayout<FixedGridAssignParticlesParams>.stride, index: 4)
+            if let interactionScratchParticlesBuffer {
+                scatterEncoder.setBuffer(interactionScratchParticlesBuffer, offset: 0, index: 4)
+            } else {
+                scatterEncoder.setBuffer(sourceParticleBuffer, offset: 0, index: 4)
+            }
+            if let interactionScratchToCanonicalBuffer {
+                scatterEncoder.setBuffer(interactionScratchToCanonicalBuffer, offset: 0, index: 5)
+            } else {
+                scatterEncoder.setBuffer(interactionIndicesBuffer, offset: 0, index: 5)
+            }
+            scatterEncoder.setBytes(&assignParams, length: MemoryLayout<FixedGridAssignParticlesParams>.stride, index: 6)
             scatterEncoder.dispatchThreads(particleThreads, threadsPerThreadgroup: particleThreadgroup)
             scatterEncoder.endEncoding()
         }
@@ -1545,7 +1606,19 @@ final class SimulationRuntime: @unchecked Sendable {
             let targetGroupIndex = Int(rangeTargets[rangeIndex])
             let range = ranges[targetGroupIndex]
             guard range.count > 0 else { continue }
-            return Int(indices[Int(range.startIndex)])
+            let targetIndex = Int(indices[Int(range.startIndex)])
+            if activeFixedGridNeighborReadMode == .scratch,
+               let interactionScratchToCanonicalBuffer {
+                let reverse = interactionScratchToCanonicalBuffer.contents().bindMemory(
+                    to: UInt32.self,
+                    capacity: interactionScratchToCanonicalBuffer.length / MemoryLayout<UInt32>.stride
+                )
+                guard targetIndex < interactionScratchToCanonicalBuffer.length / MemoryLayout<UInt32>.stride else {
+                    return nil
+                }
+                return Int(reverse[targetIndex])
+            }
+            return targetIndex
         }
         return nil
     }
@@ -1586,6 +1659,20 @@ final class SimulationRuntime: @unchecked Sendable {
 
     private var isFixedGridOptimizationActive: Bool {
         activeModules.optimization.name == FixedGridOptimizationModuleRuntime.moduleName
+    }
+
+    private var activeFixedGridNeighborReadMode: FixedGridNeighborReadMode {
+        guard isFixedGridOptimizationActive else { return .raw }
+        return currentSimulationState.fixedGridNeighborReadMode
+    }
+
+    private var activeNeighborReadModeRawValue: UInt32 {
+        switch activeFixedGridNeighborReadMode {
+        case .raw:
+            return 0
+        case .scratch:
+            return 1
+        }
     }
 
     private func uploadTypeMatrixInteractionBuffer(from sourceMatrix: [Int]) {
