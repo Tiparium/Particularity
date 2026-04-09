@@ -1,0 +1,82 @@
+# Physics Sim Brainstorm Notes (Session 04)
+
+## Session Status
+- Closed (summary approved)
+
+## Brainstorm Session
+- The first full physics module will be a matrix-driven interaction sim built on the existing optimization-to-physics contract, first tested against the naive `n^2` optimization module but designed to stay compatible with later optimized candidate-selection modules.
+- Physics behavior is defined by an asymmetric `n x n` integer interaction matrix plus three additive global radii (`inner`, `middle`, `outer`): inner is always repulsive, outer is the matrix-driven interaction zone, and middle is the smoothing band between them.
+- For this sim, physics updates are strictly self-owned: each particle thread may read only optimization-supplied candidate particles, accumulate results only for itself, and never mutate another particle’s state.
+
+## Topic
+- First full physics module
+- Module packaging direction
+
+## Working Notes
+- The first full physics module is the next design target.
+- It will be developed and tested first against the current naive `n^2` optimization module.
+- It must still be designed to remain compatible with a later, more specialized optimization module.
+- The physics module should rely on the optimization-to-physics interaction contract, not on all-pairs behavior as a permanent assumption.
+- Module selection UX may change later; current file-selection behavior should not be treated as an architectural constraint.
+- This module is intended to replicate the user's earlier particle simulation.
+- Physics behavior is defined by an `n x n` type interaction matrix.
+- Matrix entries are integer multipliers and may be asymmetric.
+- Initial matrix generation should be random per run with values constrained to `1`, `0`, and `-1`.
+- The interaction matrix should be easy to expose, inspect, and edit because tuning it is the main way to shape behavior without changing the simulation model itself.
+- Interaction rule for particle `P` of type `A` against another particle of type `B`:
+  - read matrix entry at row `A`, column `B`
+  - treat that integer as a multiplier
+  - multiply that value by the direction from `P` to the other particle
+  - positive values attract, negative values repel, zero means no directional contribution
+- `A -> B` interaction need not equal `B -> A`.
+- Global radius controls should be shared across all particles regardless of type:
+  - `innerRadius`
+  - `middleRadius`
+  - `outerRadius`
+- Radius behavior:
+  - inner radius is always repulsive regardless of matrix value
+  - outer radius is the region where matrix-defined interaction applies
+  - middle radius is a smoothing buffer between the inner and outer behaviors
+- For the first pass, proximity falloff inside the outer radius is not required; being inside the outer interaction region is enough to apply full-strength interaction.
+- The radii are layered additively rather than competing:
+  - if inner = `5`, middle = `3`, outer = `5`, total interaction extent is `13`
+- This additive layering preserves ordering so particles always encounter outer interaction space before inner repulsion space.
+- For the first pass, the interaction matrix should be persistent and fully initialized across the whole capped matrix, including cells outside the currently active `n x n` region.
+- The matrix should not be edited during a running simulation in the first pass, but matrix mutation over time is still an intended future capability and should not be ruled out by the design.
+- Stored matrices are canonical assets.
+- When a matrix is loaded into an active simulation, the physics module should operate on a copy of that matrix rather than mutating the canonical stored source.
+- This copy-vs-canonical distinction should be respected in the implementation design even if live matrix mutation is not exposed yet.
+
+## First-pass decisions
+- Zone interpretation is confirmed as:
+  - `0 .. inner` = forced repulsion
+  - `inner .. inner+middle` = blend zone
+  - `inner+middle .. inner+middle+outer` = full matrix behavior
+  - beyond that = no interaction
+- With the naive `n^2` optimization module, particles may still be evaluated even when they have no actual effect; this is known waste and acceptable for the first pass.
+- Middle zone behavior should start as a linear interpolation between forced repulsion and matrix-driven behavior.
+- Inner radius behavior should start as full-strength repulsion.
+- Interaction direction should use a normalized direction vector.
+- Phase 1 behavior:
+  - particle `P` iterates over only the optimization-supplied indices
+  - each candidate contributes an impulse to `P`
+  - `P` should average those impulse contributions across the supplied candidates
+- For the first pass, the averaging divisor should be the total number of supplied candidate indices, matching the behavior of the original simulation.
+- Phase 2 behavior:
+  - apply the accumulated/averaged impulse back to particle `P`
+- No damping or drag in the first pass.
+- For the first pass, the matrix is disposable rather than persisted:
+  - randomize on each simulation restart
+  - matrix editing and persistence are deferred
+- Matrix regeneration behavior for the first pass follows the disposable model above rather than a persisted canonical-library workflow.
+- Particle type count for this physics module is capped at `32`.
+- This `32` cap is module-specific, not an engine-wide limit.
+- When this physics module is active, the UI should enforce the `32`-type limit.
+- Module settings should appear through the existing settings panel mechanism by reflecting the currently active module.
+
+## Longer-term goals
+- Fine tune middle-zone blending beyond a simple linear interpolation.
+- Replace full-strength inner repulsion with a more nuanced distance-dependent rule.
+- Explore damping/drag and related stabilizing terms.
+- Add matrix editing UI and matrix persistence soon after the first pass.
+- Support canonical stored matrices as first-class selectable assets while running simulations operate on loaded copies.

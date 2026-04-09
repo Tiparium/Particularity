@@ -1,0 +1,34 @@
+# Physics Sim Brainstorm Notes (Session 01)
+
+## Session Status
+- Closed (summary approved)
+
+## Brainstorm Session
+- We are keeping CLI thin and GUI-first: `./run` is for setup/build/selfcheck workflows, not primary simulation control.
+- VR is a future-ready consideration, not a current hard target; architecture should avoid blocking VR support later.
+- Current active hardware label is `M1` (M1 base, 8 GB). Incoming higher tier is `M1.2` (M1 Pro, 32 GB).
+- Setup flow now includes downloading Metal toolchain (`xcodebuild -downloadComponent MetalToolchain`), especially for new machine bring-up.
+- UI direction: a stable rotatable 3D simulation cube from day one, always visible even when simulation is paused/stopped (empty when no particles).
+- Input direction: `Space` pauses/resumes by freezing state, and all keyboard shortcuts should be parameterizable/remappable.
+- macOS multitouch should be used for natural navigation (zoom/pan/orbit behavior).
+- Canonical swappable module types are now three:
+  - `PhysicsModule`
+  - `VisualModule`
+  - `OptimizationModule`
+- A full simulation run requires one active module from each category.
+- Default visual fallback behavior is explicit:
+  - if visual selection is unpopulated, fallback to default visual module
+  - render unlit spheres
+  - default base color is moderate grey
+- Lighting support is a future goal; visual interfaces should stay lighting-ready while baseline remains unlit.
+
+## Notes
+- This file captures brainstorm outcomes after Session `00` summary closure.
+- Session files are read-only after summary approval unless explicitly reopened by the user.
+
+## UI Art Direction Addendum
+- Visual style should feel Apple-native in interaction patterns and control layout.
+- Accent color family should center on a rusty ochre/orange tone where color is used.
+- Base palette should stay mostly neutral greys, with occasional restrained accent color usage.
+- Background treatment should include a mild film-grain effect (subtle, not noisy).
+- Window visuals should follow a cohesive cinematic/scientific mood rather than generic debug styling.

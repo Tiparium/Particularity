@@ -1,0 +1,22 @@
+# Branch Feature: Branch Features
+
+## Score
+- 1
+
+## Intent
+Define how local Harbormaster extensions are represented inside a host project so they can be reviewed for possible promotion to core Harbormaster.
+
+## Directives
+- Branch features are local project-level extensions to Harbormaster behavior.
+- Each branch feature must be documented in `.harbormaster/branches/`.
+- Each branch feature must be self-contained in a single directives file.
+- File naming format: `<feature-name>.branch`.
+- Each branch file should include intent, directives, and any compatibility notes.
+- Each branch file should include a `Score` value.
+- Score definition: number of times the branch has been copied to another Harbormaster project.
+- Higher score indicates higher likelihood of promotion into core Harbormaster.
+- Branch features should be written so they can be reviewed later in the main Harbormaster project as potential add-ons to core.
+
+## Review notes
+- Keep scope explicit and bounded.
+- Include migration notes when a branch feature is likely to become core.

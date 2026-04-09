@@ -1,0 +1,40 @@
+# Branch Feature: Bookmarking System
+
+## Score
+- 0
+
+## Intent
+Capture durable session checkpoints on demand so ongoing work can be resumed later without reconstructing the whole conversation from scratch.
+
+## Directives
+- Trigger phrases include `make a bookmark`, `bookmark this`, and close variants that clearly request a bookmark.
+- When asked to create a bookmark, first draft the proposed bookmark in chat.
+- Before drafting the bookmark, check the current git branch.
+- If the current branch is a sprint branch, ask whether the user wants to continue in the sprint branch or switch to a temp branch.
+- If the current branch is a temp branch, mention that fact, but do not block on the question.
+- If the current branch is `main`, block and ask whether to switch to a temp branch before proceeding.
+- Do not write a bookmark file until the user explicitly approves the draft.
+- If the user requests changes, revise the proposed bookmark in chat and wait again for approval.
+- If the user cancels, do not write any bookmark file.
+- After explicit approval, write a new bookmark file under `.harbormaster/bookmarks/`.
+- Bookmark files should be append-only at the project level: create a new file for each bookmark rather than overwriting an older one.
+- Bookmark filenames should be sortable and timestamped.
+- Recommended filename format: `YYYY-MM-DD_HHMM_<short-slug>.bookmark.md`.
+- Each bookmark should stay concise and scannable.
+- Each bookmark should summarize:
+  - what we are currently working on
+  - what is already done
+  - what is currently in progress or immediately next
+  - likely future directions, if they were discussed
+  - important assumptions or risks that would matter when resuming
+- If the work is happening on a branch feature or sprint branch, mention that context briefly when it materially affects the bookmark.
+- A bookmark is a checkpoint summary, not a brainstorm note and not a replacement for normal context modules.
+
+## Compatibility notes
+- This feature complements brainstorm notes and project context; it does not replace them.
+- Bookmark files are intended to be lightweight resume points for future sessions.
+- Branch classification should follow the local project's naming conventions; if a branch type is inferred from the name, surface that inference as an assumption.
+
+## Current project application
+- Bookmarking is enabled for this project.
+- Initial branch score is `0` (first creation in this project lineage).

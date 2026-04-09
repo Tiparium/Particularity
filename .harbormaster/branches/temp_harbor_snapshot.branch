@@ -1,0 +1,28 @@
+# Branch Feature: Temp Harbor Snapshot
+
+## Score
+- 0
+
+## Intent
+Provide a temporary stopgap workflow for preserving ignored `.harbormaster` state in git as explicit snapshot commits until Harbormaster gets a more formal tracking model.
+
+## Directives
+- Trigger phrase: when the user asks to `take a snapshot` and the request clearly refers to Harbormaster state.
+- This workflow is temporary and should be treated as a bridge feature, not the long-term Harbormaster tracking architecture.
+- Default behavior: stash the current non-Harbormaster project state before taking the Harbormaster snapshot.
+- If the user explicitly asks for a normal project commit instead of a stash, commit the current project state first.
+- If the user asks for a commit but does not provide a message, generate one.
+- Generated pre-snapshot commit messages should include `temp harbormaster snapshot` plus useful human-readable context about the feature/work in progress.
+- After the pre-snapshot stash or commit step, force-add `.harbormaster/` contents.
+- Commit the `.harbormaster/` snapshot as its own clearly labeled separate git commit.
+- After creating the Harbormaster snapshot commit, merge only the Harbormaster file changes to `main` immediately.
+- Keep the Harbormaster snapshot commit visually and semantically distinct from ordinary project code commits.
+
+## Compatibility notes
+- This feature exists because `.harbormaster/` is intentionally ignored in normal project git flow.
+- Snapshot commits are deliberate exceptions, not a replacement for the ignored-by-default design.
+- A future Harbormaster overhaul may replace this workflow entirely.
+
+## Current project application
+- Temporary Harbormaster snapshot workflow is enabled for this project.
+- Initial branch score is `0` (first creation in this project lineage).

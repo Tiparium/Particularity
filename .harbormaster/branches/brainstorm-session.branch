@@ -1,0 +1,24 @@
+# Branch Feature: Brainstorm Session
+
+## Score
+- 1
+
+## Intent
+Define a lightweight brainstorming capture workflow: quick conversational recap first, then write to notes only after user approval or tweaks.
+
+## Directives
+- Trigger phrase: "condense and summarize" indicates a Brainstorm Session recap.
+- During a Brainstorm Session, provide a short high-level recap (not a dense concept dump).
+- Recap should focus only on the most recent cluster of interrelated discussion points.
+- After recap, explicitly wait for user approval/tweaks before writing the summary into notes.
+- Once approved, write a concise "Brainstorm Session" entry at the top of the active brainstorm file in `.harbormaster/brainstorm/`.
+- On session close, create a Git commit using message format: `Brainstorm Session {xx} complete`.
+- That commit must include a very brief 1-3 bullet "at-a-glance" summary in the commit body.
+- After a summary is approved/written, treat that brainstorm file as read-only unless the user explicitly reopens or requests edits to that session file.
+- Keep Brainstorm Session entries compact and scannable.
+- Preserve detailed sections below; do not replace foundational notes unless asked.
+- Brainstorm file naming must use a zero-indexed numeric prefix for sorting (for example, first entry file is `00_<name>.brainstorm`).
+
+## Tone constraints
+- Conversational and explanatory.
+- Brief and practical over exhaustive.

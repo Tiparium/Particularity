@@ -1,0 +1,132 @@
+# Physics Sim Brainstorm Notes (Session 03)
+
+## Session Status
+- Closed (summary approved)
+
+## Brainstorm Session
+- The runtime now uses a real `optimization -> physics` handoff based on canonical particle indices with `interactionOffsets + interactionIndices`.
+- Particle state has been repassed toward a canonical schema centered on `position`, `velocity`, `impulse`, `type`, `particleID`, and `active`, while visual appearance is now derived from `type` instead of stored color.
+- The default physics module currently participates in the new handoff path but remains a fallback directional slide-and-loop module: it does not yet apply inter-particle impulse, and the first real interaction-based physics module remains the next major step.
+- Lifecycle behavior is now explicit: `pause -> play` preserves live state, while `stop -> start` rebuilds canonical simulation state from persisted parameters.
+
+## Topic
+- Inter-module communication contracts for `optimization`, `physics`, and `visual`
+- Sprint framing: first half of Sprint `02`
+
+## Working Notes
+- Primary immediate goal is to make module handoff real in code, not just in the paper.
+- This pass should focus on modularity and inter-module communication first.
+- Particle schema redesign should be deferred to a second pass after the contract is stable.
+- The modularity and inter-module communication system is considered backbone architecture.
+- Current implementation does not yet satisfy the intended optimization-to-physics handoff model.
+
+## Pass 1 scope
+- Scope is strictly inter-module communication for `optimization -> physics`.
+- Pass 1 should avoid broad particle-schema redesign where possible.
+- Minimal runtime changes are acceptable if they are necessary to make the contract real.
+- The default all-pairs optimization module should obey the same contract future optimization modules will use.
+
+## Intended runtime ownership model
+- Runtime should own the canonical particle-state buffers.
+- Optimization should provide interaction references, not particle payloads.
+- Physics should consume canonical particle state plus optimization-produced interaction data.
+- Visual should read canonical particle state and derive appearance from that state.
+- Visual should not sit in the hot path for physics/optimization communication.
+
+## Optimization -> physics contract direction
+- The important information optimization must provide is:
+  - for particle `A`, which other particle indices should physics inspect during this timestep
+- Optimization should not pass force rules or physics behavior itself.
+- Optimization should not pass copied particle data.
+- Optimization should pass lookup/index information only.
+- The contract should work for both:
+  - naive all-pairs optimization
+  - future spatial/condition-based optimization methods
+
+## Physics execution model direction
+- Physics should operate per particle.
+- For a given particle `A`, physics should iterate over the particles optimization says `A` should interact with.
+- Each per-particle physics pass should begin with a local zeroed `vec3` impulse accumulator.
+- Interactions with other particles should add into that local impulse accumulator.
+- Physics should then perform a second phase that applies the accumulated impulse back to the particle's actual state.
+- Interactions are internal to physics; the interaction law is not part of the optimization contract.
+
+## Impulse handling direction
+- The term `impulse` should remain in use for continuity with the user's previous simulator design.
+- We do not need to store every individual interaction contribution.
+- For the current design, physics only needs one accumulated impulse vector per particle per timestep.
+- The impulse data does not need to be shared outside the physics module contract.
+- Current preferred direction:
+  - accumulate impulse locally during phase 1
+  - write the resulting accumulated impulse into canonical per-particle working state
+  - apply that impulse in phase 2
+- Separate full duplicate particle-state buffers are not currently preferred because of memory overhead.
+- A two-stage blocked physics pass is preferred over full double-buffered particle state for now.
+
+## Canonical particle schema discussion
+- Color should not be part of canonical particle state.
+- Visual should derive appearance from `type`.
+- Candidate core schema fields currently identified:
+  - `position`
+  - `velocity`
+  - `impulse`
+  - `type`
+  - `particleID`
+  - `active`
+- This schema work is important, but should be handled after the contract work in pass 2.
+- `impulse` is expected to be broadly useful across simulations and should be part of the core schema.
+
+## Current implementation observations
+- Current runtime is still mostly centered on:
+  - position buffer
+  - color buffer
+- Current particle type is implicit at spawn time and not stored as canonical particle data.
+- Current optimization pass does not yet hand physics an explicit interaction lookup structure.
+- Current physics pass does not yet consume optimization-produced interaction lists.
+
+## Future optimization planning constraints
+- The contract must plan ahead for future optimization modules that only return nearby or condition-matching particles.
+- We should not assume all-pairs forever, even if all-pairs is the first implementation.
+- The canonical particle buffer should not be forced into a spatial layout just to support future optimization.
+- Future optimization modules should be able to build derived acceleration structures over canonical particle data.
+- Spatial lookup structures should likely live as optimization-owned helper buffers, not as the canonical particle layout itself.
+- Reordering canonical particle data every step is viewed as risky and potentially too expensive to make the baseline assumption.
+
+## Questions currently in play
+- What exact lookup structure should optimization hand physics?
+- Should the interaction contract use stable particle IDs or current canonical buffer indices?
+- What is the smallest valid contract that works now and still supports future spatial optimization?
+- How much temporary awkwardness in the current particle schema is acceptable for pass 1?
+
+## Confirmed decisions
+- V1 interaction references should use current canonical particle indices.
+- V1 lookup format should use:
+  - `interactionOffsets`
+  - `interactionIndices`
+- Default all-pairs optimization should include self in each particle's interaction list.
+- Physics should skip or specially handle self-interaction internally rather than relying on optimization to remove it.
+- Working particle schema for the repass should be:
+  - `vec3 position`
+  - `vec3 velocity`
+  - `vec3 impulse`
+  - `int type`
+  - `int particleID`
+  - `int active`
+- `active` semantics for now:
+  - `1` = active by default
+  - `0` = inactive by default
+  - other values may be used later
+- Canonical particle state should no longer store color.
+- Visual should derive appearance from particle `type`.
+- Both physics phases remain inside the physics module boundary.
+- Physics phases should block between phase 1 and phase 2 so canonical motion state is not updated while particles are still determining their next action.
+- Pass 1 and pass 2 should be intentionally blurred together enough to produce a working bootable program with the new inter-module contract and supporting particle schema.
+- The goal of this repass is practical end-to-end functionality, not just architectural staging.
+- Correction after first repass:
+  - the default physics module should continue to behave as directional slide-and-loop motion only
+  - it should participate in the new optimization-to-physics handoff, but should not add inter-particle impulse yet
+  - the first real interaction-based physics module is still a later step
+- Runtime lifecycle correction:
+  - `pause -> play` should preserve live simulation state
+  - `stop -> start` should rebuild simulation state from the persisted defining parameters
+  - stopping should therefore force a canonical respawn/reset of particle state
