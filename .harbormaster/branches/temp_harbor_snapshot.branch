@@ -16,6 +16,7 @@ Provide a temporary stopgap workflow for preserving ignored `.harbormaster` stat
 - After the pre-snapshot stash or commit step, force-add `.harbormaster/` contents.
 - Commit the `.harbormaster/` snapshot as its own clearly labeled separate git commit.
 - After creating the Harbormaster snapshot commit, merge only the Harbormaster file changes to `main` immediately.
+- After the `main` merge is complete, switch back to the originating working branch automatically.
 - Keep the Harbormaster snapshot commit visually and semantically distinct from ordinary project code commits.
 
 ## Compatibility notes
