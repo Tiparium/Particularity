@@ -120,10 +120,38 @@ struct ModuleDescriptor: Identifiable, Equatable {
     let acceptsOptimizationDebugInfo: Bool
     let providesOptimizationDebugInfo: Bool
     let supportsLeaderCommunicationLog: Bool
+    let moduleFamilyID: String?
+
+    init(
+        kind: String,
+        name: String,
+        visibility: BuildVisibility,
+        isDefaultFallback: Bool,
+        acceptsOptimizationDebugInfo: Bool,
+        providesOptimizationDebugInfo: Bool,
+        supportsLeaderCommunicationLog: Bool,
+        moduleFamilyID: String? = nil
+    ) {
+        self.kind = kind
+        self.name = name
+        self.visibility = visibility
+        self.isDefaultFallback = isDefaultFallback
+        self.acceptsOptimizationDebugInfo = acceptsOptimizationDebugInfo
+        self.providesOptimizationDebugInfo = providesOptimizationDebugInfo
+        self.supportsLeaderCommunicationLog = supportsLeaderCommunicationLog
+        self.moduleFamilyID = moduleFamilyID
+    }
 
     var id: String {
         "\(kind)|\(name)"
     }
+}
+
+enum MLPlaybackModuleFamily {
+    static let id = "ml-data-playback"
+    static let physicsModuleName = "MLPlaybackFrameApplicator"
+    static let visualModuleName = "MLPlaybackRecipeVisualizer"
+    static let optimizationModuleName = "MLPlaybackSidecarLayout"
 }
 
 enum ModuleCatalog {
@@ -194,6 +222,36 @@ enum ModuleCatalog {
             providesOptimizationDebugInfo: true,
             supportsLeaderCommunicationLog: true
         ),
+        MLPlaybackModuleFamily.physicsModuleName: ModuleDescriptor(
+            kind: "physics",
+            name: MLPlaybackModuleFamily.physicsModuleName,
+            visibility: .dev,
+            isDefaultFallback: false,
+            acceptsOptimizationDebugInfo: false,
+            providesOptimizationDebugInfo: false,
+            supportsLeaderCommunicationLog: false,
+            moduleFamilyID: MLPlaybackModuleFamily.id
+        ),
+        MLPlaybackModuleFamily.visualModuleName: ModuleDescriptor(
+            kind: "visual",
+            name: MLPlaybackModuleFamily.visualModuleName,
+            visibility: .dev,
+            isDefaultFallback: false,
+            acceptsOptimizationDebugInfo: false,
+            providesOptimizationDebugInfo: false,
+            supportsLeaderCommunicationLog: false,
+            moduleFamilyID: MLPlaybackModuleFamily.id
+        ),
+        MLPlaybackModuleFamily.optimizationModuleName: ModuleDescriptor(
+            kind: "optimization",
+            name: MLPlaybackModuleFamily.optimizationModuleName,
+            visibility: .dev,
+            isDefaultFallback: false,
+            acceptsOptimizationDebugInfo: false,
+            providesOptimizationDebugInfo: false,
+            supportsLeaderCommunicationLog: false,
+            moduleFamilyID: MLPlaybackModuleFamily.id
+        ),
     ]
 
     static func fallback(for kind: String) -> ModuleDescriptor {
@@ -223,10 +281,33 @@ struct ActiveModuleSet: Equatable {
     var physics: ModuleDescriptor
     var visual: ModuleDescriptor
     var optimization: ModuleDescriptor
+
+    var completeModuleFamilyID: String? {
+        guard let physicsFamilyID = physics.moduleFamilyID,
+              physicsFamilyID == visual.moduleFamilyID,
+              physicsFamilyID == optimization.moduleFamilyID else {
+            return nil
+        }
+        return physicsFamilyID
+    }
+
+    var hasPartialModuleFamilySelection: Bool {
+        let familyIDs = [physics.moduleFamilyID, visual.moduleFamilyID, optimization.moduleFamilyID]
+            .compactMap { $0 }
+        return !familyIDs.isEmpty && completeModuleFamilyID == nil
+    }
+
+    var isPlaybackModuleFamily: Bool {
+        completeModuleFamilyID == MLPlaybackModuleFamily.id
+    }
 }
 
 enum ModuleCompatibility {
     static func incompatibilityReason(for modules: ActiveModuleSet, state: SimulationViewportState) -> String? {
+        if modules.hasPartialModuleFamilySelection {
+            return "Playback module families must be selected as a compatible physics, visual, and optimization trio."
+        }
+
         if state.showOptimizationInfo && !modules.visual.acceptsOptimizationDebugInfo {
             return "Visual module \(modules.visual.name) does not accept optimization debug data."
         }

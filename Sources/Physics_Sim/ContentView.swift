@@ -1182,6 +1182,7 @@ private struct SimulationCenterPane: View {
     private var transportState: SimulationTransportState { runtimeConfigCoordinator.transportState }
     private var validationReport: RuntimeValidationReport { runtimeConfigCoordinator.validationReport }
     private var viewportRuntimeError: String? { diagnosticsStore.viewportRuntimeError }
+    private var isPlaybackMode: Bool { runtimeConfigCoordinator.activeModules.isPlaybackModuleFamily }
 
     var body: some View {
         VStack(spacing: 10) {
@@ -1195,81 +1196,10 @@ private struct SimulationCenterPane: View {
             }
             .padding(.horizontal, 4)
 
-            HStack(spacing: 10) {
-                Button("Start") {
-                    runtimeConfigCoordinator.startSimulation()
-                }
-                .buttonStyle(AppFramedButtonStyle(.prominent))
-                .disabled(transportState != .stopped || !validationReport.canStart)
-
-                Button(transportState == .running ? "Pause" : "Play") {
-                    runtimeConfigCoordinator.togglePausePlay()
-                }
-                .frame(minWidth: 64)
-                .buttonStyle(AppFramedButtonStyle())
-                .disabled(transportState == .stopped || (transportState == .paused && !validationReport.canStart))
-
-                Button("Stop") {
-                    runtimeConfigCoordinator.stopSimulation()
-                }
-                .buttonStyle(AppFramedButtonStyle())
-                .disabled(transportState == .stopped)
-
-                Divider()
-                    .frame(height: 18)
-
-                AppIconButton(
-                    iconName: anyDockPanelsVisible ? "rectangle.split.3x1" : "rectangle.split.3x1.fill",
-                    helpText: anyDockPanelsVisible ? "Hide all dock panels" : "Show all dock panels"
-                ) {
-                    onToggleAllDockPanelsVisibility()
-                }
-
-                AppIconButton(
-                    iconName: "sidebar.left",
-                    helpText: leftPanelVisible ? "Hide left panel" : "Show left panel",
-                    isDimmed: leftPanelVisible
-                ) {
-                    onToggleLeftPanelVisibility()
-                }
-
-                AppIconButton(
-                    iconName: "sidebar.right",
-                    helpText: rightPanelVisible ? "Hide right panel" : "Show right panel",
-                    isDimmed: rightPanelVisible
-                ) {
-                    onToggleRightPanelVisibility()
-                }
-
-                AppIconButton(
-                    iconName: bottomPanelVisible ? "rectangle.topthird.inset.filled" : "rectangle.bottomthird.inset.filled",
-                    helpText: bottomPanelVisible ? "Hide bottom panel" : "Show bottom panel",
-                    isDimmed: bottomPanelVisible
-                ) {
-                    onToggleBottomPanelVisibility()
-                }
-
-                Divider()
-                    .frame(height: 18)
-
-                AppSwitchToggle(
-                    "Slow Rotation",
-                    isOn: Binding(
-                        get: { viewportStateStore.viewportState.slowRotationEnabled },
-                        set: { viewportStateStore.setSlowRotationEnabled($0) }
-                    ),
-                    helpText: viewportStateStore.viewportState.slowRotationEnabled ? "Disable slow rotation" : "Enable slow rotation"
-                )
-
-                Spacer()
-
-                Text(validationReport.canStart ? "Ready" : "Blocked")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(validationReport.canStart ? Color.green.opacity(0.9) : Color.red.opacity(0.9))
+            if isPlaybackMode {
+                PlaybackTimelineBar()
+                    .transition(.opacity)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
 
             HStack(spacing: 16) {
                 LabeledContent("Transport", value: transportState.title)
@@ -1311,6 +1241,105 @@ private struct SimulationCenterPane: View {
             .font(.caption)
             .foregroundStyle(.secondary)
         }
+    }
+}
+
+private struct PlaybackTimelineBar: View {
+    private let placeholderDurationSeconds: Double = 52.0
+    private let stepSeconds: Double = 1.0
+
+    @State private var currentSeconds: Double = 0
+    @State private var isPlaying = false
+    @State private var isLooping = true
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Button {
+                    step(by: -stepSeconds)
+                } label: {
+                    Image(systemName: "backward.end.fill")
+                }
+                .buttonStyle(AppFramedButtonStyle())
+
+                Button(isPlaying ? "Pause" : "Play") {
+                    isPlaying.toggle()
+                }
+                .frame(minWidth: 64)
+                .buttonStyle(AppFramedButtonStyle(.prominent))
+
+                Button {
+                    step(by: stepSeconds)
+                } label: {
+                    Image(systemName: "forward.end.fill")
+                }
+                .buttonStyle(AppFramedButtonStyle())
+
+                Button("Start") {
+                    currentSeconds = 0
+                    isPlaying = false
+                }
+                .buttonStyle(AppFramedButtonStyle())
+
+                Spacer()
+
+                Text("Playback Timeline")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                AppSwitchToggle(
+                    "Loop",
+                    isOn: $isLooping,
+                    helpText: isLooping ? "Loop playback at the end" : "Stop playback at the end"
+                )
+            }
+
+            HStack(spacing: 10) {
+                Text(formatTime(currentSeconds))
+                    .font(.caption.monospacedDigit())
+                    .frame(width: 66, alignment: .leading)
+
+                Slider(
+                    value: Binding(
+                        get: { currentSeconds },
+                        set: { currentSeconds = min(max(0, $0), placeholderDurationSeconds) }
+                    ),
+                    in: 0...placeholderDurationSeconds
+                )
+
+                Text(formatTime(placeholderDurationSeconds))
+                    .font(.caption.monospacedDigit())
+                    .frame(width: 66, alignment: .trailing)
+            }
+
+            Text("Placeholder timeline. Real playback duration, frame markers, and runtime binding will come from loaded pre-baked data.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .onReceive(Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()) { _ in
+            guard isPlaying else { return }
+            step(by: 0.05)
+        }
+    }
+
+    private func step(by delta: Double) {
+        let next = currentSeconds + delta
+        if next > placeholderDurationSeconds {
+            currentSeconds = isLooping ? 0 : placeholderDurationSeconds
+            isPlaying = isLooping
+        } else {
+            currentSeconds = max(0, next)
+        }
+    }
+
+    private func formatTime(_ seconds: Double) -> String {
+        let bounded = max(0, seconds)
+        let wholeSeconds = Int(bounded)
+        let milliseconds = Int((bounded - Double(wholeSeconds)) * 1000)
+        return String(format: "%02d:%02d.%03d", wholeSeconds / 60, wholeSeconds % 60, milliseconds)
     }
 }
 
