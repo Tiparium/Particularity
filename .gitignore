@@ -3,3 +3,5 @@
 .home/
 .temp/
 .DS_Store
+Sources/lab/.venv/
+Sources/lab/data/raw/*
