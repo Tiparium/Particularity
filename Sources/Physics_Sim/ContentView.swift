@@ -1331,46 +1331,17 @@ private struct SimulationCenterPane: View {
 
 private struct PlaybackTimelineBar: View {
     private let placeholderDurationSeconds: Double = 52.0
-    private let stepSeconds: Double = 1.0
 
     @State private var currentSeconds: Double = 0
-    @State private var isPlaying = false
     @State private var isLooping = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 10) {
-                Button {
-                    step(by: -stepSeconds)
-                } label: {
-                    Image(systemName: "backward.end.fill")
-                }
-                .buttonStyle(AppFramedButtonStyle())
-
-                Button(isPlaying ? "Pause" : "Play") {
-                    isPlaying.toggle()
-                }
-                .frame(minWidth: 64)
-                .buttonStyle(AppFramedButtonStyle(.prominent))
-
-                Button {
-                    step(by: stepSeconds)
-                } label: {
-                    Image(systemName: "forward.end.fill")
-                }
-                .buttonStyle(AppFramedButtonStyle())
-
-                Button("Start") {
-                    currentSeconds = 0
-                    isPlaying = false
-                }
-                .buttonStyle(AppFramedButtonStyle())
-
-                Spacer()
-
+            HStack {
                 Text("Playback Timeline")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
+                Spacer()
 
                 AppSwitchToggle(
                     "Loop",
@@ -1404,20 +1375,6 @@ private struct PlaybackTimelineBar: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
-        .onReceive(Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()) { _ in
-            guard isPlaying else { return }
-            step(by: 0.05)
-        }
-    }
-
-    private func step(by delta: Double) {
-        let next = currentSeconds + delta
-        if next > placeholderDurationSeconds {
-            currentSeconds = isLooping ? 0 : placeholderDurationSeconds
-            isPlaying = isLooping
-        } else {
-            currentSeconds = max(0, next)
-        }
     }
 
     private func formatTime(_ seconds: Double) -> String {
