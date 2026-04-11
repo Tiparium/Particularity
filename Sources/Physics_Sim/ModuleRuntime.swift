@@ -16,6 +16,11 @@ enum SimulationTransportState: String {
     }
 }
 
+enum SimulationParticleLimits {
+    static let engineCap = 1_000_000
+    static let settingsUICap = 250_000
+}
+
 struct PhysicsModuleState {
     var particleCount: Int = 20_000
     var randomDistribution = true

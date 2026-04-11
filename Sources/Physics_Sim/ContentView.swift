@@ -190,8 +190,8 @@ struct MainWindowContentDependencies {
 }
 
 struct ContentView: View {
-    private let particleCountEngineCap = 10_000_000
-    private let particleCountUICap = 100_000
+    private let particleCountEngineCap = SimulationParticleLimits.engineCap
+    private let particleCountUICap = SimulationParticleLimits.settingsUICap
     @State private var isImporterPresented = false
     @State private var importerTargetKind: ModuleKind = .physics
     @State private var hoveredGrabPanelID: UUID?

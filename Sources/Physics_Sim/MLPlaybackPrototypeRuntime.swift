@@ -126,6 +126,9 @@ enum MLPlaybackPrototypeFixtureLoader {
 
                 let frameCount = Int(try read(UInt32.self, from: rawBuffer, cursor: &cursor))
                 let particleCount = Int(try read(UInt32.self, from: rawBuffer, cursor: &cursor))
+                guard particleCount <= SimulationParticleLimits.engineCap else {
+                    throw FixtureDecodeError.particleCountExceedsEngineCap(particleCount)
+                }
                 let durationSeconds = try read(Double.self, from: rawBuffer, cursor: &cursor)
                 var frames: [MLPlaybackPrototypeLoadedFrame] = []
                 frames.reserveCapacity(frameCount)
@@ -252,12 +255,15 @@ enum MLPlaybackPrototypeFixtureLoader {
 
     private enum FixtureDecodeError: LocalizedError {
         case invalidMagic
+        case particleCountExceedsEngineCap(Int)
         case truncatedData
 
         var errorDescription: String? {
             switch self {
             case .invalidMagic:
                 return "Invalid ML playback binary fixture magic."
+            case .particleCountExceedsEngineCap(let particleCount):
+                return "ML playback binary fixture particle count \(particleCount) exceeds the hard engine cap of \(SimulationParticleLimits.engineCap)."
             case .truncatedData:
                 return "ML playback binary fixture ended before all records were read."
             }

@@ -75,6 +75,13 @@ enum SimulationConfigurationDerivation {
             return RuntimeValidationReport(issue: issue, projectedBytes: projectedBytes)
         }
 
+        if editorState.physicsState.particleCount > SimulationParticleLimits.engineCap {
+            return RuntimeValidationReport(
+                issue: "Particle count exceeds the hard engine cap of \(SimulationParticleLimits.engineCap.formatted()).",
+                projectedBytes: projectedBytes
+            )
+        }
+
         if editorState.optimizationState.showLeaderCommunicationLog,
            !activeModules.optimization.supportsLeaderCommunicationLog {
             return RuntimeValidationReport(
