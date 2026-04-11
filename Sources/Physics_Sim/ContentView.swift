@@ -1196,27 +1196,100 @@ private struct SimulationCenterPane: View {
             }
             .padding(.horizontal, 4)
 
-            if isPlaybackMode {
-                PlaybackTimelineBar()
-                    .transition(.opacity)
-            }
+            HStack(spacing: 10) {
+                Button("Start") {
+                    runtimeConfigCoordinator.startSimulation()
+                }
+                .buttonStyle(AppFramedButtonStyle(.prominent))
+                .disabled(transportState != .stopped || !validationReport.canStart)
 
-            HStack(spacing: 16) {
-                LabeledContent("Transport", value: transportState.title)
-                LabeledContent("Projected", value: ByteCountFormatter.string(fromByteCount: Int64(validationReport.projectedBytes), countStyle: .memory))
+                Button(transportState == .running ? "Pause" : "Play") {
+                    runtimeConfigCoordinator.togglePausePlay()
+                }
+                .frame(minWidth: 64)
+                .buttonStyle(AppFramedButtonStyle())
+                .disabled(transportState == .stopped || (transportState == .paused && !validationReport.canStart))
+
+                Button("Stop") {
+                    runtimeConfigCoordinator.stopSimulation()
+                }
+                .buttonStyle(AppFramedButtonStyle())
+                .disabled(transportState == .stopped)
+
+                Divider()
+                    .frame(height: 18)
+
+                AppIconButton(
+                    iconName: anyDockPanelsVisible ? "rectangle.split.3x1" : "rectangle.split.3x1.fill",
+                    helpText: anyDockPanelsVisible ? "Hide all dock panels" : "Show all dock panels"
+                ) {
+                    onToggleAllDockPanelsVisibility()
+                }
+
+                AppIconButton(
+                    iconName: "sidebar.left",
+                    helpText: leftPanelVisible ? "Hide left panel" : "Show left panel",
+                    isDimmed: leftPanelVisible
+                ) {
+                    onToggleLeftPanelVisibility()
+                }
+
+                AppIconButton(
+                    iconName: "sidebar.right",
+                    helpText: rightPanelVisible ? "Hide right panel" : "Show right panel",
+                    isDimmed: rightPanelVisible
+                ) {
+                    onToggleRightPanelVisibility()
+                }
+
+                AppIconButton(
+                    iconName: bottomPanelVisible ? "rectangle.topthird.inset.filled" : "rectangle.bottomthird.inset.filled",
+                    helpText: bottomPanelVisible ? "Hide bottom panel" : "Show bottom panel",
+                    isDimmed: bottomPanelVisible
+                ) {
+                    onToggleBottomPanelVisibility()
+                }
+
+                Divider()
+                    .frame(height: 18)
+
+                AppSwitchToggle(
+                    "Slow Rotation",
+                    isOn: Binding(
+                        get: { viewportStateStore.viewportState.slowRotationEnabled },
+                        set: { viewportStateStore.setSlowRotationEnabled($0) }
+                    ),
+                    helpText: viewportStateStore.viewportState.slowRotationEnabled ? "Disable slow rotation" : "Enable slow rotation"
+                )
+
                 Spacer()
-                if let issue = viewportRuntimeError ?? validationReport.issue {
-                    Text(issue)
-                        .font(.caption)
-                        .foregroundStyle(Color.red.opacity(0.9))
-                        .lineLimit(2)
-                        .multilineTextAlignment(.trailing)
+
+                Text(validationReport.canStart ? "Ready" : "Blocked")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(validationReport.canStart ? Color.green.opacity(0.9) : Color.red.opacity(0.9))
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+
+            Group {
+                if isPlaybackMode {
+                    PlaybackTimelineBar()
+                        .transition(.opacity)
+                } else if let issue = viewportRuntimeError {
+                    HStack {
+                        Spacer()
+                        Text(issue)
+                            .font(.caption)
+                            .foregroundStyle(Color.red.opacity(0.9))
+                            .lineLimit(2)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
                 }
             }
-            .font(.caption)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
 
             SimulationViewportSurface(
                 session: session,
@@ -1381,8 +1454,40 @@ private struct ModuleSlotsPanel: View {
         return availableFiles.first(where: { $0.id == selectedFileID })
     }
 
+    private var mlPlaybackFamilyFiles: [ModuleKind: ModuleFile] {
+        Dictionary(uniqueKeysWithValues: ModuleKind.allCases.compactMap { kind in
+            guard let file = availableFiles.first(where: {
+                $0.kind == kind && $0.descriptor?.moduleFamilyID == MLPlaybackModuleFamily.id
+            }) else {
+                return nil
+            }
+            return (kind, file)
+        })
+    }
+
+    private var canAssignMLPlaybackFamily: Bool {
+        mlPlaybackFamilyFiles.count == ModuleKind.allCases.count
+    }
+
+    private var isMLPlaybackFamilyActive: Bool {
+        EditorViewSupport.activeModuleSet(
+            store: editorSettingsStore,
+            availableFiles: availableFiles
+        ).isPlaybackModuleFamily
+    }
+
     var body: some View {
         VStack(spacing: 8) {
+            if canAssignMLPlaybackFamily {
+                Button(isMLPlaybackFamilyActive ? "ML Playback Trio Active" : "Assign ML Playback Trio") {
+                    assignMLPlaybackFamily()
+                }
+                .font(.caption.weight(.semibold))
+                .buttonStyle(AppFramedButtonStyle(isMLPlaybackFamilyActive ? .standard : .prominent))
+                .disabled(isMLPlaybackFamilyActive)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
             ForEach(ModuleKind.allCases) { kind in
                 let assigned = EditorViewSupport.assignedModules(from: editorSettingsStore)[kind]
                 let resolved = EditorViewSupport.resolvedModule(for: kind, store: editorSettingsStore, availableFiles: availableFiles)
@@ -1442,6 +1547,13 @@ private struct ModuleSlotsPanel: View {
                     }
                 }
             }
+        }
+    }
+
+    private func assignMLPlaybackFamily() {
+        for kind in ModuleKind.allCases {
+            guard let file = mlPlaybackFamilyFiles[kind] else { continue }
+            editorSettingsStore.setAssignedModulePath(file.url.path, for: kind)
         }
     }
 }
