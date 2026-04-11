@@ -1,0 +1,68 @@
+status: in_construction
+branch_type: twig
+
+intent:
+- provisional read-only cross-project Harbormaster linking
+- no cross-project writes
+- no automatic synchronization
+- use this file as the working construction surface for the link design
+
+safety_constraints:
+- read_only_only
+- explicit_project_links_only
+- no_blind_project_crawling
+- prefer database-backed discovery when available
+- remote links must stay unresolved until explicitly configured
+- no_live_connections
+- no_ssh_from_this_agent
+- remote_reads_must_use_user_run_export_commands
+- remote_reads_must_arrive_here_as_local_imported_files
+
+current_checkpoint:
+- resolved the local Harbormaster project through the Harbormaster project database
+- recorded the linked Harbormaster project path
+- recorded a second remote placeholder link that will require SSH later
+- shelved the relay-room prototype in favor of command-based data export/import
+
+likely_direction:
+- start with read-only project discovery and retrieval
+- prefer existing Harbormaster context/history as the source material
+- support query-driven lookup instead of broad summary scraping
+- use generated export commands on remote projects, with the user running them there
+- import remote outputs here as local files for inspection
+- begin with whole-log export rather than selective remote querying
+- keep the first real interface file-based, not chat-based
+- defer any real-time or agent-to-agent communication ideas until much later
+
+linked_projects:
+- name: Harbormaster
+  id: 1773281554245-a20644b22927f
+  path: [VOLATILE] /Users/tiparium/Desktop/Stuff/Personal_Work_Dir/VS_Code_Extensions/MacOS_VSCE_Harbormaster
+  discovery_source: /Users/tiparium/Library/Application Support/Code/User/globalStorage/harbormaster.harbormaster/projects.json
+  link_mode: read_only
+  state: resolved
+
+- name: lodgepole
+  id: TODO
+  path: [VOLATILE] [TODO]
+  discovery_source: TODO (remote project on separate machine via SSH)
+  link_mode: read_only
+  state: unresolved
+
+open_construction_items:
+- define a stable twig schema if this pattern survives
+- define the export command interface for remote Harbormaster projects
+- define the local import location and file naming rules
+- decide what provenance metadata every returned result must carry
+- define the lodgepole handoff flow without any live connection or SSH from this side
+
+data_retrieval_model:
+- remote project exposes a user-run command interface for exporting Harbormaster data
+- this side never SSHes into the remote machine
+- exported data is copied here by the user
+- imported data is treated as local read-only reference material
+- the first pass should support copying the remote project's entire data log
+
+prototype_status:
+- relay-room app is shelved
+- file-based export/import is the active prototype direction

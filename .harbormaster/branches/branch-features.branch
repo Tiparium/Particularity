@@ -11,6 +11,10 @@ Define how local Harbormaster extensions are represented inside a host project s
 - Each branch feature must be documented in `.harbormaster/branches/`.
 - Each branch feature must be self-contained in a single directives file.
 - File naming format: `<feature-name>.branch`.
+- Branch features may optionally declare a maturity/state classification when that helps clarify how stable the behavior is.
+- `twig` branches are early, intentionally in-progress branch features.
+- `twig` branches may include temporary convenience behavior that should not be treated as a long-term strategy by default.
+- `twig` branches should be described plainly as provisional so they are not mistaken for mature Harbormaster behavior.
 - Each branch file should include intent, directives, and any compatibility notes.
 - Each branch file should include a `Score` value.
 - Score definition: number of times the branch has been copied to another Harbormaster project.

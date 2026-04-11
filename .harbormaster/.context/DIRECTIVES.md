@@ -107,3 +107,4 @@ If a file is in `.harbormaster/.context` that is not mentioned above, query the 
 * 2026-01-20 — Keep directives grouped by section with clear headings and consistent structure.
 * 2026-04-08 — Take occasional git snapshots when a feature meaningfully completes or when the workflow is clearly moving on from that feature.
 * 2026-04-08 — Git commit messages should usually be informative and somewhat verbose for feature lookup and human readability.
+* 2026-04-08 — If the user asks for a branch behavior, read that branch file before attempting the behavior.
