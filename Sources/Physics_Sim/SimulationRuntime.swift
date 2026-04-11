@@ -25,9 +25,9 @@ enum SimulationRuntimeError: LocalizedError {
 
 private struct SimulationPhysicsAccumulateParams {
     var particleCount: UInt32
-    var interactionTraversalMode: UInt32
     var interactionRadius: Float
     var impulseScale: Float
+    var neighborReadMode: UInt32 = 0
 }
 
 private struct SimulationPhysicsApplyParams {
@@ -40,12 +40,13 @@ private struct SimulationPhysicsApplyParams {
 private struct TypeMatrixPhysicsAccumulateParams {
     var particleCount: UInt32
     var particleTypeCount: UInt32
+    var neighborReadMode: UInt32
+    var padding0: UInt32 = 0
     var innerRadius: Float
     var middleRadius: Float
     var outerRadius: Float
     var attractionMultiplier: Float
     var repulsionMultiplier: Float
-    var interactionTraversalMode: UInt32
     var matrixSideLength: UInt32
     var teleportationEnabled: UInt32
     var teleportationGeneralBudget: UInt32
@@ -70,9 +71,9 @@ private struct TypeMatrixPhysicsApplyParams {
 
 private struct TemplatePhysicsAccumulateParams {
     var particleCount: UInt32
-    var interactionTraversalMode: UInt32
     var interactionRadius: Float
     var impulseScale: Float
+    var neighborReadMode: UInt32 = 0
 }
 
 private struct TemplatePhysicsApplyParams {
@@ -85,15 +86,39 @@ private struct TemplatePhysicsApplyParams {
 private struct SimulationDebugLineParams {
     var segmentCount: UInt32
     var particleCount: UInt32
-    var traversalMode: UInt32
+    var neighborReadMode: UInt32 = 0
+    var padding1: UInt32 = 0
+}
+
+private struct FixedGridAssignParticlesParams {
+    var particleCount: UInt32
+    var subdivisions: UInt32
+    var neighborReadMode: UInt32 = 0
+    var padding1: UInt32 = 0
+}
+
+private struct FixedGridCellCountParams {
+    var cellCount: UInt32
     var padding0: UInt32 = 0
+    var padding1: UInt32 = 0
+    var padding2: UInt32 = 0
+}
+
+private struct FixedGridScanStepParams {
+    var cellCount: UInt32
+    var stride: UInt32
+    var padding0: UInt32 = 0
+    var padding1: UInt32 = 0
 }
 
 struct SimulationDebugLineSegment {
     var sourceParticleIndex: UInt32
-    var interactionOffset: UInt32
     var interactionCount: UInt32
     var firstVertexIndex: UInt32
+    var padding0: UInt32 = 0
+    var padding1: UInt32 = 0
+    var padding2: UInt32 = 0
+    var padding3: UInt32 = 0
 }
 
 private struct SimulationLineVertex {
@@ -127,6 +152,12 @@ final class SimulationRuntime: @unchecked Sendable {
     private let typeMatrixPhysicsAccumulatePipeline: MTLComputePipelineState
     private let typeMatrixPhysicsApplyPipeline: MTLComputePipelineState
     private let debugLinePipeline: MTLComputePipelineState
+    private let fixedGridClearCellCountsPipeline: MTLComputePipelineState
+    private let fixedGridAssignParticlesPipeline: MTLComputePipelineState
+    private let fixedGridPrepareGroupRangesPipeline: MTLComputePipelineState
+    private let fixedGridScanGroupRangesPipeline: MTLComputePipelineState
+    private let fixedGridFinalizeGroupRangesPipeline: MTLComputePipelineState
+    private let fixedGridScatterParticleIndicesPipeline: MTLComputePipelineState
     private var metricsSink: @MainActor (SimulationPerformanceMetrics) -> Void
     private var leaderCommunicationLogSink: @MainActor ([LeaderCommunicationLogEntry]) -> Void
     private let simulationQueue = DispatchQueue(label: "physics-sim.runtime.queue", qos: .userInitiated)
@@ -139,9 +170,18 @@ final class SimulationRuntime: @unchecked Sendable {
 
     private var particleFrontBuffer: MTLBuffer?
     private var particleBackBuffer: MTLBuffer?
-    private var interactionOffsetsBuffer: MTLBuffer?
+    private var interactionGroupIndicesBuffer: MTLBuffer?
+    private var interactionRangeOffsetsBuffer: MTLBuffer?
+    private var interactionRangeTargetsBuffer: MTLBuffer?
+    private var interactionRangesBuffer: MTLBuffer?
     private var interactionIndicesBuffer: MTLBuffer?
-    private var interactionTraversalMode: DefaultOptimizationModuleRuntime.InteractionTraversalMode = .canonicalRange
+    private var interactionScratchParticlesBuffer: MTLBuffer?
+    private var interactionScratchToCanonicalBuffer: MTLBuffer?
+    private var fixedGridCellCountsBuffer: MTLBuffer?
+    private var fixedGridCellOffsetsBuffer: MTLBuffer?
+    private var fixedGridCellWriteHeadsBuffer: MTLBuffer?
+    private var fixedGridCellScanBufferA: MTLBuffer?
+    private var fixedGridCellScanBufferB: MTLBuffer?
     private var typeMatrixInteractionBuffer: MTLBuffer?
     private var typeMatrixSidecarFrontBuffer: MTLBuffer?
     private var typeMatrixSidecarBackBuffer: MTLBuffer?
@@ -152,6 +192,9 @@ final class SimulationRuntime: @unchecked Sendable {
     private var debugHistory = SimulationDebugHistory(historyCapacity: 8, visibilityDuration: 0.11)
     private var leaderCommunicationLogEntries: [LeaderCommunicationLogEntry] = []
     private var needsParticleRebuild = true
+    private var needsInteractionPlanRefresh = true
+    private var cachedDefaultInteractionParticleCount: Int?
+    private var cachedFixedGridTopology: FixedGridInteractionTopology?
     private var typeMatrixLocalSettings = TypeMatrixLocalPhysicsSettings()
     private var currentSimulationState = SimulationViewportState(
         transportState: .stopped,
@@ -164,7 +207,10 @@ final class SimulationRuntime: @unchecked Sendable {
         sphereSize: 0.025,
         spectrumOffset: 0.0,
         showOptimizationInfo: false,
-        showLeaderCommunicationLog: false
+        showLeaderCommunicationLog: false,
+        fixedGridSubdivisions: FixedGridOptimizationModuleRuntime.defaultSubdivisions,
+        fixedGridSubspaceCap: 2,
+        fixedGridNeighborReadMode: .scratch
     )
     private var activeModules = ActiveModuleSet(
         physics: ModuleCatalog.defaultPhysics,
@@ -190,7 +236,10 @@ final class SimulationRuntime: @unchecked Sendable {
         sphereSize: 0.025,
         spectrumOffset: 0.0,
         showOptimizationInfo: false,
-        showLeaderCommunicationLog: false
+        showLeaderCommunicationLog: false,
+        fixedGridSubdivisions: FixedGridOptimizationModuleRuntime.defaultSubdivisions,
+        fixedGridSubspaceCap: 2,
+        fixedGridNeighborReadMode: .scratch
     )
 
     private var metricsAccumulator = SimulationMetricsAccumulator(sampleWindowSeconds: 3.0, publishInterval: 0.25)
@@ -227,6 +276,24 @@ final class SimulationRuntime: @unchecked Sendable {
         guard let debugLineFunction = library.makeFunction(name: "build_debug_lines") else {
             throw SimulationRuntimeError.missingFunction("build_debug_lines")
         }
+        guard let fixedGridClearCellCountsFunction = library.makeFunction(name: "fixed_grid_clear_cell_counts") else {
+            throw SimulationRuntimeError.missingFunction("fixed_grid_clear_cell_counts")
+        }
+        guard let fixedGridAssignParticlesFunction = library.makeFunction(name: "fixed_grid_assign_particles_to_groups") else {
+            throw SimulationRuntimeError.missingFunction("fixed_grid_assign_particles_to_groups")
+        }
+        guard let fixedGridPrepareGroupRangesFunction = library.makeFunction(name: "fixed_grid_build_group_ranges") else {
+            throw SimulationRuntimeError.missingFunction("fixed_grid_build_group_ranges")
+        }
+        guard let fixedGridScanGroupRangesFunction = library.makeFunction(name: "fixed_grid_scan_group_ranges") else {
+            throw SimulationRuntimeError.missingFunction("fixed_grid_scan_group_ranges")
+        }
+        guard let fixedGridFinalizeGroupRangesFunction = library.makeFunction(name: "fixed_grid_finalize_group_ranges") else {
+            throw SimulationRuntimeError.missingFunction("fixed_grid_finalize_group_ranges")
+        }
+        guard let fixedGridScatterParticleIndicesFunction = library.makeFunction(name: "fixed_grid_scatter_particle_indices") else {
+            throw SimulationRuntimeError.missingFunction("fixed_grid_scatter_particle_indices")
+        }
 
         do {
             self.defaultPhysicsAccumulatePipeline = try device.makeComputePipelineState(function: physicsAccumulateFunction)
@@ -236,6 +303,12 @@ final class SimulationRuntime: @unchecked Sendable {
             self.typeMatrixPhysicsAccumulatePipeline = try device.makeComputePipelineState(function: typeMatrixAccumulateFunction)
             self.typeMatrixPhysicsApplyPipeline = try device.makeComputePipelineState(function: typeMatrixApplyFunction)
             self.debugLinePipeline = try device.makeComputePipelineState(function: debugLineFunction)
+            self.fixedGridClearCellCountsPipeline = try device.makeComputePipelineState(function: fixedGridClearCellCountsFunction)
+            self.fixedGridAssignParticlesPipeline = try device.makeComputePipelineState(function: fixedGridAssignParticlesFunction)
+            self.fixedGridPrepareGroupRangesPipeline = try device.makeComputePipelineState(function: fixedGridPrepareGroupRangesFunction)
+            self.fixedGridScanGroupRangesPipeline = try device.makeComputePipelineState(function: fixedGridScanGroupRangesFunction)
+            self.fixedGridFinalizeGroupRangesPipeline = try device.makeComputePipelineState(function: fixedGridFinalizeGroupRangesFunction)
+            self.fixedGridScatterParticleIndicesPipeline = try device.makeComputePipelineState(function: fixedGridScatterParticleIndicesFunction)
         } catch {
             let description = (error as NSError).localizedDescription
             let failingName: String
@@ -251,6 +324,18 @@ final class SimulationRuntime: @unchecked Sendable {
                 failingName = "type_matrix_accumulate_impulse"
             } else if description.contains("type_matrix_apply_impulse") {
                 failingName = "type_matrix_apply_impulse"
+            } else if description.contains("fixed_grid_clear_cell_counts") {
+                failingName = "fixed_grid_clear_cell_counts"
+            } else if description.contains("fixed_grid_assign_particles_to_groups") {
+                failingName = "fixed_grid_assign_particles_to_groups"
+            } else if description.contains("fixed_grid_build_group_ranges") {
+                failingName = "fixed_grid_build_group_ranges"
+            } else if description.contains("fixed_grid_scan_group_ranges") {
+                failingName = "fixed_grid_scan_group_ranges"
+            } else if description.contains("fixed_grid_finalize_group_ranges") {
+                failingName = "fixed_grid_finalize_group_ranges"
+            } else if description.contains("fixed_grid_scatter_particle_indices") {
+                failingName = "fixed_grid_scatter_particle_indices"
             } else {
                 failingName = "build_debug_lines"
             }
@@ -304,7 +389,15 @@ final class SimulationRuntime: @unchecked Sendable {
             if let reason = ModuleCompatibility.incompatibilityReason(for: nextModules, state: currentSimulationState) {
                 throw SimulationRuntimeError.incompatibleModules(nextModules, reason)
             }
+            let previousOptimization = activeModules.optimization
             activeModules = nextModules
+            if previousOptimization != nextModules.optimization {
+                needsInteractionPlanRefresh = true
+                cachedDefaultInteractionParticleCount = nil
+                if nextModules.optimization.name != FixedGridOptimizationModuleRuntime.moduleName {
+                    cachedFixedGridTopology = nil
+                }
+            }
             if self.currentSimulationState.transportState == .stopped {
                 self.typeMatrixInteractionBuffer = nil
             }
@@ -344,6 +437,11 @@ final class SimulationRuntime: @unchecked Sendable {
             previous.particleCount != nextState.particleCount
             || previous.randomDistribution != nextState.randomDistribution
             || previous.particleTypes != nextState.particleTypes
+        let optimizationTopologyChanged =
+            previous.fixedGridSubdivisions != nextState.fixedGridSubdivisions
+            || previous.fixedGridSubspaceCap != nextState.fixedGridSubspaceCap
+        let optimizationReadModeChanged =
+            previous.fixedGridNeighborReadMode != nextState.fixedGridNeighborReadMode
 
         if nextState.transportState == .stopped {
             simulationWorkInFlight = false
@@ -353,6 +451,17 @@ final class SimulationRuntime: @unchecked Sendable {
         } else {
             if shouldRebuildParticles {
                 needsParticleRebuild = true
+                needsInteractionPlanRefresh = true
+                cachedDefaultInteractionParticleCount = nil
+            }
+
+            if optimizationTopologyChanged {
+                cachedFixedGridTopology = nil
+                needsInteractionPlanRefresh = true
+            }
+
+            if optimizationReadModeChanged {
+                needsInteractionPlanRefresh = true
             }
 
             if previous.showOptimizationInfo && !nextState.showOptimizationInfo {
@@ -479,8 +588,18 @@ final class SimulationRuntime: @unchecked Sendable {
     private func abandonEphemeralState() {
         particleFrontBuffer = nil
         particleBackBuffer = nil
-        interactionOffsetsBuffer = nil
+        interactionGroupIndicesBuffer = nil
+        interactionRangeOffsetsBuffer = nil
+        interactionRangeTargetsBuffer = nil
+        interactionRangesBuffer = nil
         interactionIndicesBuffer = nil
+        interactionScratchParticlesBuffer = nil
+        interactionScratchToCanonicalBuffer = nil
+        fixedGridCellCountsBuffer = nil
+        fixedGridCellOffsetsBuffer = nil
+        fixedGridCellWriteHeadsBuffer = nil
+        fixedGridCellScanBufferA = nil
+        fixedGridCellScanBufferB = nil
         typeMatrixInteractionBuffer = nil
         typeMatrixSidecarFrontBuffer = nil
         typeMatrixSidecarBackBuffer = nil
@@ -492,6 +611,9 @@ final class SimulationRuntime: @unchecked Sendable {
         clearLeaderCommunicationLog()
         metricsAccumulator.reset()
         needsParticleRebuild = true
+        needsInteractionPlanRefresh = true
+        cachedDefaultInteractionParticleCount = nil
+        cachedFixedGridTopology = nil
         publishSnapshots()
     }
 
@@ -508,23 +630,64 @@ final class SimulationRuntime: @unchecked Sendable {
             publishSnapshots()
             return
         }
-        simulationWorkInFlight = true
+
+        if !isFixedGridOptimizationActive && needsInteractionPlanRefresh {
+            refreshInteractionPlanBuffers(using: particleFrontBuffer, particleCount: activeParticleCount)
+        }
 
         let interParticleCommunicationEnabled = currentSimulationState.allParticlesIntercommunicate
         let shouldBuildDebugLines = interParticleCommunicationEnabled && currentSimulationState.showOptimizationInfo
         let shouldRecordLeaderLog = interParticleCommunicationEnabled && currentSimulationState.showLeaderCommunicationLog
-        let leaderInteractionOffset = 0
-        let leaderInteractionCount = interParticleCommunicationEnabled ? activeParticleCount : 0
+        let leaderRangeOffset = 0
+        var leaderRangeCount = 0
+        var leaderInteractionCount = 0
+        var leaderFirstTargetIndex = 0
+
+        if interParticleCommunicationEnabled {
+            if isFixedGridOptimizationActive && (shouldBuildDebugLines || shouldRecordLeaderLog) {
+                let debugInfo = fixedGridLeaderDebugInfo(
+                    particleBuffer: particleFrontBuffer,
+                    particleCount: activeParticleCount
+                )
+                leaderRangeCount = debugInfo.rangeCount
+                leaderInteractionCount = debugInfo.interactionCount
+                leaderFirstTargetIndex = debugInfo.firstTargetIndex ?? 0
+            } else {
+                leaderRangeCount = max(0, interactionRangeCount(for: 0))
+                leaderInteractionCount = max(0, interactionCount(for: 0))
+                leaderFirstTargetIndex = firstInteractionTargetIndex(for: 0) ?? 0
+            }
+        }
+
+        if isFixedGridOptimizationActive && interParticleCommunicationEnabled {
+            let topology = ensureFixedGridInteractionTopology()
+            ensureFixedGridWorkingBuffers(topology: topology)
+            encodeFixedGridInteractionPlanning(
+                into: commandBuffer,
+                sourceParticleBuffer: particleFrontBuffer,
+                particleCount: activeParticleCount,
+                topology: topology
+            )
+            needsInteractionPlanRefresh = false
+        }
+
+        simulationWorkInFlight = true
 
         if interParticleCommunicationEnabled,
-           let interactionOffsetsBuffer,
+           let interactionGroupIndicesBuffer,
+           let interactionRangeOffsetsBuffer,
+           let interactionRangeTargetsBuffer,
+           let interactionRangesBuffer,
            let interactionIndicesBuffer,
            let physicsEncoder = commandBuffer.makeComputeCommandEncoder() {
             encodePhysicsAccumulate(
                 into: physicsEncoder,
                 sourceParticleBuffer: particleFrontBuffer,
                 destinationParticleBuffer: particleBackBuffer,
-                interactionOffsetsBuffer: interactionOffsetsBuffer,
+                interactionGroupIndicesBuffer: interactionGroupIndicesBuffer,
+                interactionRangeOffsetsBuffer: interactionRangeOffsetsBuffer,
+                interactionRangeTargetsBuffer: interactionRangeTargetsBuffer,
+                interactionRangesBuffer: interactionRangesBuffer,
                 interactionIndicesBuffer: interactionIndicesBuffer
             )
         } else {
@@ -535,28 +698,45 @@ final class SimulationRuntime: @unchecked Sendable {
             pruneDebugHistory(now: now)
             cacheLeaderSweepSegment(
                 sourceParticleIndex: 0,
-                interactionOffset: leaderInteractionOffset,
                 interactionCount: leaderInteractionCount,
                 now: now
             )
             rebuildDebugRenderSegments()
 
-            if let interactionIndicesBuffer,
+            if let interactionGroupIndicesBuffer,
+               let interactionRangeOffsetsBuffer,
+               let interactionRangeTargetsBuffer,
+               let interactionRangesBuffer,
+               let interactionIndicesBuffer,
                let currentDebugLineBuffer = debugLineBuffer,
                let debugLineSegmentBuffer,
                !debugHistory.renderSegments.isEmpty,
                let debugLineEncoder = commandBuffer.makeComputeCommandEncoder() {
                 debugLineEncoder.setComputePipelineState(debugLinePipeline)
                 debugLineEncoder.setBuffer(particleFrontBuffer, offset: 0, index: 0)
-                debugLineEncoder.setBuffer(interactionIndicesBuffer, offset: 0, index: 1)
-                debugLineEncoder.setBuffer(currentDebugLineBuffer, offset: 0, index: 2)
+                debugLineEncoder.setBuffer(interactionGroupIndicesBuffer, offset: 0, index: 1)
+                debugLineEncoder.setBuffer(interactionRangeOffsetsBuffer, offset: 0, index: 2)
+                debugLineEncoder.setBuffer(interactionRangeTargetsBuffer, offset: 0, index: 3)
+                debugLineEncoder.setBuffer(interactionRangesBuffer, offset: 0, index: 4)
+                debugLineEncoder.setBuffer(interactionIndicesBuffer, offset: 0, index: 5)
+                if let interactionScratchParticlesBuffer {
+                    debugLineEncoder.setBuffer(interactionScratchParticlesBuffer, offset: 0, index: 6)
+                } else {
+                    debugLineEncoder.setBuffer(particleFrontBuffer, offset: 0, index: 6)
+                }
+                if let interactionScratchToCanonicalBuffer {
+                    debugLineEncoder.setBuffer(interactionScratchToCanonicalBuffer, offset: 0, index: 7)
+                } else {
+                    debugLineEncoder.setBuffer(interactionIndicesBuffer, offset: 0, index: 7)
+                }
+                debugLineEncoder.setBuffer(currentDebugLineBuffer, offset: 0, index: 8)
                 var params = SimulationDebugLineParams(
                     segmentCount: UInt32(debugHistory.renderSegments.count),
                     particleCount: UInt32(activeParticleCount),
-                    traversalMode: interactionTraversalMode.rawValue
+                    neighborReadMode: activeNeighborReadModeRawValue
                 )
-                debugLineEncoder.setBytes(&params, length: MemoryLayout<SimulationDebugLineParams>.stride, index: 3)
-                debugLineEncoder.setBuffer(debugLineSegmentBuffer, offset: 0, index: 4)
+                debugLineEncoder.setBytes(&params, length: MemoryLayout<SimulationDebugLineParams>.stride, index: 9)
+                debugLineEncoder.setBuffer(debugLineSegmentBuffer, offset: 0, index: 10)
                 let vertexCount = max(1, debugHistory.renderSegments.reduce(0) { $0 + $1.vertexCount })
                 let threads = MTLSize(width: vertexCount, height: 1, depth: 1)
                 let threadgroup = MTLSize(width: min(debugLinePipeline.maxTotalThreadsPerThreadgroup, 64), height: 1, depth: 1)
@@ -570,10 +750,10 @@ final class SimulationRuntime: @unchecked Sendable {
         if shouldRecordLeaderLog, leaderInteractionCount > 0 {
             appendLeaderCommunicationLogEntry(
                 now: now,
-                firstTargetIndex: 0,
+                firstTargetIndex: leaderFirstTargetIndex,
                 interactionCount: leaderInteractionCount,
-                startWorkItem: UInt64(leaderInteractionOffset),
-                workItemCount: UInt64(leaderInteractionCount)
+                startWorkItem: UInt64(leaderRangeOffset),
+                workItemCount: UInt64(leaderRangeCount)
             )
         } else if currentSimulationState.showLeaderCommunicationLog {
             publishLeaderCommunicationLog()
@@ -608,9 +788,15 @@ final class SimulationRuntime: @unchecked Sendable {
         into physicsEncoder: MTLComputeCommandEncoder,
         sourceParticleBuffer: MTLBuffer,
         destinationParticleBuffer: MTLBuffer,
-        interactionOffsetsBuffer: MTLBuffer,
+        interactionGroupIndicesBuffer: MTLBuffer,
+        interactionRangeOffsetsBuffer: MTLBuffer,
+        interactionRangeTargetsBuffer: MTLBuffer,
+        interactionRangesBuffer: MTLBuffer,
         interactionIndicesBuffer: MTLBuffer
     ) {
+        let scratchParticlesBuffer = interactionScratchParticlesBuffer ?? sourceParticleBuffer
+        let scratchToCanonicalBuffer = interactionScratchToCanonicalBuffer ?? interactionIndicesBuffer
+
         if isTypeMatrixPhysicsActive {
             guard let typeMatrixInteractionBuffer else {
                 zeroParticleImpulseChannel()
@@ -627,20 +813,25 @@ final class SimulationRuntime: @unchecked Sendable {
             physicsEncoder.setComputePipelineState(typeMatrixPhysicsAccumulatePipeline)
             physicsEncoder.setBuffer(sourceParticleBuffer, offset: 0, index: 0)
             physicsEncoder.setBuffer(destinationParticleBuffer, offset: 0, index: 1)
-            physicsEncoder.setBuffer(interactionOffsetsBuffer, offset: 0, index: 2)
-            physicsEncoder.setBuffer(interactionIndicesBuffer, offset: 0, index: 3)
-            physicsEncoder.setBuffer(typeMatrixInteractionBuffer, offset: 0, index: 4)
-            physicsEncoder.setBuffer(sidecarFrontBuffer, offset: 0, index: 5)
-            physicsEncoder.setBuffer(sidecarBackBuffer, offset: 0, index: 6)
+            physicsEncoder.setBuffer(interactionGroupIndicesBuffer, offset: 0, index: 2)
+            physicsEncoder.setBuffer(interactionRangeOffsetsBuffer, offset: 0, index: 3)
+            physicsEncoder.setBuffer(interactionRangeTargetsBuffer, offset: 0, index: 4)
+            physicsEncoder.setBuffer(interactionRangesBuffer, offset: 0, index: 5)
+            physicsEncoder.setBuffer(interactionIndicesBuffer, offset: 0, index: 6)
+            physicsEncoder.setBuffer(scratchParticlesBuffer, offset: 0, index: 7)
+            physicsEncoder.setBuffer(scratchToCanonicalBuffer, offset: 0, index: 8)
+            physicsEncoder.setBuffer(typeMatrixInteractionBuffer, offset: 0, index: 9)
+            physicsEncoder.setBuffer(sidecarFrontBuffer, offset: 0, index: 10)
+            physicsEncoder.setBuffer(sidecarBackBuffer, offset: 0, index: 11)
             var params = TypeMatrixPhysicsAccumulateParams(
                 particleCount: UInt32(activeParticleCount),
                 particleTypeCount: UInt32(max(1, currentSimulationState.particleTypes)),
+                neighborReadMode: activeNeighborReadModeRawValue,
                 innerRadius: Float(typeMatrixLocalSettings.innerRadiusWorldUnits),
                 middleRadius: Float(typeMatrixLocalSettings.middleRadiusWorldUnits),
                 outerRadius: Float(typeMatrixLocalSettings.outerRadiusWorldUnits),
                 attractionMultiplier: Float(typeMatrixLocalSettings.attractionMultiplier),
                 repulsionMultiplier: Float(typeMatrixLocalSettings.repulsionMultiplier),
-                interactionTraversalMode: interactionTraversalMode.rawValue,
                 matrixSideLength: UInt32(TypeMatrixLocalPhysicsSettings.maxParticleTypes),
                 teleportationEnabled: typeMatrixLocalSettings.teleportationEnabled ? 1 : 0,
                 teleportationGeneralBudget: UInt32(typeMatrixLocalSettings.teleportationGeneralInteractionBudget),
@@ -651,7 +842,7 @@ final class SimulationRuntime: @unchecked Sendable {
                 teleportationAccumulation: Float(typeMatrixLocalSettings.teleportationAccumulation),
                 teleportationRecoveryRate: Float(typeMatrixLocalSettings.teleportationRecoveryRate)
             )
-            physicsEncoder.setBytes(&params, length: MemoryLayout<TypeMatrixPhysicsAccumulateParams>.stride, index: 7)
+            physicsEncoder.setBytes(&params, length: MemoryLayout<TypeMatrixPhysicsAccumulateParams>.stride, index: 12)
             let threadsPerGroup = MTLSize(
                 width: min(typeMatrixPhysicsAccumulatePipeline.maxTotalThreadsPerThreadgroup, physicsThreadsPerGroup),
                 height: 1,
@@ -667,15 +858,20 @@ final class SimulationRuntime: @unchecked Sendable {
             physicsEncoder.setComputePipelineState(templatePhysicsAccumulatePipeline)
             physicsEncoder.setBuffer(sourceParticleBuffer, offset: 0, index: 0)
             physicsEncoder.setBuffer(destinationParticleBuffer, offset: 0, index: 1)
-            physicsEncoder.setBuffer(interactionOffsetsBuffer, offset: 0, index: 2)
-            physicsEncoder.setBuffer(interactionIndicesBuffer, offset: 0, index: 3)
+            physicsEncoder.setBuffer(interactionGroupIndicesBuffer, offset: 0, index: 2)
+            physicsEncoder.setBuffer(interactionRangeOffsetsBuffer, offset: 0, index: 3)
+            physicsEncoder.setBuffer(interactionRangeTargetsBuffer, offset: 0, index: 4)
+            physicsEncoder.setBuffer(interactionRangesBuffer, offset: 0, index: 5)
+            physicsEncoder.setBuffer(interactionIndicesBuffer, offset: 0, index: 6)
+            physicsEncoder.setBuffer(scratchParticlesBuffer, offset: 0, index: 7)
+            physicsEncoder.setBuffer(scratchToCanonicalBuffer, offset: 0, index: 8)
             var params = TemplatePhysicsAccumulateParams(
                 particleCount: UInt32(activeParticleCount),
-                interactionTraversalMode: interactionTraversalMode.rawValue,
                 interactionRadius: 0.18,
-                impulseScale: 0.004
+                impulseScale: 0.004,
+                neighborReadMode: activeNeighborReadModeRawValue
             )
-            physicsEncoder.setBytes(&params, length: MemoryLayout<TemplatePhysicsAccumulateParams>.stride, index: 4)
+            physicsEncoder.setBytes(&params, length: MemoryLayout<TemplatePhysicsAccumulateParams>.stride, index: 9)
             let threadsPerGroup = MTLSize(
                 width: min(templatePhysicsAccumulatePipeline.maxTotalThreadsPerThreadgroup, physicsThreadsPerGroup),
                 height: 1,
@@ -690,15 +886,20 @@ final class SimulationRuntime: @unchecked Sendable {
         physicsEncoder.setComputePipelineState(defaultPhysicsAccumulatePipeline)
         physicsEncoder.setBuffer(sourceParticleBuffer, offset: 0, index: 0)
         physicsEncoder.setBuffer(destinationParticleBuffer, offset: 0, index: 1)
-        physicsEncoder.setBuffer(interactionOffsetsBuffer, offset: 0, index: 2)
-        physicsEncoder.setBuffer(interactionIndicesBuffer, offset: 0, index: 3)
+        physicsEncoder.setBuffer(interactionGroupIndicesBuffer, offset: 0, index: 2)
+        physicsEncoder.setBuffer(interactionRangeOffsetsBuffer, offset: 0, index: 3)
+        physicsEncoder.setBuffer(interactionRangeTargetsBuffer, offset: 0, index: 4)
+        physicsEncoder.setBuffer(interactionRangesBuffer, offset: 0, index: 5)
+        physicsEncoder.setBuffer(interactionIndicesBuffer, offset: 0, index: 6)
+        physicsEncoder.setBuffer(scratchParticlesBuffer, offset: 0, index: 7)
+        physicsEncoder.setBuffer(scratchToCanonicalBuffer, offset: 0, index: 8)
         var params = SimulationPhysicsAccumulateParams(
             particleCount: UInt32(activeParticleCount),
-            interactionTraversalMode: interactionTraversalMode.rawValue,
             interactionRadius: 0.42,
-            impulseScale: 0.018 * currentSimulationState.timeScale
+            impulseScale: 0.018 * currentSimulationState.timeScale,
+            neighborReadMode: activeNeighborReadModeRawValue
         )
-        physicsEncoder.setBytes(&params, length: MemoryLayout<SimulationPhysicsAccumulateParams>.stride, index: 4)
+        physicsEncoder.setBytes(&params, length: MemoryLayout<SimulationPhysicsAccumulateParams>.stride, index: 9)
         let threadsPerGroup = MTLSize(
             width: min(defaultPhysicsAccumulatePipeline.maxTotalThreadsPerThreadgroup, physicsThreadsPerGroup),
             height: 1,
@@ -834,13 +1035,14 @@ final class SimulationRuntime: @unchecked Sendable {
         guard needsParticleRebuild
             || particleFrontBuffer == nil
             || particleBackBuffer == nil
-            || interactionOffsetsBuffer == nil
+            || interactionGroupIndicesBuffer == nil
+            || interactionRangeOffsetsBuffer == nil
+            || interactionRangeTargetsBuffer == nil
+            || interactionRangesBuffer == nil
             || interactionIndicesBuffer == nil else { return }
 
         let spawnData = DefaultPhysicsModuleRuntime.rebuildParticles(from: currentSimulationState)
         let particles = spawnData.particles
-        let interactionPlan = DefaultOptimizationModuleRuntime.rebuildInteractionPlan(particleCount: spawnData.activeCount)
-        interactionTraversalMode = interactionPlan.traversalMode
 
         let particleLength = max(1, MemoryLayout<ParticleState>.stride * particles.count)
         if let existing = particleFrontBuffer, existing.length >= particleLength {
@@ -877,36 +1079,16 @@ final class SimulationRuntime: @unchecked Sendable {
             typeMatrixSidecarBackBuffer = device.makeBuffer(bytes: zeroSidecar, length: sidecarLength)
         }
 
-        let offsetsLength = max(1, MemoryLayout<UInt32>.stride * interactionPlan.offsets.count)
-        if let existing = interactionOffsetsBuffer, existing.length >= offsetsLength {
-            let pointer = existing.contents().bindMemory(to: UInt32.self, capacity: interactionPlan.offsets.count)
-            pointer.update(from: interactionPlan.offsets, count: interactionPlan.offsets.count)
-            interactionOffsetsBuffer = existing
-        } else {
-            interactionOffsetsBuffer = device.makeBuffer(bytes: interactionPlan.offsets, length: offsetsLength)
-        }
-
-        let storedIndexCount = max(1, interactionPlan.indices.count)
-        let indicesLength = max(1, MemoryLayout<UInt32>.stride * storedIndexCount)
-        if let existing = interactionIndicesBuffer, existing.length >= indicesLength {
-            let pointer = existing.contents().bindMemory(to: UInt32.self, capacity: storedIndexCount)
-            if interactionPlan.indices.isEmpty {
-                pointer[0] = 0
-            } else {
-                pointer.update(from: interactionPlan.indices, count: interactionPlan.indices.count)
-            }
-            interactionIndicesBuffer = existing
-        } else {
-            if interactionPlan.indices.isEmpty {
-                var placeholderIndex: UInt32 = 0
-                interactionIndicesBuffer = device.makeBuffer(bytes: &placeholderIndex, length: indicesLength)
-            } else {
-                interactionIndicesBuffer = device.makeBuffer(bytes: interactionPlan.indices, length: indicesLength)
-            }
-        }
-
         activeParticleCount = spawnData.activeCount
         particleCapacity = (particleFrontBuffer?.length ?? 0) / MemoryLayout<ParticleState>.stride
+        if let particleFrontBuffer {
+            if isFixedGridOptimizationActive {
+                let topology = ensureFixedGridInteractionTopology()
+                ensureFixedGridWorkingBuffers(topology: topology)
+            } else {
+                refreshInteractionPlanBuffers(using: particleFrontBuffer, particleCount: activeParticleCount)
+            }
+        }
         debugHistory.reset()
         needsParticleRebuild = false
 
@@ -948,17 +1130,497 @@ final class SimulationRuntime: @unchecked Sendable {
 
     private func cacheLeaderSweepSegment(
         sourceParticleIndex: Int,
-        interactionOffset: Int,
         interactionCount: Int,
         now: TimeInterval
     ) {
         guard interactionCount > 0 else { return }
         debugHistory.cacheSegment(
             sourceParticleIndex: sourceParticleIndex,
-            interactionOffset: interactionOffset,
             interactionCount: interactionCount,
             startedAt: now
         )
+    }
+
+    private func refreshInteractionPlanBuffers(using particleBuffer: MTLBuffer, particleCount: Int) {
+        guard needsInteractionPlanRefresh || cachedDefaultInteractionParticleCount != particleCount else {
+            return
+        }
+        let interactionPlan = DefaultOptimizationModuleRuntime.rebuildInteractionPlan(particleCount: particleCount)
+        uploadInteractionPlanBuffers(interactionPlan)
+        cachedDefaultInteractionParticleCount = particleCount
+        needsInteractionPlanRefresh = false
+    }
+
+    private func ensureFixedGridInteractionTopology() -> FixedGridInteractionTopology {
+        let settings = FixedGridOptimizationSettings(
+            subdivisions: currentSimulationState.fixedGridSubdivisions,
+            subspaceCap: currentSimulationState.fixedGridSubspaceCap,
+            neighborReadMode: .raw
+        )
+        if let cachedFixedGridTopology, cachedFixedGridTopology.settings == settings {
+            return cachedFixedGridTopology
+        }
+        let topology = FixedGridOptimizationModuleRuntime.buildInteractionTopology(settings: settings)
+        cachedFixedGridTopology = topology
+        uploadFixedGridTopologyBuffers(topology)
+        return topology
+    }
+
+    private func ensureFixedGridWorkingBuffers(topology: FixedGridInteractionTopology) {
+        let cellCount = max(1, topology.rangeOffsets.count - 1)
+        let particleSlotCount = max(1, particleCapacity)
+
+        let cellCountsLength = max(1, MemoryLayout<UInt32>.stride * cellCount)
+        if fixedGridCellCountsBuffer == nil || fixedGridCellCountsBuffer?.length ?? 0 < cellCountsLength {
+            fixedGridCellCountsBuffer = device.makeBuffer(length: cellCountsLength)
+        }
+
+        let cellOffsetsLength = max(1, MemoryLayout<UInt32>.stride * (cellCount + 1))
+        if fixedGridCellOffsetsBuffer == nil || fixedGridCellOffsetsBuffer?.length ?? 0 < cellOffsetsLength {
+            fixedGridCellOffsetsBuffer = device.makeBuffer(length: cellOffsetsLength)
+        }
+
+        let cellWriteHeadsLength = max(1, MemoryLayout<UInt32>.stride * cellCount)
+        if fixedGridCellWriteHeadsBuffer == nil || fixedGridCellWriteHeadsBuffer?.length ?? 0 < cellWriteHeadsLength {
+            fixedGridCellWriteHeadsBuffer = device.makeBuffer(length: cellWriteHeadsLength)
+        }
+
+        let cellScanLength = max(1, MemoryLayout<UInt32>.stride * cellCount)
+        if fixedGridCellScanBufferA == nil || fixedGridCellScanBufferA?.length ?? 0 < cellScanLength {
+            fixedGridCellScanBufferA = device.makeBuffer(length: cellScanLength)
+        }
+        if fixedGridCellScanBufferB == nil || fixedGridCellScanBufferB?.length ?? 0 < cellScanLength {
+            fixedGridCellScanBufferB = device.makeBuffer(length: cellScanLength)
+        }
+
+        let groupIndicesLength = max(1, MemoryLayout<UInt32>.stride * particleSlotCount)
+        if interactionGroupIndicesBuffer == nil || interactionGroupIndicesBuffer?.length ?? 0 < groupIndicesLength {
+            interactionGroupIndicesBuffer = device.makeBuffer(length: groupIndicesLength)
+        }
+
+        let rangesLength = max(1, MemoryLayout<InteractionRangeEntry>.stride * cellCount)
+        if interactionRangesBuffer == nil || interactionRangesBuffer?.length ?? 0 < rangesLength {
+            interactionRangesBuffer = device.makeBuffer(length: rangesLength)
+        }
+
+        let indicesLength = max(1, MemoryLayout<UInt32>.stride * particleSlotCount)
+        if interactionIndicesBuffer == nil || interactionIndicesBuffer?.length ?? 0 < indicesLength {
+            interactionIndicesBuffer = device.makeBuffer(length: indicesLength)
+        }
+
+        if activeFixedGridNeighborReadMode == .scratch {
+            let scratchParticlesLength = max(1, MemoryLayout<ParticleState>.stride * particleSlotCount)
+            if interactionScratchParticlesBuffer == nil || interactionScratchParticlesBuffer?.length ?? 0 < scratchParticlesLength {
+                interactionScratchParticlesBuffer = device.makeBuffer(length: scratchParticlesLength)
+            }
+
+            let scratchToCanonicalLength = max(1, MemoryLayout<UInt32>.stride * particleSlotCount)
+            if interactionScratchToCanonicalBuffer == nil || interactionScratchToCanonicalBuffer?.length ?? 0 < scratchToCanonicalLength {
+                interactionScratchToCanonicalBuffer = device.makeBuffer(length: scratchToCanonicalLength)
+            }
+        }
+    }
+
+    private func encodeFixedGridInteractionPlanning(
+        into commandBuffer: MTLCommandBuffer,
+        sourceParticleBuffer: MTLBuffer,
+        particleCount: Int,
+        topology: FixedGridInteractionTopology
+    ) {
+        guard let interactionGroupIndicesBuffer,
+              let interactionRangesBuffer,
+              let interactionIndicesBuffer,
+              let fixedGridCellCountsBuffer,
+              let fixedGridCellOffsetsBuffer,
+              let fixedGridCellWriteHeadsBuffer,
+              let fixedGridCellScanBufferA,
+              let fixedGridCellScanBufferB else {
+            return
+        }
+
+        let cellCount = max(1, topology.rangeOffsets.count - 1)
+        var cellParams = FixedGridCellCountParams(cellCount: UInt32(cellCount))
+        var assignParams = FixedGridAssignParticlesParams(
+            particleCount: UInt32(particleCount),
+            subdivisions: UInt32(topology.settings.clampedSubdivisions),
+            neighborReadMode: activeNeighborReadModeRawValue
+        )
+
+        let cellThreads = MTLSize(width: cellCount, height: 1, depth: 1)
+        let cellThreadgroup = MTLSize(
+            width: min(fixedGridClearCellCountsPipeline.maxTotalThreadsPerThreadgroup, 256),
+            height: 1,
+            depth: 1
+        )
+        if let clearEncoder = commandBuffer.makeComputeCommandEncoder() {
+            clearEncoder.setComputePipelineState(fixedGridClearCellCountsPipeline)
+            clearEncoder.setBuffer(fixedGridCellCountsBuffer, offset: 0, index: 0)
+            clearEncoder.setBytes(&cellParams, length: MemoryLayout<FixedGridCellCountParams>.stride, index: 1)
+            clearEncoder.dispatchThreads(cellThreads, threadsPerThreadgroup: cellThreadgroup)
+            clearEncoder.endEncoding()
+        }
+
+        let particleThreads = MTLSize(width: particleCount, height: 1, depth: 1)
+        let particleThreadgroup = MTLSize(
+            width: min(fixedGridAssignParticlesPipeline.maxTotalThreadsPerThreadgroup, physicsThreadsPerGroup),
+            height: 1,
+            depth: 1
+        )
+        if let assignEncoder = commandBuffer.makeComputeCommandEncoder() {
+            assignEncoder.setComputePipelineState(fixedGridAssignParticlesPipeline)
+            assignEncoder.setBuffer(sourceParticleBuffer, offset: 0, index: 0)
+            assignEncoder.setBuffer(interactionGroupIndicesBuffer, offset: 0, index: 1)
+            assignEncoder.setBuffer(fixedGridCellCountsBuffer, offset: 0, index: 2)
+            assignEncoder.setBytes(&assignParams, length: MemoryLayout<FixedGridAssignParticlesParams>.stride, index: 3)
+            assignEncoder.dispatchThreads(particleThreads, threadsPerThreadgroup: particleThreadgroup)
+            assignEncoder.endEncoding()
+        }
+
+        if let rangesEncoder = commandBuffer.makeComputeCommandEncoder() {
+            rangesEncoder.setComputePipelineState(fixedGridPrepareGroupRangesPipeline)
+            rangesEncoder.setBuffer(fixedGridCellCountsBuffer, offset: 0, index: 0)
+            rangesEncoder.setBuffer(fixedGridCellScanBufferA, offset: 0, index: 1)
+            rangesEncoder.setBytes(&cellParams, length: MemoryLayout<FixedGridCellCountParams>.stride, index: 2)
+            rangesEncoder.dispatchThreads(cellThreads, threadsPerThreadgroup: cellThreadgroup)
+            rangesEncoder.endEncoding()
+        }
+
+        var scanInputBuffer = fixedGridCellScanBufferA
+        var scanOutputBuffer = fixedGridCellScanBufferB
+        var stride = 1
+        while stride < cellCount {
+            var scanParams = FixedGridScanStepParams(
+                cellCount: UInt32(cellCount),
+                stride: UInt32(stride)
+            )
+            if let scanEncoder = commandBuffer.makeComputeCommandEncoder() {
+                scanEncoder.setComputePipelineState(fixedGridScanGroupRangesPipeline)
+                scanEncoder.setBuffer(scanInputBuffer, offset: 0, index: 0)
+                scanEncoder.setBuffer(scanOutputBuffer, offset: 0, index: 1)
+                scanEncoder.setBytes(&scanParams, length: MemoryLayout<FixedGridScanStepParams>.stride, index: 2)
+                scanEncoder.dispatchThreads(cellThreads, threadsPerThreadgroup: cellThreadgroup)
+                scanEncoder.endEncoding()
+            }
+            swap(&scanInputBuffer, &scanOutputBuffer)
+            stride <<= 1
+        }
+
+        if let finalizeEncoder = commandBuffer.makeComputeCommandEncoder() {
+            finalizeEncoder.setComputePipelineState(fixedGridFinalizeGroupRangesPipeline)
+            finalizeEncoder.setBuffer(fixedGridCellCountsBuffer, offset: 0, index: 0)
+            finalizeEncoder.setBuffer(scanInputBuffer, offset: 0, index: 1)
+            finalizeEncoder.setBuffer(fixedGridCellOffsetsBuffer, offset: 0, index: 2)
+            finalizeEncoder.setBuffer(fixedGridCellWriteHeadsBuffer, offset: 0, index: 3)
+            finalizeEncoder.setBuffer(interactionRangesBuffer, offset: 0, index: 4)
+            finalizeEncoder.setBytes(&cellParams, length: MemoryLayout<FixedGridCellCountParams>.stride, index: 5)
+            finalizeEncoder.dispatchThreads(MTLSize(width: cellCount + 1, height: 1, depth: 1), threadsPerThreadgroup: cellThreadgroup)
+            finalizeEncoder.endEncoding()
+        }
+
+        if let scatterEncoder = commandBuffer.makeComputeCommandEncoder() {
+            scatterEncoder.setComputePipelineState(fixedGridScatterParticleIndicesPipeline)
+            scatterEncoder.setBuffer(sourceParticleBuffer, offset: 0, index: 0)
+            scatterEncoder.setBuffer(interactionGroupIndicesBuffer, offset: 0, index: 1)
+            scatterEncoder.setBuffer(fixedGridCellWriteHeadsBuffer, offset: 0, index: 2)
+            scatterEncoder.setBuffer(interactionIndicesBuffer, offset: 0, index: 3)
+            if let interactionScratchParticlesBuffer {
+                scatterEncoder.setBuffer(interactionScratchParticlesBuffer, offset: 0, index: 4)
+            } else {
+                scatterEncoder.setBuffer(sourceParticleBuffer, offset: 0, index: 4)
+            }
+            if let interactionScratchToCanonicalBuffer {
+                scatterEncoder.setBuffer(interactionScratchToCanonicalBuffer, offset: 0, index: 5)
+            } else {
+                scatterEncoder.setBuffer(interactionIndicesBuffer, offset: 0, index: 5)
+            }
+            scatterEncoder.setBytes(&assignParams, length: MemoryLayout<FixedGridAssignParticlesParams>.stride, index: 6)
+            scatterEncoder.dispatchThreads(particleThreads, threadsPerThreadgroup: particleThreadgroup)
+            scatterEncoder.endEncoding()
+        }
+    }
+
+    private func uploadInteractionPlanBuffers(_ interactionPlan: OptimizationInteractionPlanData) {
+        let storedGroupCount = max(1, interactionPlan.groupIndices.count)
+        let groupIndicesLength = max(1, MemoryLayout<UInt32>.stride * storedGroupCount)
+        if let existing = interactionGroupIndicesBuffer, existing.length >= groupIndicesLength {
+            let pointer = existing.contents().bindMemory(to: UInt32.self, capacity: storedGroupCount)
+            if interactionPlan.groupIndices.isEmpty {
+                pointer[0] = 0
+            } else {
+                pointer.update(from: interactionPlan.groupIndices, count: interactionPlan.groupIndices.count)
+            }
+            interactionGroupIndicesBuffer = existing
+        } else if interactionPlan.groupIndices.isEmpty {
+            var placeholderGroupIndex: UInt32 = 0
+            interactionGroupIndicesBuffer = device.makeBuffer(bytes: &placeholderGroupIndex, length: groupIndicesLength)
+        } else {
+            interactionGroupIndicesBuffer = device.makeBuffer(bytes: interactionPlan.groupIndices, length: groupIndicesLength)
+        }
+
+        let rangeOffsetsLength = max(1, MemoryLayout<UInt32>.stride * interactionPlan.rangeOffsets.count)
+        if let existing = interactionRangeOffsetsBuffer, existing.length >= rangeOffsetsLength {
+            let pointer = existing.contents().bindMemory(to: UInt32.self, capacity: interactionPlan.rangeOffsets.count)
+            pointer.update(from: interactionPlan.rangeOffsets, count: interactionPlan.rangeOffsets.count)
+            interactionRangeOffsetsBuffer = existing
+        } else {
+            interactionRangeOffsetsBuffer = device.makeBuffer(bytes: interactionPlan.rangeOffsets, length: rangeOffsetsLength)
+        }
+
+        let storedRangeTargetCount = max(1, interactionPlan.rangeTargets.count)
+        let rangeTargetsLength = max(1, MemoryLayout<UInt32>.stride * storedRangeTargetCount)
+        if let existing = interactionRangeTargetsBuffer, existing.length >= rangeTargetsLength {
+            let pointer = existing.contents().bindMemory(to: UInt32.self, capacity: storedRangeTargetCount)
+            if interactionPlan.rangeTargets.isEmpty {
+                pointer[0] = 0
+            } else {
+                pointer.update(from: interactionPlan.rangeTargets, count: interactionPlan.rangeTargets.count)
+            }
+            interactionRangeTargetsBuffer = existing
+        } else if interactionPlan.rangeTargets.isEmpty {
+            var placeholderRangeTarget: UInt32 = 0
+            interactionRangeTargetsBuffer = device.makeBuffer(bytes: &placeholderRangeTarget, length: rangeTargetsLength)
+        } else {
+            interactionRangeTargetsBuffer = device.makeBuffer(bytes: interactionPlan.rangeTargets, length: rangeTargetsLength)
+        }
+
+        let storedRangeCount = max(1, interactionPlan.ranges.count)
+        let rangesLength = max(1, MemoryLayout<InteractionRangeEntry>.stride * storedRangeCount)
+        if let existing = interactionRangesBuffer, existing.length >= rangesLength {
+            let pointer = existing.contents().bindMemory(to: InteractionRangeEntry.self, capacity: storedRangeCount)
+            if interactionPlan.ranges.isEmpty {
+                pointer[0] = InteractionRangeEntry(startIndex: 0, count: 0)
+            } else {
+                pointer.update(from: interactionPlan.ranges, count: interactionPlan.ranges.count)
+            }
+            interactionRangesBuffer = existing
+        } else if interactionPlan.ranges.isEmpty {
+            var placeholderRange = InteractionRangeEntry(startIndex: 0, count: 0)
+            interactionRangesBuffer = device.makeBuffer(bytes: &placeholderRange, length: rangesLength)
+        } else {
+            interactionRangesBuffer = device.makeBuffer(bytes: interactionPlan.ranges, length: rangesLength)
+        }
+
+        let storedIndexCount = max(1, interactionPlan.indices.count)
+        let indicesLength = max(1, MemoryLayout<UInt32>.stride * storedIndexCount)
+        if let existing = interactionIndicesBuffer, existing.length >= indicesLength {
+            let pointer = existing.contents().bindMemory(to: UInt32.self, capacity: storedIndexCount)
+            if interactionPlan.indices.isEmpty {
+                pointer[0] = 0
+            } else {
+                pointer.update(from: interactionPlan.indices, count: interactionPlan.indices.count)
+            }
+            interactionIndicesBuffer = existing
+        } else if interactionPlan.indices.isEmpty {
+            var placeholderIndex: UInt32 = 0
+            interactionIndicesBuffer = device.makeBuffer(bytes: &placeholderIndex, length: indicesLength)
+        } else {
+            interactionIndicesBuffer = device.makeBuffer(bytes: interactionPlan.indices, length: indicesLength)
+        }
+    }
+
+    private func uploadFixedGridTopologyBuffers(_ topology: FixedGridInteractionTopology) {
+        let rangeOffsetsLength = max(1, MemoryLayout<UInt32>.stride * topology.rangeOffsets.count)
+        if let existing = interactionRangeOffsetsBuffer, existing.length >= rangeOffsetsLength {
+            let pointer = existing.contents().bindMemory(to: UInt32.self, capacity: topology.rangeOffsets.count)
+            pointer.update(from: topology.rangeOffsets, count: topology.rangeOffsets.count)
+            interactionRangeOffsetsBuffer = existing
+        } else {
+            interactionRangeOffsetsBuffer = device.makeBuffer(bytes: topology.rangeOffsets, length: rangeOffsetsLength)
+        }
+
+        let storedRangeTargetCount = max(1, topology.rangeTargets.count)
+        let rangeTargetsLength = max(1, MemoryLayout<UInt32>.stride * storedRangeTargetCount)
+        if let existing = interactionRangeTargetsBuffer, existing.length >= rangeTargetsLength {
+            let pointer = existing.contents().bindMemory(to: UInt32.self, capacity: storedRangeTargetCount)
+            if topology.rangeTargets.isEmpty {
+                pointer[0] = 0
+            } else {
+                pointer.update(from: topology.rangeTargets, count: topology.rangeTargets.count)
+            }
+            interactionRangeTargetsBuffer = existing
+        } else if topology.rangeTargets.isEmpty {
+            var placeholderRangeTarget: UInt32 = 0
+            interactionRangeTargetsBuffer = device.makeBuffer(bytes: &placeholderRangeTarget, length: rangeTargetsLength)
+        } else {
+            interactionRangeTargetsBuffer = device.makeBuffer(bytes: topology.rangeTargets, length: rangeTargetsLength)
+        }
+    }
+
+    private struct FixedGridLeaderDebugInfo {
+        var rangeCount: Int
+        var interactionCount: Int
+        var firstTargetIndex: Int?
+    }
+
+    private func fixedGridLeaderDebugInfo(
+        particleBuffer: MTLBuffer,
+        particleCount: Int
+    ) -> FixedGridLeaderDebugInfo {
+        guard particleCount > 0 else {
+            return FixedGridLeaderDebugInfo(rangeCount: 0, interactionCount: 0, firstTargetIndex: nil)
+        }
+
+        let topology = ensureFixedGridInteractionTopology()
+        let leaderRangeCount = max(0, Int(topology.rangeOffsets[1]) - Int(topology.rangeOffsets[0]))
+        let particles = particleBuffer.contents().bindMemory(to: ParticleState.self, capacity: particleCount)
+        let leader = particles[0]
+        guard leader.active != 0 else {
+            return FixedGridLeaderDebugInfo(rangeCount: leaderRangeCount, interactionCount: 0, firstTargetIndex: nil)
+        }
+
+        let leaderCellIndex = FixedGridOptimizationModuleRuntime.cellIndex(
+            for: leader.position,
+            settings: topology.settings
+        )
+        let rangeStart = Int(topology.rangeOffsets[leaderCellIndex])
+        let rangeEnd = Int(topology.rangeOffsets[leaderCellIndex + 1])
+        var targetGroups: Set<Int> = []
+        targetGroups.reserveCapacity(max(1, rangeEnd - rangeStart))
+        for rangeIndex in rangeStart..<rangeEnd {
+            targetGroups.insert(Int(topology.rangeTargets[rangeIndex]))
+        }
+
+        var interactionCount = 0
+        var firstTargetIndex: Int?
+        for particleIndex in 0..<particleCount {
+            let particle = particles[particleIndex]
+            guard particle.active != 0 else { continue }
+            let cellIndex = FixedGridOptimizationModuleRuntime.cellIndex(
+                for: particle.position,
+                settings: topology.settings
+            )
+            guard targetGroups.contains(cellIndex) else { continue }
+            interactionCount += 1
+            if firstTargetIndex == nil {
+                firstTargetIndex = particleIndex
+            }
+        }
+
+        return FixedGridLeaderDebugInfo(
+            rangeCount: rangeEnd - rangeStart,
+            interactionCount: interactionCount,
+            firstTargetIndex: firstTargetIndex
+        )
+    }
+
+    private func interactionRangeCount(for particleIndex: Int) -> Int {
+        guard let interactionGroupIndicesBuffer,
+              let interactionRangeOffsetsBuffer,
+              particleIndex >= 0,
+              particleIndex < activeParticleCount else {
+            return 0
+        }
+        let groups = interactionGroupIndicesBuffer.contents().bindMemory(
+            to: UInt32.self,
+            capacity: activeParticleCount
+        )
+        let groupIndex = Int(groups[particleIndex])
+        let offsets = interactionRangeOffsetsBuffer.contents().bindMemory(
+            to: UInt32.self,
+            capacity: interactionRangeOffsetsBuffer.length / MemoryLayout<UInt32>.stride
+        )
+        guard groupIndex + 1 < interactionRangeOffsetsBuffer.length / MemoryLayout<UInt32>.stride else {
+            return 0
+        }
+        return max(0, Int(offsets[groupIndex + 1]) - Int(offsets[groupIndex]))
+    }
+
+    private func interactionCount(for particleIndex: Int) -> Int {
+        guard let interactionGroupIndicesBuffer,
+              let interactionRangeOffsetsBuffer,
+              let interactionRangeTargetsBuffer,
+              let interactionRangesBuffer,
+              particleIndex >= 0,
+              particleIndex < activeParticleCount else {
+            return 0
+        }
+        let groups = interactionGroupIndicesBuffer.contents().bindMemory(
+            to: UInt32.self,
+            capacity: activeParticleCount
+        )
+        let groupIndex = Int(groups[particleIndex])
+        let offsets = interactionRangeOffsetsBuffer.contents().bindMemory(
+            to: UInt32.self,
+            capacity: interactionRangeOffsetsBuffer.length / MemoryLayout<UInt32>.stride
+        )
+        guard groupIndex + 1 < interactionRangeOffsetsBuffer.length / MemoryLayout<UInt32>.stride else {
+            return 0
+        }
+        let rangeStart = Int(offsets[groupIndex])
+        let rangeEnd = Int(offsets[groupIndex + 1])
+        guard rangeEnd > rangeStart else { return 0 }
+        let rangeTargets = interactionRangeTargetsBuffer.contents().bindMemory(
+            to: UInt32.self,
+            capacity: interactionRangeTargetsBuffer.length / MemoryLayout<UInt32>.stride
+        )
+        let ranges = interactionRangesBuffer.contents().bindMemory(
+            to: InteractionRangeEntry.self,
+            capacity: interactionRangesBuffer.length / MemoryLayout<InteractionRangeEntry>.stride
+        )
+        var count = 0
+        for rangeIndex in rangeStart..<rangeEnd {
+            let targetGroupIndex = Int(rangeTargets[rangeIndex])
+            count += Int(ranges[targetGroupIndex].count)
+        }
+        return count
+    }
+
+    private func firstInteractionTargetIndex(for particleIndex: Int) -> Int? {
+        guard let interactionGroupIndicesBuffer,
+              let interactionRangeOffsetsBuffer,
+              let interactionRangeTargetsBuffer,
+              let interactionRangesBuffer,
+              let interactionIndicesBuffer,
+              particleIndex >= 0,
+              particleIndex < activeParticleCount else {
+            return nil
+        }
+        let groups = interactionGroupIndicesBuffer.contents().bindMemory(
+            to: UInt32.self,
+            capacity: activeParticleCount
+        )
+        let groupIndex = Int(groups[particleIndex])
+        let offsets = interactionRangeOffsetsBuffer.contents().bindMemory(
+            to: UInt32.self,
+            capacity: interactionRangeOffsetsBuffer.length / MemoryLayout<UInt32>.stride
+        )
+        guard groupIndex + 1 < interactionRangeOffsetsBuffer.length / MemoryLayout<UInt32>.stride else {
+            return nil
+        }
+        let rangeStart = Int(offsets[groupIndex])
+        let rangeEnd = Int(offsets[groupIndex + 1])
+        guard rangeEnd > rangeStart else { return nil }
+        let rangeTargets = interactionRangeTargetsBuffer.contents().bindMemory(
+            to: UInt32.self,
+            capacity: interactionRangeTargetsBuffer.length / MemoryLayout<UInt32>.stride
+        )
+        let ranges = interactionRangesBuffer.contents().bindMemory(
+            to: InteractionRangeEntry.self,
+            capacity: interactionRangesBuffer.length / MemoryLayout<InteractionRangeEntry>.stride
+        )
+        let indices = interactionIndicesBuffer.contents().bindMemory(
+            to: UInt32.self,
+            capacity: interactionIndicesBuffer.length / MemoryLayout<UInt32>.stride
+        )
+        for rangeIndex in rangeStart..<rangeEnd {
+            let targetGroupIndex = Int(rangeTargets[rangeIndex])
+            let range = ranges[targetGroupIndex]
+            guard range.count > 0 else { continue }
+            let targetIndex = Int(indices[Int(range.startIndex)])
+            if activeFixedGridNeighborReadMode == .scratch,
+               let interactionScratchToCanonicalBuffer {
+                let reverse = interactionScratchToCanonicalBuffer.contents().bindMemory(
+                    to: UInt32.self,
+                    capacity: interactionScratchToCanonicalBuffer.length / MemoryLayout<UInt32>.stride
+                )
+                guard targetIndex < interactionScratchToCanonicalBuffer.length / MemoryLayout<UInt32>.stride else {
+                    return nil
+                }
+                return Int(reverse[targetIndex])
+            }
+            return targetIndex
+        }
+        return nil
     }
 
     private func pruneDebugHistory(now: TimeInterval) {
@@ -993,6 +1655,24 @@ final class SimulationRuntime: @unchecked Sendable {
 
     private var isTemplatePhysicsActive: Bool {
         activeModules.physics.name == PhysicsModuleTemplateRuntime.moduleName
+    }
+
+    private var isFixedGridOptimizationActive: Bool {
+        activeModules.optimization.name == FixedGridOptimizationModuleRuntime.moduleName
+    }
+
+    private var activeFixedGridNeighborReadMode: FixedGridNeighborReadMode {
+        guard isFixedGridOptimizationActive else { return .raw }
+        return currentSimulationState.fixedGridNeighborReadMode
+    }
+
+    private var activeNeighborReadModeRawValue: UInt32 {
+        switch activeFixedGridNeighborReadMode {
+        case .raw:
+            return 0
+        case .scratch:
+            return 1
+        }
     }
 
     private func uploadTypeMatrixInteractionBuffer(from sourceMatrix: [Int]) {

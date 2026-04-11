@@ -49,6 +49,23 @@ struct VisualModuleState {
 
 struct OptimizationModuleState {
     var showLeaderCommunicationLog = false
+    var fixedGridSubdivisions: Int = 8
+    var fixedGridSubspaceCap: Int = 2
+    var fixedGridNeighborReadMode: FixedGridNeighborReadMode = .scratch
+}
+
+enum FixedGridNeighborReadMode: String, CaseIterable, Equatable, Sendable {
+    case raw
+    case scratch
+
+    var title: String {
+        switch self {
+        case .raw:
+            return "Raw"
+        case .scratch:
+            return "Scratch"
+        }
+    }
 }
 
 struct DebugSettingsState {
@@ -101,6 +118,8 @@ struct ModuleDescriptor: Identifiable, Equatable {
     let visibility: BuildVisibility
     let isDefaultFallback: Bool
     let acceptsOptimizationDebugInfo: Bool
+    let providesOptimizationDebugInfo: Bool
+    let supportsLeaderCommunicationLog: Bool
 
     var id: String {
         "\(kind)|\(name)"
@@ -113,7 +132,9 @@ enum ModuleCatalog {
         name: "DefaultPhysicsSlideLoop",
         visibility: .production,
         isDefaultFallback: true,
-        acceptsOptimizationDebugInfo: false
+        acceptsOptimizationDebugInfo: false,
+        providesOptimizationDebugInfo: false,
+        supportsLeaderCommunicationLog: false
     )
 
     static let defaultVisual = ModuleDescriptor(
@@ -121,7 +142,9 @@ enum ModuleCatalog {
         name: "DefaultRainbowUnlitSpheres",
         visibility: .production,
         isDefaultFallback: true,
-        acceptsOptimizationDebugInfo: true
+        acceptsOptimizationDebugInfo: true,
+        providesOptimizationDebugInfo: false,
+        supportsLeaderCommunicationLog: false
     )
 
     static let defaultOptimization = ModuleDescriptor(
@@ -129,7 +152,9 @@ enum ModuleCatalog {
         name: "DefaultOptimizationAllPairs",
         visibility: .production,
         isDefaultFallback: true,
-        acceptsOptimizationDebugInfo: false
+        acceptsOptimizationDebugInfo: false,
+        providesOptimizationDebugInfo: true,
+        supportsLeaderCommunicationLog: true
     )
 
     static let knownModulesByName: [String: ModuleDescriptor] = [
@@ -138,28 +163,36 @@ enum ModuleCatalog {
             name: PhysicsModuleTemplateRuntime.moduleName,
             visibility: .production,
             isDefaultFallback: false,
-            acceptsOptimizationDebugInfo: false
+            acceptsOptimizationDebugInfo: false,
+            providesOptimizationDebugInfo: false,
+            supportsLeaderCommunicationLog: false
         ),
         "TypeMatrixLocalAttractionRepulsion": ModuleDescriptor(
             kind: "physics",
             name: "TypeMatrixLocalAttractionRepulsion",
             visibility: .production,
             isDefaultFallback: false,
-            acceptsOptimizationDebugInfo: false
+            acceptsOptimizationDebugInfo: false,
+            providesOptimizationDebugInfo: false,
+            supportsLeaderCommunicationLog: false
         ),
         "DefaultGreySpheres": ModuleDescriptor(
             kind: "visual",
             name: "DefaultGreySpheres",
             visibility: .production,
             isDefaultFallback: false,
-            acceptsOptimizationDebugInfo: false
+            acceptsOptimizationDebugInfo: false,
+            providesOptimizationDebugInfo: false,
+            supportsLeaderCommunicationLog: false
         ),
-        "UniformGrid": ModuleDescriptor(
+        FixedGridOptimizationModuleRuntime.moduleName: ModuleDescriptor(
             kind: "optimization",
-            name: "UniformGrid",
+            name: FixedGridOptimizationModuleRuntime.moduleName,
             visibility: .production,
             isDefaultFallback: false,
-            acceptsOptimizationDebugInfo: false
+            acceptsOptimizationDebugInfo: false,
+            providesOptimizationDebugInfo: true,
+            supportsLeaderCommunicationLog: true
         ),
     ]
 
@@ -194,13 +227,12 @@ struct ActiveModuleSet: Equatable {
 
 enum ModuleCompatibility {
     static func incompatibilityReason(for modules: ActiveModuleSet, state: SimulationViewportState) -> String? {
-        if modules.visual.acceptsOptimizationDebugInfo,
-           modules.optimization.name != ModuleCatalog.defaultOptimization.name {
-            return "Visual module \(modules.visual.name) requires optimization debug compatibility, but optimization module \(modules.optimization.name) does not provide it."
-        }
-
         if state.showOptimizationInfo && !modules.visual.acceptsOptimizationDebugInfo {
             return "Visual module \(modules.visual.name) does not accept optimization debug data."
+        }
+
+        if state.showOptimizationInfo && !modules.optimization.providesOptimizationDebugInfo {
+            return "Optimization module \(modules.optimization.name) does not provide optimization debug data."
         }
 
         return nil
@@ -219,6 +251,9 @@ struct SimulationViewportState: Equatable {
     var spectrumOffset: Float
     var showOptimizationInfo: Bool
     var showLeaderCommunicationLog: Bool
+    var fixedGridSubdivisions: Int
+    var fixedGridSubspaceCap: Int
+    var fixedGridNeighborReadMode: FixedGridNeighborReadMode
 }
 
 struct LeaderCommunicationLogEntry: Identifiable, Equatable {

@@ -1,8 +1,8 @@
 struct PhysicsAccumulateParams {
     uint particleCount;
-    uint interactionTraversalMode;
     float _padding1;
     float _padding2;
+    uint neighborReadMode;
 };
 
 struct PhysicsApplyParams {
@@ -26,9 +26,14 @@ static float wrap_axis(float value) {
 kernel void physics_accumulate_impulse(
     device const ParticleState *sourceParticles [[buffer(0)]],
     device ParticleState *destinationParticles [[buffer(1)]],
-    device const uint *interactionOffsets [[buffer(2)]],
-    device const uint *interactionIndices [[buffer(3)]],
-    constant PhysicsAccumulateParams& params [[buffer(4)]],
+    device const uint *interactionGroupIndices [[buffer(2)]],
+    device const uint *interactionRangeOffsets [[buffer(3)]],
+    device const uint *interactionRangeTargets [[buffer(4)]],
+    device const InteractionRangeEntry *interactionRanges [[buffer(5)]],
+    device const uint *interactionIndices [[buffer(6)]],
+    device const ParticleState *scratchParticles [[buffer(7)]],
+    device const uint *scratchToCanonical [[buffer(8)]],
+    constant PhysicsAccumulateParams& params [[buffer(9)]],
     uint id [[thread_position_in_grid]]
 ) {
     if (id >= params.particleCount) {
@@ -42,19 +47,36 @@ kernel void physics_accumulate_impulse(
     }
 
     float3 nextImpulse = float3(0.0);
-    uint start = interactionOffsets[id];
-    uint end = interactionOffsets[id + 1];
+    uint groupIndex = interactionGroupIndices[id];
+    uint rangeStart = interactionRangeOffsets[groupIndex];
+    uint rangeEnd = interactionRangeOffsets[groupIndex + 1];
 
-    for (uint interactionOffset = start; interactionOffset < end; ++interactionOffset) {
-        uint targetIndex = params.interactionTraversalMode == 1
-            ? interactionOffset - start
-            : interactionIndices[interactionOffset];
-        if (targetIndex == id || targetIndex >= params.particleCount) {
-            continue;
-        }
-        ParticleState target = sourceParticles[targetIndex];
-        if (particle_active(target) == 0) {
-            continue;
+    for (uint rangeIndex = rangeStart; rangeIndex < rangeEnd; ++rangeIndex) {
+        uint targetGroupIndex = interactionRangeTargets[rangeIndex];
+        InteractionRangeEntry rangeEntry = interactionRanges[targetGroupIndex];
+        uint interactionEnd = rangeEntry.startIndex + rangeEntry.count;
+        for (uint interactionOffset = rangeEntry.startIndex; interactionOffset < interactionEnd; ++interactionOffset) {
+            uint targetIndex = interactionIndices[interactionOffset];
+            if (targetIndex >= params.particleCount) {
+                continue;
+            }
+            uint targetCanonicalIndex = interaction_resolve_canonical_index(
+                targetIndex,
+                scratchToCanonical,
+                params.neighborReadMode
+            );
+            if (targetCanonicalIndex == id || targetCanonicalIndex >= params.particleCount) {
+                continue;
+            }
+            ParticleState target = interaction_read_particle(
+                targetIndex,
+                sourceParticles,
+                scratchParticles,
+                params.neighborReadMode
+            );
+            if (particle_active(target) == 0) {
+                continue;
+            }
         }
     }
 

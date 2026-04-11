@@ -955,6 +955,7 @@ struct ContentView: View {
             spectrumOffset: editorState.visualState.spectrumOffset,
             showOptimizationInfo: editorState.visualState.showOptimizationInfo,
             showLeaderCommunicationLog: editorState.optimizationState.showLeaderCommunicationLog,
+            fixedGridNeighborReadMode: editorState.optimizationState.fixedGridNeighborReadMode.rawValue,
             protectLeaderFromUnload: editorState.debugSettings.protectLeaderFromUnload,
             projectedBytes: runtimeConfigCoordinator.validationReport.projectedBytes,
             memoryUsedBytes: metrics.memoryUsedBytes,
@@ -1477,8 +1478,9 @@ private struct ModuleSettingsPanelView: View {
                         unavailable
                     }
                 case .optimization:
-                    if resolved.name == ModuleCatalog.defaultOptimization.name {
-                        OptimizationSettingsPanel(store: editorSettingsStore)
+                    if resolved.name == ModuleCatalog.defaultOptimization.name
+                        || resolved.name == FixedGridOptimizationModuleRuntime.moduleName {
+                        OptimizationSettingsPanel(store: editorSettingsStore, resolvedOptimization: resolved)
                     } else {
                         unavailable
                     }
@@ -1652,6 +1654,7 @@ private struct VisualSettingsPanel: View {
 
 private struct OptimizationSettingsPanel: View {
     @ObservedObject var store: MainWindowEditorSettingsStore
+    let resolvedOptimization: ModuleDescriptor
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -1677,9 +1680,68 @@ private struct OptimizationSettingsPanel: View {
                     }
                 )
             )
-            Text("Naive all-pairs traversal is the default optimization MVP.")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+
+            if resolvedOptimization.name == FixedGridOptimizationModuleRuntime.moduleName {
+                EventuallyAppliedIntSlider(
+                    title: "Subdivisions",
+                    appliedValue: Binding(
+                        get: { store.editorState.optimizationState.fixedGridSubdivisions },
+                        set: {
+                            var next = store.editorState.optimizationState
+                            next.fixedGridSubdivisions = min(
+                                FixedGridOptimizationModuleRuntime.maxSubdivisions,
+                                max(1, $0)
+                            )
+                            next.fixedGridSubspaceCap = min(next.fixedGridSubspaceCap, next.fixedGridSubdivisions)
+                            store.setOptimizationState(next)
+                        }
+                    ),
+                    range: 1...FixedGridOptimizationModuleRuntime.maxSubdivisions
+                )
+
+                EventuallyAppliedIntSlider(
+                    title: "Subspace Cap",
+                    appliedValue: Binding(
+                        get: {
+                            min(
+                                store.editorState.optimizationState.fixedGridSubspaceCap,
+                                store.editorState.optimizationState.fixedGridSubdivisions
+                            )
+                        },
+                        set: {
+                            var next = store.editorState.optimizationState
+                            next.fixedGridSubspaceCap = min(
+                                max(1, $0),
+                                next.fixedGridSubdivisions
+                            )
+                            store.setOptimizationState(next)
+                        }
+                    ),
+                    range: 1...max(1, store.editorState.optimizationState.fixedGridSubdivisions)
+                )
+
+                EventuallyAppliedSegmentedPicker(
+                    title: "Neighbor Read Mode",
+                    appliedValue: Binding(
+                        get: { store.editorState.optimizationState.fixedGridNeighborReadMode },
+                        set: {
+                            var next = store.editorState.optimizationState
+                            next.fixedGridNeighborReadMode = $0
+                            store.setOptimizationState(next)
+                        }
+                    ),
+                    options: FixedGridNeighborReadMode.allCases,
+                    optionTitle: { $0.title }
+                )
+
+                Text("Wrapped fixed-grid traversal publishes multi-range candidate spans. Raw mode reads canonical particle storage directly; scratch mode reads a packed fixed-grid scratch view.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("Naive all-pairs traversal is the default optimization MVP.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 }
@@ -1693,7 +1755,7 @@ private struct LeaderCommunicationLogPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Recent leader-sweep dispatch summaries from the default optimization runtime.")
+            Text("Recent leader-sweep range summaries from the active optimization runtime.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
 
@@ -1708,7 +1770,7 @@ private struct LeaderCommunicationLogPanel: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("t=\(entry.recordedAt) target=\(entry.firstTargetIndex) interactions=\(entry.interactionCount)")
                                     .font(.caption.weight(.semibold))
-                                Text("workItems=\(entry.workItemStart)..<\(entry.workItemStart + entry.workItemCount)")
+                                Text("ranges=\(entry.workItemStart)..<\(entry.workItemStart + entry.workItemCount)")
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
                             }

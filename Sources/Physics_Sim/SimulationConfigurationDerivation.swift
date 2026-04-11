@@ -2,6 +2,9 @@ import Foundation
 import simd
 
 enum SimulationConfigurationDerivation {
+    private static let fixedGridProjectedMemorySafetyLimitBytes: UInt64 = 256 * 1024 * 1024
+    private static let totalProjectedMemorySafetyLimitBytes: UInt64 = 512 * 1024 * 1024
+
     static func simulationState(
         transportState: SimulationTransportState,
         editorState: SimulationEditorState,
@@ -25,7 +28,16 @@ enum SimulationConfigurationDerivation {
                 editorState: editorState,
                 availableFiles: availableFiles
             ) && editorState.visualState.showOptimizationInfo,
-            showLeaderCommunicationLog: editorState.optimizationState.showLeaderCommunicationLog
+            showLeaderCommunicationLog: editorState.optimizationState.showLeaderCommunicationLog,
+            fixedGridSubdivisions: max(1, editorState.optimizationState.fixedGridSubdivisions),
+            fixedGridSubspaceCap: max(
+                1,
+                min(
+                    max(1, editorState.optimizationState.fixedGridSubspaceCap),
+                    max(1, editorState.optimizationState.fixedGridSubdivisions)
+                )
+            ),
+            fixedGridNeighborReadMode: editorState.optimizationState.fixedGridNeighborReadMode
         )
     }
 
@@ -54,16 +66,41 @@ enum SimulationConfigurationDerivation {
             editorState: editorState,
             availableFiles: availableFiles
         )
-        let projectedBytes = projectedMemoryBytes(editorState: editorState)
+        let projectedBytes = projectedMemoryBytes(
+            editorState: editorState,
+            activeModules: activeModules
+        )
 
         if let issue = ModuleCompatibility.incompatibilityReason(for: activeModules, state: simulationState) {
             return RuntimeValidationReport(issue: issue, projectedBytes: projectedBytes)
         }
 
         if editorState.optimizationState.showLeaderCommunicationLog,
-           activeModules.optimization.name != ModuleCatalog.defaultOptimization.name {
+           !activeModules.optimization.supportsLeaderCommunicationLog {
             return RuntimeValidationReport(
-                issue: "Leader communication log is only available with \(ModuleCatalog.defaultOptimization.name).",
+                issue: "Leader communication log is not available with optimization module \(activeModules.optimization.name).",
+                projectedBytes: projectedBytes
+            )
+        }
+
+        if activeModules.optimization.name == FixedGridOptimizationModuleRuntime.moduleName {
+            let topologyBytes = FixedGridOptimizationModuleRuntime.projectedTopologyBytes(
+                settings: FixedGridOptimizationSettings(
+                    subdivisions: editorState.optimizationState.fixedGridSubdivisions,
+                    subspaceCap: editorState.optimizationState.fixedGridSubspaceCap
+                )
+            )
+            if topologyBytes > fixedGridProjectedMemorySafetyLimitBytes {
+                return RuntimeValidationReport(
+                    issue: "Fixed-grid topology is too large to start safely with the current subdivisions and subspace cap.",
+                    projectedBytes: projectedBytes
+                )
+            }
+        }
+
+        if projectedBytes > totalProjectedMemorySafetyLimitBytes {
+            return RuntimeValidationReport(
+                issue: "Projected runtime memory is too high to start safely with the current configuration.",
                 projectedBytes: projectedBytes
             )
         }
@@ -72,14 +109,42 @@ enum SimulationConfigurationDerivation {
     }
 
     static func projectedMemoryBytes(editorState: SimulationEditorState) -> UInt64 {
+        projectedMemoryBytes(
+            editorState: editorState,
+            activeModules: activeModules(
+                editorState: editorState,
+                availableFiles: []
+            )
+        )
+    }
+
+    static func projectedMemoryBytes(
+        editorState: SimulationEditorState,
+        activeModules: ActiveModuleSet
+    ) -> UInt64 {
         let particleCount = max(1, editorState.physicsState.particleCount)
         let baseParticleStride = 40
         let visualStride = 16
         let optimizationStride = 16
         let typeBudget = 32 * 32
         let debugBudget = editorState.optimizationState.showLeaderCommunicationLog ? 8 * 1024 * 1024 : 0
-        let reserved = particleCount * (baseParticleStride + visualStride + optimizationStride) + typeBudget + debugBudget
-        return UInt64(reserved)
+        var reserved = UInt64(particleCount * (baseParticleStride + visualStride + optimizationStride) + typeBudget + debugBudget)
+
+        if activeModules.optimization.name == FixedGridOptimizationModuleRuntime.moduleName {
+            reserved += FixedGridOptimizationModuleRuntime.projectedTopologyBytes(
+                settings: FixedGridOptimizationSettings(
+                    subdivisions: editorState.optimizationState.fixedGridSubdivisions,
+                    subspaceCap: editorState.optimizationState.fixedGridSubspaceCap
+                )
+            )
+            if editorState.optimizationState.fixedGridNeighborReadMode == .scratch {
+                reserved += FixedGridOptimizationModuleRuntime.projectedScratchBytes(
+                    particleCount: particleCount
+                )
+            }
+        }
+
+        return reserved
     }
 
     static func visualSupportsOptimizationDebug(
@@ -87,7 +152,7 @@ enum SimulationConfigurationDerivation {
         availableFiles: [ModuleFile]
     ) -> Bool {
         resolveModule(for: .visual, editorState: editorState, availableFiles: availableFiles).acceptsOptimizationDebugInfo
-            && resolveModule(for: .optimization, editorState: editorState, availableFiles: availableFiles).name == ModuleCatalog.defaultOptimization.name
+            && resolveModule(for: .optimization, editorState: editorState, availableFiles: availableFiles).providesOptimizationDebugInfo
     }
 
     static func resolveModule(

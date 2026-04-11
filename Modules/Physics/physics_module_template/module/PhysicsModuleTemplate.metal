@@ -1,8 +1,8 @@
 struct TemplatePhysicsAccumulateParams {
     uint particleCount;
-    uint interactionTraversalMode;
     float interactionRadius;
     float impulseScale;
+    uint neighborReadMode;
 };
 
 struct TemplatePhysicsApplyParams {
@@ -37,9 +37,14 @@ static float3 wrapped_delta_template(float3 targetPosition, float3 sourcePositio
 kernel void template_physics_accumulate_impulse(
     device const ParticleState *sourceParticles [[buffer(0)]],
     device ParticleState *destinationParticles [[buffer(1)]],
-    device const uint *interactionOffsets [[buffer(2)]],
-    device const uint *interactionIndices [[buffer(3)]],
-    constant TemplatePhysicsAccumulateParams& params [[buffer(4)]],
+    device const uint *interactionGroupIndices [[buffer(2)]],
+    device const uint *interactionRangeOffsets [[buffer(3)]],
+    device const uint *interactionRangeTargets [[buffer(4)]],
+    device const InteractionRangeEntry *interactionRanges [[buffer(5)]],
+    device const uint *interactionIndices [[buffer(6)]],
+    device const ParticleState *scratchParticles [[buffer(7)]],
+    device const uint *scratchToCanonical [[buffer(8)]],
+    constant TemplatePhysicsAccumulateParams& params [[buffer(9)]],
     uint id [[thread_position_in_grid]]
 ) {
     if (id >= params.particleCount) {
@@ -53,38 +58,56 @@ kernel void template_physics_accumulate_impulse(
     }
 
     float3 accumulatedImpulse = float3(0.0);
-    uint start = interactionOffsets[id];
-    uint end = interactionOffsets[id + 1];
+    uint groupIndex = interactionGroupIndices[id];
+    uint rangeStart = interactionRangeOffsets[groupIndex];
+    uint rangeEnd = interactionRangeOffsets[groupIndex + 1];
 
-    for (uint interactionOffset = start; interactionOffset < end; ++interactionOffset) {
-        uint targetIndex = params.interactionTraversalMode == 1
-            ? interactionOffset - start
-            : interactionIndices[interactionOffset];
-        if (targetIndex == id || targetIndex >= params.particleCount) {
-            continue;
+    for (uint rangeIndex = rangeStart; rangeIndex < rangeEnd; ++rangeIndex) {
+        uint targetGroupIndex = interactionRangeTargets[rangeIndex];
+        InteractionRangeEntry rangeEntry = interactionRanges[targetGroupIndex];
+        uint interactionEnd = rangeEntry.startIndex + rangeEntry.count;
+        for (uint interactionOffset = rangeEntry.startIndex; interactionOffset < interactionEnd; ++interactionOffset) {
+            uint targetIndex = interactionIndices[interactionOffset];
+            if (targetIndex >= params.particleCount) {
+                continue;
+            }
+
+            uint targetCanonicalIndex = interaction_resolve_canonical_index(
+                targetIndex,
+                scratchToCanonical,
+                params.neighborReadMode
+            );
+            if (targetCanonicalIndex == id || targetCanonicalIndex >= params.particleCount) {
+                continue;
+            }
+
+            ParticleState target = interaction_read_particle(
+                targetIndex,
+                sourceParticles,
+                scratchParticles,
+                params.neighborReadMode
+            );
+            if (particle_active(target) == 0) {
+                continue;
+            }
+
+            // Replace this section with the module's actual interaction law.
+            // The template currently uses a tiny distance-falloff attraction so the
+            // module is visibly alive after selection, but still clearly unfinished.
+            float3 delta = wrapped_delta_template(target.position.xyz, source.position.xyz);
+            float distanceSquared = dot(delta, delta);
+            if (distanceSquared < 0.000001) {
+                continue;
+            }
+
+            float distance = sqrt(distanceSquared);
+            if (distance > params.interactionRadius) {
+                continue;
+            }
+
+            float reachT = 1.0 - clamp(distance / max(params.interactionRadius, 0.000001), 0.0, 1.0);
+            accumulatedImpulse += normalize(delta) * (reachT * params.impulseScale);
         }
-
-        ParticleState target = sourceParticles[targetIndex];
-        if (particle_active(target) == 0) {
-            continue;
-        }
-
-        // Replace this section with the module's actual interaction law.
-        // The template currently uses a tiny distance-falloff attraction so the
-        // module is visibly alive after selection, but still clearly unfinished.
-        float3 delta = wrapped_delta_template(target.position.xyz, source.position.xyz);
-        float distanceSquared = dot(delta, delta);
-        if (distanceSquared < 0.000001) {
-            continue;
-        }
-
-        float distance = sqrt(distanceSquared);
-        if (distance > params.interactionRadius) {
-            continue;
-        }
-
-        float reachT = 1.0 - clamp(distance / max(params.interactionRadius, 0.000001), 0.0, 1.0);
-        accumulatedImpulse += normalize(delta) * (reachT * params.impulseScale);
     }
 
     destinationParticles[id].impulse = float4(accumulatedImpulse, 0.0);

@@ -273,6 +273,7 @@ final class SimulationSession {
                 defaultPhysicsSource,
                 packagedPhysicsSources.joined(separator: "\n\n"),
                 DefaultOptimizationModuleRuntime.computeShaderSource,
+                FixedGridOptimizationModuleRuntime.computeShaderSource,
             ].joined(separator: "\n\n")
 
             let library: MTLLibrary
