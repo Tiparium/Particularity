@@ -1392,7 +1392,7 @@ private struct PlaybackTimelineBar: View {
                     .frame(width: 66, alignment: .trailing)
             }
 
-            Text("Member 001 probe playback. 64 particles across 53 training checkpoints.")
+            Text("Member 001 stress playback. 20,000 particles across embeddings, probes, and hidden-state slices.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }
