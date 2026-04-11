@@ -7,6 +7,7 @@ final class SimulationRuntimeConfigCoordinator: ObservableObject {
     @Published private(set) var simulationState: SimulationViewportState
     @Published private(set) var activeModules: ActiveModuleSet
     @Published private(set) var validationReport: RuntimeValidationReport
+    @Published private(set) var playbackTimelineSnapshot: PlaybackTimelineSnapshot
 
     private let session: SimulationSession
     private let editorSettingsStore: MainWindowEditorSettingsStore
@@ -42,6 +43,7 @@ final class SimulationRuntimeConfigCoordinator: ObservableObject {
             transportState: .stopped,
             availableFiles: moduleCatalogStore.availableFiles
         )
+        self.playbackTimelineSnapshot = .placeholder
 
         editorSettingsStore.$editorState
             .sink { [weak self] editorState in
@@ -140,12 +142,23 @@ final class SimulationRuntimeConfigCoordinator: ObservableObject {
 
     func setPlaybackTime(_ seconds: Double) {
         guard activeModules.isPlaybackModuleFamily else { return }
-        session.setPlaybackTime(seconds)
+        let boundedSeconds = min(max(0, seconds), playbackTimelineSnapshot.durationSeconds)
+        playbackTimelineSnapshot.currentSeconds = boundedSeconds
+        session.setPlaybackTime(boundedSeconds)
     }
 
     func setPlaybackLooping(_ isLooping: Bool) {
         guard activeModules.isPlaybackModuleFamily else { return }
+        playbackTimelineSnapshot.isLooping = isLooping
         session.setPlaybackLooping(isLooping)
+    }
+
+    func refreshPlaybackTimelineSnapshot() {
+        guard activeModules.isPlaybackModuleFamily else {
+            playbackTimelineSnapshot = .placeholder
+            return
+        }
+        playbackTimelineSnapshot = session.playbackTimelineSnapshot
     }
 
     private func recomputeAndApply(
@@ -183,6 +196,7 @@ final class SimulationRuntimeConfigCoordinator: ObservableObject {
             simulationState: nextSimulationState,
             activeModules: nextActiveModules
         )
+        refreshPlaybackTimelineSnapshot()
     }
 
     private func applyToSession(

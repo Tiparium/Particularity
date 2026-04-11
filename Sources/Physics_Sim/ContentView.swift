@@ -1332,10 +1332,13 @@ private struct SimulationCenterPane: View {
 private struct PlaybackTimelineBar: View {
     @ObservedObject var runtimeConfigCoordinator: SimulationRuntimeConfigCoordinator
 
-    private let placeholderDurationSeconds: Double = 52.0
-
     @State private var currentSeconds: Double = 0
     @State private var isLooping = true
+    @State private var isScrubbing = false
+
+    private var durationSeconds: Double {
+        max(0.001, runtimeConfigCoordinator.playbackTimelineSnapshot.durationSeconds)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1367,15 +1370,21 @@ private struct PlaybackTimelineBar: View {
                     value: Binding(
                         get: { currentSeconds },
                         set: {
-                            let nextSeconds = min(max(0, $0), placeholderDurationSeconds)
+                            let nextSeconds = min(max(0, $0), durationSeconds)
                             currentSeconds = nextSeconds
                             runtimeConfigCoordinator.setPlaybackTime(nextSeconds)
                         }
                     ),
-                    in: 0...placeholderDurationSeconds
+                    in: 0...durationSeconds,
+                    onEditingChanged: { editing in
+                        isScrubbing = editing
+                        if !editing {
+                            syncTimelineFromRuntime()
+                        }
+                    }
                 )
 
-                Text(formatTime(placeholderDurationSeconds))
+                Text(formatTime(durationSeconds))
                     .font(.caption.monospacedDigit())
                     .frame(width: 66, alignment: .trailing)
             }
@@ -1387,6 +1396,24 @@ private struct PlaybackTimelineBar: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .onAppear {
+            runtimeConfigCoordinator.refreshPlaybackTimelineSnapshot()
+            syncTimelineFromRuntime()
+        }
+        .onReceive(Timer.publish(every: 0.1, on: .main, in: .common).autoconnect()) { _ in
+            runtimeConfigCoordinator.refreshPlaybackTimelineSnapshot()
+            syncTimelineFromRuntime()
+        }
+        .onChange(of: runtimeConfigCoordinator.playbackTimelineSnapshot) { _, _ in
+            syncTimelineFromRuntime()
+        }
+    }
+
+    private func syncTimelineFromRuntime() {
+        guard !isScrubbing else { return }
+        let snapshot = runtimeConfigCoordinator.playbackTimelineSnapshot
+        currentSeconds = min(max(0, snapshot.currentSeconds), max(0, snapshot.durationSeconds))
+        isLooping = snapshot.isLooping
     }
 
     private func formatTime(_ seconds: Double) -> String {

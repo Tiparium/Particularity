@@ -130,6 +130,10 @@ final class SimulationSession {
         )
     }
 
+    var playbackTimelineSnapshot: PlaybackTimelineSnapshot {
+        runtime?.playbackTimelineSnapshot ?? .placeholder
+    }
+
     func updateSimulationState(_ nextState: SimulationViewportState) {
         let previousTransportState = currentSimulationState.transportState
         currentSimulationState = nextState

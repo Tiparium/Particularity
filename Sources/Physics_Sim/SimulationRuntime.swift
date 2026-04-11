@@ -374,6 +374,12 @@ final class SimulationRuntime: @unchecked Sendable {
         return simulationStateSnapshot
     }
 
+    var playbackTimelineSnapshot: PlaybackTimelineSnapshot {
+        simulationQueue.sync {
+            makePlaybackTimelineSnapshot()
+        }
+    }
+
     func updateTypeMatrixLocalSettings(_ nextSettings: TypeMatrixLocalPhysicsSettings) {
         simulationQueue.async {
             self.typeMatrixLocalSettings = nextSettings
@@ -405,6 +411,14 @@ final class SimulationRuntime: @unchecked Sendable {
         simulationQueue.async {
             self.playbackLooping = isLooping
         }
+    }
+
+    private func makePlaybackTimelineSnapshot() -> PlaybackTimelineSnapshot {
+        PlaybackTimelineSnapshot(
+            currentSeconds: playbackCurrentSeconds,
+            durationSeconds: playbackFixture?.durationSeconds ?? PlaybackTimelineSnapshot.placeholder.durationSeconds,
+            isLooping: playbackLooping
+        )
     }
 
     func updateActiveModules(_ nextModules: ActiveModuleSet) throws {

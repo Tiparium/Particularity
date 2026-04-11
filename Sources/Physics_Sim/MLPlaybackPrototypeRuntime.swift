@@ -1,6 +1,18 @@
 import Foundation
 import simd
 
+struct PlaybackTimelineSnapshot: Equatable {
+    static let placeholder = PlaybackTimelineSnapshot(
+        currentSeconds: 0,
+        durationSeconds: 52,
+        isLooping: true
+    )
+
+    var currentSeconds: Double
+    var durationSeconds: Double
+    var isLooping: Bool
+}
+
 struct MLPlaybackPrototypeParticle: Decodable {
     let id: Int
     let equation: String
