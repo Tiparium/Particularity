@@ -165,7 +165,8 @@ enum SimulationConfigurationDerivation {
         }
 
         guard let file = resolvedAssignedModuleFile(for: kind, assignedPath: path, availableFiles: availableFiles),
-              let descriptor = file.descriptor else {
+              let descriptor = file.descriptor,
+              descriptor.kind == kind.rawValue else {
             return ModuleCatalog.fallback(for: kind.rawValue)
         }
 
@@ -178,14 +179,14 @@ enum SimulationConfigurationDerivation {
         availableFiles: [ModuleFile]
     ) -> ModuleFile? {
         let assignedURL = URL(fileURLWithPath: assignedPath)
-        if let exact = availableFiles.first(where: { $0.kind == kind && $0.url == assignedURL }) {
+        if let exact = availableFiles.first(where: { $0.kind == kind && $0.url == assignedURL && $0.descriptor?.kind == kind.rawValue }) {
             return exact
         }
 
         // Support module-folder migrations by matching the manifest filename when the
         // stored absolute path is stale but the module package kept the same manifest name.
         let manifestName = assignedURL.lastPathComponent
-        if let filenameMatch = availableFiles.first(where: { $0.kind == kind && $0.url.lastPathComponent == manifestName }) {
+        if let filenameMatch = availableFiles.first(where: { $0.kind == kind && $0.url.lastPathComponent == manifestName && $0.descriptor?.kind == kind.rawValue }) {
             return filenameMatch
         }
 

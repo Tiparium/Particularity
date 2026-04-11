@@ -235,6 +235,18 @@ struct ContentView: View {
         chromeStateStore.collapsedPanelIDs
     }
 
+    private func assignImportedModuleURL(_ url: URL, for kind: ModuleKind) {
+        guard let resolvedFile = SimulationConfigurationDerivation.resolvedAssignedModuleFile(
+            for: kind,
+            assignedPath: url.path,
+            availableFiles: moduleCatalogStore.availableFiles
+        ) else {
+            return
+        }
+
+        editorSettingsStore.setAssignedModulePath(resolvedFile.url.path, for: kind)
+    }
+
     var body: some View {
         GeometryReader { _ in
             ZStack {
@@ -346,7 +358,7 @@ struct ContentView: View {
             allowsMultipleSelection: false
         ) { result in
             if case .success(let urls) = result, let url = urls.first {
-                editorSettingsStore.setAssignedModulePath(url.path, for: importerTargetKind)
+                assignImportedModuleURL(url, for: importerTargetKind)
             }
         }
     }
@@ -1457,7 +1469,9 @@ private struct ModuleSlotsPanel: View {
     private var mlPlaybackFamilyFiles: [ModuleKind: ModuleFile] {
         Dictionary(uniqueKeysWithValues: ModuleKind.allCases.compactMap { kind in
             guard let file = availableFiles.first(where: {
-                $0.kind == kind && $0.descriptor?.moduleFamilyID == MLPlaybackModuleFamily.id
+                $0.kind == kind
+                    && $0.descriptor?.kind == kind.rawValue
+                    && $0.descriptor?.moduleFamilyID == MLPlaybackModuleFamily.id
             }) else {
                 return nil
             }
@@ -1490,6 +1504,7 @@ private struct ModuleSlotsPanel: View {
 
             ForEach(ModuleKind.allCases) { kind in
                 let assigned = EditorViewSupport.assignedModules(from: editorSettingsStore)[kind]
+                let assignedFile = resolvedAssignedFile(for: kind, assigned: assigned)
                 let resolved = EditorViewSupport.resolvedModule(for: kind, store: editorSettingsStore, availableFiles: availableFiles)
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
@@ -1505,13 +1520,15 @@ private struct ModuleSlotsPanel: View {
 
                     HStack(spacing: 8) {
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(assigned?.lastPathComponent ?? "Unassigned")
+                            Text(resolved.name)
                                 .font(.caption2)
                                 .foregroundStyle(assigned == nil ? .secondary : .primary)
                                 .lineLimit(1)
-                            Text(assigned == nil ? "No file assigned. Runtime falls back to the built-in default module." : "Using assigned module file.")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
+                            assignmentStatusText(
+                                assigned: assigned,
+                                assignedFile: assignedFile,
+                                resolved: resolved
+                            )
                         }
                         Spacer()
                         VStack(alignment: .trailing, spacing: 6) {
@@ -1555,6 +1572,39 @@ private struct ModuleSlotsPanel: View {
             guard let file = mlPlaybackFamilyFiles[kind] else { continue }
             editorSettingsStore.setAssignedModulePath(file.url.path, for: kind)
         }
+    }
+
+    private func resolvedAssignedFile(for kind: ModuleKind, assigned: URL?) -> ModuleFile? {
+        guard let assigned else { return nil }
+        return SimulationConfigurationDerivation.resolvedAssignedModuleFile(
+            for: kind,
+            assignedPath: assigned.path,
+            availableFiles: availableFiles
+        )
+    }
+
+    private func assignmentStatusText(
+        assigned: URL?,
+        assignedFile: ModuleFile?,
+        resolved: ModuleDescriptor
+    ) -> some View {
+        let text: String
+        let style: Color
+
+        if let assigned, assignedFile == nil {
+            text = "Incompatible assignment \(assigned.lastPathComponent); runtime uses \(resolved.name)."
+            style = Color.red.opacity(0.9)
+        } else if let assignedFile {
+            text = "Using \(assignedFile.url.lastPathComponent)."
+            style = .secondary
+        } else {
+            text = "No file assigned. Runtime falls back to the built-in default module."
+            style = .secondary
+        }
+
+        return Text(text)
+            .font(.caption2)
+            .foregroundStyle(style)
     }
 }
 

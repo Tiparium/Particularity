@@ -340,12 +340,17 @@ final class MainWindowEditorSettingsStore: ObservableObject {
         var didChange = false
 
         for kind in ModuleKind.allCases {
-            guard let storedPath = nextAssignments[kind.rawValue],
-                  let resolvedFile = SimulationConfigurationDerivation.resolvedAssignedModuleFile(
-                    for: kind,
-                    assignedPath: storedPath,
-                    availableFiles: availableFiles
-                  ) else {
+            guard let storedPath = nextAssignments[kind.rawValue] else {
+                continue
+            }
+
+            guard let resolvedFile = SimulationConfigurationDerivation.resolvedAssignedModuleFile(
+                for: kind,
+                assignedPath: storedPath,
+                availableFiles: availableFiles
+            ) else {
+                nextAssignments.removeValue(forKey: kind.rawValue)
+                didChange = true
                 continue
             }
 
