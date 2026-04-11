@@ -14,6 +14,7 @@ final class SimulationRuntimeConfigCoordinator: ObservableObject {
     private let physicsModuleSettingsStore: MainWindowPhysicsModuleSettingsStore
     private let moduleCatalogStore: MainWindowModuleCatalogStore
     private var cancellables: Set<AnyCancellable> = []
+    private var playbackScrubShouldResume = false
 
     init(
         session: SimulationSession,
@@ -151,6 +152,41 @@ final class SimulationRuntimeConfigCoordinator: ObservableObject {
         guard activeModules.isPlaybackModuleFamily else { return }
         playbackTimelineSnapshot.isLooping = isLooping
         session.setPlaybackLooping(isLooping)
+    }
+
+    func beginPlaybackScrub() {
+        guard activeModules.isPlaybackModuleFamily else { return }
+        playbackScrubShouldResume = transportState == .running
+        guard transportState == .running else { return }
+        transportState = .paused
+        InteractionSnapshotRecorder.shared.record(
+            event: "ui.begin_playback_scrub",
+            details: ["transport": "running_to_paused"]
+        )
+        recomputeAndApply(
+            editorState: editorSettingsStore.editorState,
+            availableFiles: moduleCatalogStore.availableFiles
+        )
+    }
+
+    func endPlaybackScrub() {
+        guard activeModules.isPlaybackModuleFamily else {
+            playbackScrubShouldResume = false
+            return
+        }
+
+        let shouldResume = playbackScrubShouldResume
+        playbackScrubShouldResume = false
+        guard shouldResume, transportState == .paused, validationReport.canStart else { return }
+        transportState = .running
+        InteractionSnapshotRecorder.shared.record(
+            event: "ui.end_playback_scrub",
+            details: ["transport": "paused_to_running"]
+        )
+        recomputeAndApply(
+            editorState: editorSettingsStore.editorState,
+            availableFiles: moduleCatalogStore.availableFiles
+        )
     }
 
     func refreshPlaybackTimelineSnapshot() {

@@ -1378,7 +1378,10 @@ private struct PlaybackTimelineBar: View {
                     in: 0...durationSeconds,
                     onEditingChanged: { editing in
                         isScrubbing = editing
-                        if !editing {
+                        if editing {
+                            runtimeConfigCoordinator.beginPlaybackScrub()
+                        } else {
+                            runtimeConfigCoordinator.endPlaybackScrub()
                             syncTimelineFromRuntime()
                         }
                     }
