@@ -185,6 +185,16 @@ enum SimulationConfigurationDerivation {
         // Support module-folder migrations by matching the manifest filename when the
         // stored absolute path is stale but the module package kept the same manifest name.
         let manifestName = assignedURL.lastPathComponent
-        return availableFiles.first(where: { $0.kind == kind && $0.url.lastPathComponent == manifestName })
+        if let filenameMatch = availableFiles.first(where: { $0.kind == kind && $0.url.lastPathComponent == manifestName }) {
+            return filenameMatch
+        }
+
+        if kind == .optimization, manifestName == "uniform_grid.module.json" {
+            return availableFiles.first {
+                $0.kind == kind && $0.descriptor?.name == FixedGridOptimizationModuleRuntime.moduleName
+            }
+        }
+
+        return nil
     }
 }
