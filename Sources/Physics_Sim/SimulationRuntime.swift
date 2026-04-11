@@ -217,6 +217,10 @@ final class SimulationRuntime: @unchecked Sendable {
         visual: ModuleCatalog.defaultVisual,
         optimization: ModuleCatalog.defaultOptimization
     )
+    private var playbackFixture: MLPlaybackPrototypeFixture?
+    private var playbackCurrentSeconds: Double = 0
+    private var playbackLastUptime: TimeInterval?
+    private var playbackLooping = true
 
     private var renderStateSnapshot = RenderState(
         particleBuffer: nil,
@@ -384,11 +388,31 @@ final class SimulationRuntime: @unchecked Sendable {
         }
     }
 
+    func setPlaybackTime(_ seconds: Double) {
+        simulationQueue.async {
+            guard self.activeModules.isPlaybackModuleFamily else { return }
+            guard let fixture = self.playbackFixture ?? MLPlaybackPrototypeFixtureLoader.loadFixture() else { return }
+            self.playbackFixture = fixture
+            self.playbackCurrentSeconds = min(max(0, seconds), fixture.durationSeconds)
+            self.playbackLastUptime = ProcessInfo.processInfo.systemUptime
+            let frame = fixture.particles(at: self.playbackCurrentSeconds)
+            self.uploadPlaybackParticles(frame.particles)
+            self.publishSnapshots()
+        }
+    }
+
+    func setPlaybackLooping(_ isLooping: Bool) {
+        simulationQueue.async {
+            self.playbackLooping = isLooping
+        }
+    }
+
     func updateActiveModules(_ nextModules: ActiveModuleSet) throws {
         try simulationQueue.sync {
             if let reason = ModuleCompatibility.incompatibilityReason(for: nextModules, state: currentSimulationState) {
                 throw SimulationRuntimeError.incompatibleModules(nextModules, reason)
             }
+            let previousModules = activeModules
             let previousOptimization = activeModules.optimization
             activeModules = nextModules
             if previousOptimization != nextModules.optimization {
@@ -397,6 +421,19 @@ final class SimulationRuntime: @unchecked Sendable {
                 if nextModules.optimization.name != FixedGridOptimizationModuleRuntime.moduleName {
                     cachedFixedGridTopology = nil
                 }
+            }
+            if nextModules.isPlaybackModuleFamily {
+                playbackFixture = playbackFixture ?? MLPlaybackPrototypeFixtureLoader.loadFixture()
+                needsParticleRebuild = true
+                needsInteractionPlanRefresh = true
+                cachedDefaultInteractionParticleCount = nil
+                cachedFixedGridTopology = nil
+                debugHistory.reset()
+                clearLeaderCommunicationLog()
+            } else if previousModules.isPlaybackModuleFamily {
+                playbackFixture = nil
+                playbackCurrentSeconds = 0
+                playbackLastUptime = nil
             }
             if self.currentSimulationState.transportState == .stopped {
                 self.typeMatrixInteractionBuffer = nil
@@ -446,6 +483,8 @@ final class SimulationRuntime: @unchecked Sendable {
         if nextState.transportState == .stopped {
             simulationWorkInFlight = false
             tickingSuspended = false
+            playbackCurrentSeconds = 0
+            playbackLastUptime = nil
             idleCallbacks.removeAll(keepingCapacity: false)
             abandonEphemeralState()
         } else {
@@ -619,6 +658,11 @@ final class SimulationRuntime: @unchecked Sendable {
 
     private func stepSimulation(at now: TimeInterval) {
         guard !simulationWorkInFlight else { return }
+        if activeModules.isPlaybackModuleFamily {
+            stepPlayback(at: now)
+            return
+        }
+
         ensureParticleStateBuffers()
 
         guard currentSimulationState.transportState == .running,
@@ -782,6 +826,70 @@ final class SimulationRuntime: @unchecked Sendable {
             }
         }
         commandBuffer.commit()
+    }
+
+    private func stepPlayback(at now: TimeInterval) {
+        guard currentSimulationState.transportState == .running else {
+            publishSnapshots()
+            return
+        }
+
+        guard let fixture = playbackFixture ?? MLPlaybackPrototypeFixtureLoader.loadFixture() else {
+            playbackLastUptime = now
+            publishSnapshots()
+            return
+        }
+        playbackFixture = fixture
+
+        let previousUptime = playbackLastUptime ?? now
+        playbackLastUptime = now
+        let deltaSeconds = max(0, now - previousUptime) * Double(currentSimulationState.timeScale)
+        playbackCurrentSeconds = advancedPlaybackTime(
+            from: playbackCurrentSeconds,
+            by: deltaSeconds,
+            duration: fixture.durationSeconds
+        )
+
+        let frame = fixture.particles(at: playbackCurrentSeconds)
+        uploadPlaybackParticles(frame.particles)
+        metricsAccumulator.recordPhysicsStep(at: now)
+        publishSnapshots()
+    }
+
+    private func advancedPlaybackTime(from currentSeconds: Double, by deltaSeconds: Double, duration: Double) -> Double {
+        guard duration > 0 else { return 0 }
+        let nextSeconds = currentSeconds + deltaSeconds
+        if nextSeconds <= duration {
+            return nextSeconds
+        }
+        return playbackLooping ? nextSeconds.truncatingRemainder(dividingBy: duration) : duration
+    }
+
+    private func uploadPlaybackParticles(_ particles: [ParticleState]) {
+        let particleLength = max(1, MemoryLayout<ParticleState>.stride * particles.count)
+        if let existing = particleFrontBuffer, existing.length >= particleLength {
+            let pointer = existing.contents().bindMemory(to: ParticleState.self, capacity: particles.count)
+            pointer.update(from: particles, count: particles.count)
+            particleFrontBuffer = existing
+        } else {
+            particleFrontBuffer = device.makeBuffer(bytes: particles, length: particleLength)
+        }
+
+        if let existing = particleBackBuffer, existing.length >= particleLength {
+            let pointer = existing.contents().bindMemory(to: ParticleState.self, capacity: particles.count)
+            pointer.update(from: particles, count: particles.count)
+            particleBackBuffer = existing
+        } else {
+            particleBackBuffer = device.makeBuffer(bytes: particles, length: particleLength)
+        }
+
+        activeParticleCount = particles.count
+        particleCapacity = (particleFrontBuffer?.length ?? 0) / MemoryLayout<ParticleState>.stride
+        debugHistory.reset()
+        needsParticleRebuild = false
+        needsInteractionPlanRefresh = false
+        cachedDefaultInteractionParticleCount = nil
+        cachedFixedGridTopology = nil
     }
 
     private func encodePhysicsAccumulate(

@@ -15,6 +15,7 @@
 ### Top Shelf
 0) Fix panel drag session regression: no zone highlight,
    no drop preview, and no successful drop commit.
+1) Rework module loading/assignment architecture. Current module loading is too janky: assignment, discovery, compatibility, fallback behavior, and UI reporting need a cleaner design before the module system gets much more complex.
 
 ### Middle Shelf
 0) Split oversized `ContentView.swift` UI/state ownership into narrower app-shell subroles once engine/session entanglement work is stable.

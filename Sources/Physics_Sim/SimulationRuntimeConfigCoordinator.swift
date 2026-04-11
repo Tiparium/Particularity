@@ -138,6 +138,16 @@ final class SimulationRuntimeConfigCoordinator: ObservableObject {
         )
     }
 
+    func setPlaybackTime(_ seconds: Double) {
+        guard activeModules.isPlaybackModuleFamily else { return }
+        session.setPlaybackTime(seconds)
+    }
+
+    func setPlaybackLooping(_ isLooping: Bool) {
+        guard activeModules.isPlaybackModuleFamily else { return }
+        session.setPlaybackLooping(isLooping)
+    }
+
     private func recomputeAndApply(
         editorState: SimulationEditorState,
         availableFiles: [ModuleFile]

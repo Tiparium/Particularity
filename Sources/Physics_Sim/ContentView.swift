@@ -1286,7 +1286,7 @@ private struct SimulationCenterPane: View {
 
             Group {
                 if isPlaybackMode {
-                    PlaybackTimelineBar()
+                    PlaybackTimelineBar(runtimeConfigCoordinator: runtimeConfigCoordinator)
                         .transition(.opacity)
                 } else if let issue = viewportRuntimeError {
                     HStack {
@@ -1330,6 +1330,8 @@ private struct SimulationCenterPane: View {
 }
 
 private struct PlaybackTimelineBar: View {
+    @ObservedObject var runtimeConfigCoordinator: SimulationRuntimeConfigCoordinator
+
     private let placeholderDurationSeconds: Double = 52.0
 
     @State private var currentSeconds: Double = 0
@@ -1345,7 +1347,13 @@ private struct PlaybackTimelineBar: View {
 
                 AppSwitchToggle(
                     "Loop",
-                    isOn: $isLooping,
+                    isOn: Binding(
+                        get: { isLooping },
+                        set: {
+                            isLooping = $0
+                            runtimeConfigCoordinator.setPlaybackLooping($0)
+                        }
+                    ),
                     helpText: isLooping ? "Loop playback at the end" : "Stop playback at the end"
                 )
             }
@@ -1358,7 +1366,11 @@ private struct PlaybackTimelineBar: View {
                 Slider(
                     value: Binding(
                         get: { currentSeconds },
-                        set: { currentSeconds = min(max(0, $0), placeholderDurationSeconds) }
+                        set: {
+                            let nextSeconds = min(max(0, $0), placeholderDurationSeconds)
+                            currentSeconds = nextSeconds
+                            runtimeConfigCoordinator.setPlaybackTime(nextSeconds)
+                        }
                     ),
                     in: 0...placeholderDurationSeconds
                 )
@@ -1368,7 +1380,7 @@ private struct PlaybackTimelineBar: View {
                     .frame(width: 66, alignment: .trailing)
             }
 
-            Text("Placeholder timeline. Real playback duration, frame markers, and runtime binding will come from loaded pre-baked data.")
+            Text("Member 001 probe playback. 64 particles across 53 training checkpoints.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }

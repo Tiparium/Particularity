@@ -176,6 +176,14 @@ final class SimulationSession {
         runtime?.updateTypeMatrixLocalSettings(nextSettings)
     }
 
+    func setPlaybackTime(_ seconds: Double) {
+        runtime?.setPlaybackTime(seconds)
+    }
+
+    func setPlaybackLooping(_ isLooping: Bool) {
+        runtime?.setPlaybackLooping(isLooping)
+    }
+
     func publishFrameMetrics(averageFPS: Double, at now: TimeInterval) {
         runtime?.publishFrameMetrics(averageFPS: averageFPS, at: now)
     }
