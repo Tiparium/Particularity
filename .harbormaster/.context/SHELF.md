@@ -2,7 +2,7 @@
 
 ### Immediate Shelf
 0) Investigate and likely remove CPU-side writes into the live particle buffer after the GPU queue-ordering/render-sync work is resolved.
-1) #
+1) Audit EventuallyApplied controls for sticky/rubber-banding behavior. Several playback settings controls can feel delayed or snap back to unexpected values during active interaction; likely related to deferred commits colliding with external state refreshes.
 2) #
 3) #
 4) #
@@ -15,7 +15,8 @@
 ### Top Shelf
 0) Fix panel drag session regression: no zone highlight,
    no drop preview, and no successful drop commit.
-1) Rework module loading/assignment architecture. Current module loading is too janky: assignment, discovery, compatibility, fallback behavior, and UI reporting need a cleaner design before the module system gets much more complex.
+1) Rework module loading/assignment/selection architecture. Current module selection is too janky: assignment, discovery, compatibility, fallback behavior, UI reporting, and mode-aware validation need a cleaner design before the module system gets much more complex. This likely belongs near the first-class playback-mode pass, because realtime and playback modules should not be selected through the same brittle fake-trio assumptions forever.
+2) Full playback-mode refactor. Refactor the ML playback prototype out of shared core paths into a native first-class playback mode with its own module contract/family. Current prototype touches generic runtime/renderer/state files; once behavior stabilizes, move playback-specific logic behind modular playback interfaces, keep specialized ML/dataset code out of core files, and restore clean separation for realtime simulation paths.
 
 ### Middle Shelf
 0) Split oversized `ContentView.swift` UI/state ownership into narrower app-shell subroles once engine/session entanglement work is stable.

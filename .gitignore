@@ -5,3 +5,4 @@
 .DS_Store
 Sources/lab/.venv/
 Sources/lab/data/raw/*
+Sources/lab/data/derived/*
