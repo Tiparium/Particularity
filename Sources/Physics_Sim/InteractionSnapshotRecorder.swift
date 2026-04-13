@@ -48,7 +48,7 @@ enum InteractionSnapshotFormat {
     }
 
     static func visual(_ state: VisualModuleState) -> String {
-        "sphereSize=\(format(state.sphereSize)) spectrumOffset=\(format(state.spectrumOffset)) showOptimizationInfo=\(state.showOptimizationInfo)"
+        "sphereSize=\(format(state.sphereSize)) spectrumOffset=\(format(state.spectrumOffset)) showOptimizationInfo=\(state.showOptimizationInfo) mlPlaybackRecipe=\(state.mlPlaybackRecipe.rawValue) mlPlaybackNormalization=\(state.mlPlaybackNormalizationMode.rawValue) playbackSurfaceMesh=\(state.playbackSurfaceMeshEnabled) playbackSurfaceSmoothing=\(format(state.playbackSurfaceSmoothing)) playbackLayers=(front:\(state.playbackFrontLayerVisible)/\(state.playbackFrontLayerSlot)/\(format(state.playbackFrontLayerOffset)),middle:\(state.playbackMiddleLayerVisible)/\(state.playbackMiddleLayerSlot)/\(format(state.playbackMiddleLayerOffset)),final:\(state.playbackFinalLayerVisible)/\(state.playbackFinalLayerSlot)/\(format(state.playbackFinalLayerOffset)))"
     }
 
     static func optimization(_ state: OptimizationModuleState) -> String {
@@ -60,11 +60,11 @@ enum InteractionSnapshotFormat {
     }
 
     static func viewport(_ state: SimulationViewportState) -> String {
-        "transport=\(state.transportState.rawValue) count=\(state.particleCount) random=\(state.randomDistribution) types=\(state.particleTypes) intercommunicate=\(state.allParticlesIntercommunicate) direction=(\(format(Double(state.movementDirection.x))),\(format(Double(state.movementDirection.y))),\(format(Double(state.movementDirection.z)))) timeScale=\(format(Double(state.timeScale))) sphereSize=\(format(Double(state.sphereSize))) spectrumOffset=\(format(Double(state.spectrumOffset))) showOptimizationInfo=\(state.showOptimizationInfo) showLeaderCommunicationLog=\(state.showLeaderCommunicationLog) fixedGridSubdivisions=\(state.fixedGridSubdivisions) fixedGridSubspaceCap=\(state.fixedGridSubspaceCap) fixedGridNeighborReadMode=\(state.fixedGridNeighborReadMode.rawValue)"
+        "transport=\(state.transportState.rawValue) count=\(state.particleCount) random=\(state.randomDistribution) types=\(state.particleTypes) intercommunicate=\(state.allParticlesIntercommunicate) direction=(\(format(Double(state.movementDirection.x))),\(format(Double(state.movementDirection.y))),\(format(Double(state.movementDirection.z)))) timeScale=\(format(Double(state.timeScale))) sphereSize=\(format(Double(state.sphereSize))) spectrumOffset=\(format(Double(state.spectrumOffset))) showOptimizationInfo=\(state.showOptimizationInfo) mlPlaybackRecipe=\(state.mlPlaybackRecipe.rawValue) mlPlaybackNormalization=\(state.mlPlaybackNormalizationMode.rawValue) playbackVisual=\(state.isPlaybackVisualModule) playbackTimeScale=\(format(Double(state.playbackTimeScale))) playbackLerp=\(state.playbackInterpolationEnabled) playbackSurfaceMesh=\(state.playbackSurfaceMeshEnabled) playbackSurfaceSmoothing=\(format(Double(state.playbackSurfaceSmoothing))) playbackLayers=(front:\(state.playbackFrontLayerVisible)/\(state.playbackFrontLayerSlot)/\(format(Double(state.playbackFrontLayerOffset))),middle:\(state.playbackMiddleLayerVisible)/\(state.playbackMiddleLayerSlot)/\(format(Double(state.playbackMiddleLayerOffset))),final:\(state.playbackFinalLayerVisible)/\(state.playbackFinalLayerSlot)/\(format(Double(state.playbackFinalLayerOffset)))) showLeaderCommunicationLog=\(state.showLeaderCommunicationLog) fixedGridSubdivisions=\(state.fixedGridSubdivisions) fixedGridSubspaceCap=\(state.fixedGridSubspaceCap) fixedGridNeighborReadMode=\(state.fixedGridNeighborReadMode.rawValue)"
     }
 
     static func renderState(_ state: SimulationRuntime.RenderState) -> String {
-        "activeParticleCount=\(state.activeParticleCount) particleCapacity=\(state.particleCapacity) hasParticleBuffer=\(state.particleBuffer != nil) hasDebugLineBuffer=\(state.debugLineBuffer != nil) debugRenderSegments=\(state.debugRenderSegments.count)"
+        "activeParticleCount=\(state.activeParticleCount) particleCapacity=\(state.particleCapacity) hasParticleBuffer=\(state.particleBuffer != nil) hasDebugLineBuffer=\(state.debugLineBuffer != nil) debugRenderSegments=\(state.debugRenderSegments.count) playbackActivationRange=(\(format(Double(state.playbackActivationMinimum))),\(format(Double(state.playbackActivationMaximum))))"
     }
 
     static func activeModules(_ modules: ActiveModuleSet) -> String {

@@ -10,7 +10,14 @@ enum SimulationConfigurationDerivation {
         editorState: SimulationEditorState,
         availableFiles: [ModuleFile]
     ) -> SimulationViewportState {
-        SimulationViewportState(
+        let modules = activeModules(
+            editorState: editorState,
+            availableFiles: availableFiles
+        )
+        let isPlaybackVisualModule = modules.visual.moduleFamilyID == MLPlaybackModuleFamily.id
+            && modules.visual.name == MLPlaybackModuleFamily.visualModuleName
+
+        return SimulationViewportState(
             transportState: transportState,
             particleCount: editorState.physicsState.particleCount,
             randomDistribution: editorState.physicsState.randomDistribution,
@@ -28,6 +35,32 @@ enum SimulationConfigurationDerivation {
                 editorState: editorState,
                 availableFiles: availableFiles
             ) && editorState.visualState.showOptimizationInfo,
+            mlPlaybackRecipe: isPlaybackVisualModule ? editorState.visualState.mlPlaybackRecipe : .typeSpectrum,
+            mlPlaybackNormalizationMode: isPlaybackVisualModule
+                ? editorState.visualState.mlPlaybackNormalizationMode
+                : .global,
+            isPlaybackVisualModule: isPlaybackVisualModule,
+            playbackTimeScale: Float(max(0.01, editorState.physicsState.timeScale)),
+            playbackInterpolationEnabled: editorState.playbackSettings.interpolationEnabled,
+            playbackSurfaceMeshEnabled: isPlaybackVisualModule && editorState.visualState.playbackSurfaceMeshEnabled,
+            playbackSurfaceSmoothing: isPlaybackVisualModule
+                ? Float(min(max(0, editorState.visualState.playbackSurfaceSmoothing), 1))
+                : 0,
+            playbackFrontLayerVisible: isPlaybackVisualModule ? editorState.visualState.playbackFrontLayerVisible : false,
+            playbackMiddleLayerVisible: isPlaybackVisualModule ? editorState.visualState.playbackMiddleLayerVisible : false,
+            playbackFinalLayerVisible: isPlaybackVisualModule ? editorState.visualState.playbackFinalLayerVisible : false,
+            playbackFrontLayerSlot: isPlaybackVisualModule ? min(max(0, editorState.visualState.playbackFrontLayerSlot), 4) : 0,
+            playbackMiddleLayerSlot: isPlaybackVisualModule ? min(max(0, editorState.visualState.playbackMiddleLayerSlot), 4) : 0,
+            playbackFinalLayerSlot: isPlaybackVisualModule ? min(max(0, editorState.visualState.playbackFinalLayerSlot), 4) : 0,
+            playbackFrontLayerOffset: isPlaybackVisualModule
+                ? Float(min(max(-1.5, editorState.visualState.playbackFrontLayerOffset), 1.5))
+                : 0,
+            playbackMiddleLayerOffset: isPlaybackVisualModule
+                ? Float(min(max(-1.5, editorState.visualState.playbackMiddleLayerOffset), 1.5))
+                : 0,
+            playbackFinalLayerOffset: isPlaybackVisualModule
+                ? Float(min(max(-1.5, editorState.visualState.playbackFinalLayerOffset), 1.5))
+                : 0,
             showLeaderCommunicationLog: editorState.optimizationState.showLeaderCommunicationLog,
             fixedGridSubdivisions: max(1, editorState.optimizationState.fixedGridSubdivisions),
             fixedGridSubspaceCap: max(

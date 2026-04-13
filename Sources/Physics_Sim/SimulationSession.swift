@@ -126,7 +126,9 @@ final class SimulationSession {
             activeParticleCount: 0,
             particleCapacity: 0,
             debugLineBuffer: nil,
-            debugRenderSegments: []
+            debugRenderSegments: [],
+            playbackActivationMinimum: 0,
+            playbackActivationMaximum: 1
         )
     }
 

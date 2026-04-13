@@ -375,6 +375,7 @@ struct ContentView: View {
             },
             top: SimulationCenterPane(
                 session: session,
+                editorSettingsStore: editorSettingsStore,
                 viewportStateStore: viewportStateStore,
                 runtimeConfigCoordinator: runtimeConfigCoordinator,
                 diagnosticsStore: diagnosticsStore,
@@ -1178,6 +1179,7 @@ private enum EditorViewSupport {
 
 private struct SimulationCenterPane: View {
     let session: SimulationSession
+    @ObservedObject var editorSettingsStore: MainWindowEditorSettingsStore
     @ObservedObject var viewportStateStore: MainWindowViewportStateStore
     @ObservedObject var runtimeConfigCoordinator: SimulationRuntimeConfigCoordinator
     @ObservedObject var diagnosticsStore: MainWindowDiagnosticsStore
@@ -1265,6 +1267,27 @@ private struct SimulationCenterPane: View {
                 Divider()
                     .frame(height: 18)
 
+                HStack(spacing: 8) {
+                    Text("Time Scale")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Slider(
+                        value: Binding(
+                            get: { runtimeConfigCoordinator.simulationState.timeScale },
+                            set: {
+                                var next = editorSettingsStore.editorState.physicsState
+                                next.timeScale = Double(min(max(0.1, $0), 4.0))
+                                editorSettingsStore.setPhysicsState(next)
+                            }
+                        ),
+                        in: 0.1...4.0
+                    )
+                    .frame(width: 120)
+                    Text(String(format: "%.2fx", runtimeConfigCoordinator.simulationState.timeScale))
+                        .font(.caption.monospacedDigit())
+                        .frame(width: 52, alignment: .trailing)
+                }
+
                 AppSwitchToggle(
                     "Slow Rotation",
                     isOn: Binding(
@@ -1286,7 +1309,9 @@ private struct SimulationCenterPane: View {
 
             Group {
                 if isPlaybackMode {
-                    PlaybackTimelineBar(runtimeConfigCoordinator: runtimeConfigCoordinator)
+                    PlaybackTimelineBar(
+                        runtimeConfigCoordinator: runtimeConfigCoordinator
+                    )
                         .transition(.opacity)
                 } else if let issue = viewportRuntimeError {
                     HStack {
@@ -1333,7 +1358,6 @@ private struct PlaybackTimelineBar: View {
     @ObservedObject var runtimeConfigCoordinator: SimulationRuntimeConfigCoordinator
 
     @State private var currentSeconds: Double = 0
-    @State private var isLooping = true
     @State private var isScrubbing = false
 
     private var durationSeconds: Double {
@@ -1347,18 +1371,6 @@ private struct PlaybackTimelineBar: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
-
-                AppSwitchToggle(
-                    "Loop",
-                    isOn: Binding(
-                        get: { isLooping },
-                        set: {
-                            isLooping = $0
-                            runtimeConfigCoordinator.setPlaybackLooping($0)
-                        }
-                    ),
-                    helpText: isLooping ? "Loop playback at the end" : "Stop playback at the end"
-                )
             }
 
             HStack(spacing: 10) {
@@ -1392,7 +1404,7 @@ private struct PlaybackTimelineBar: View {
                     .frame(width: 66, alignment: .trailing)
             }
 
-            Text("Member 001 stress playback. 20,000 particles across embeddings, probes, and hidden-state slices.")
+            Text("Neuron sweep playback. e_08 run_001 field checkpoint stream across all x/y token pairs.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }
@@ -1416,7 +1428,6 @@ private struct PlaybackTimelineBar: View {
         guard !isScrubbing else { return }
         let snapshot = runtimeConfigCoordinator.playbackTimelineSnapshot
         currentSeconds = min(max(0, snapshot.currentSeconds), max(0, snapshot.durationSeconds))
-        isLooping = snapshot.isLooping
     }
 
     private func formatTime(_ seconds: Double) -> String {
@@ -1664,6 +1675,11 @@ private struct ModuleSettingsPanelView: View {
                 case .visual:
                     if resolved.name == ModuleCatalog.defaultVisual.name {
                         VisualSettingsPanel(store: editorSettingsStore, optimizationDebugSupported: EditorViewSupport.resolvedVisualSupportsOptimizationDebug(store: editorSettingsStore, availableFiles: availableFiles))
+                    } else if resolved.name == MLPlaybackModuleFamily.visualModuleName {
+                        MLPlaybackRecipeSettingsPanel(
+                            store: editorSettingsStore,
+                            runtimeConfigCoordinator: runtimeConfigCoordinator
+                        )
                     } else {
                         unavailable
                     }
@@ -1769,25 +1785,6 @@ private struct PhysicsSettingsPanel: View {
                     valueText: { String(format: "%.2f", $0) }
                 )
             }
-            EventuallyAppliedSlider(
-                title: "Time Scale",
-                appliedValue: Binding(
-                    get: {
-                        TimeScaleControlMapping.controlValue(
-                            forRuntimeScale: store.editorState.physicsState.timeScale
-                        )
-                    },
-                    set: {
-                        var next = store.editorState.physicsState
-                        next.timeScale = TimeScaleControlMapping.runtimeScale(forControlValue: $0)
-                        store.setPhysicsState(next)
-                    }
-                ),
-                range: TimeScaleControlMapping.sliderRange,
-                textEntryRange: TimeScaleControlMapping.textEntryRange,
-                step: TimeScaleControlMapping.sliderStep,
-                valueText: { String(format: "%.2fx", $0) }
-            )
         }
     }
 }
@@ -1838,6 +1835,218 @@ private struct VisualSettingsPanel: View {
                 )
             )
             .disabled(!optimizationDebugSupported)
+        }
+    }
+}
+
+private struct MLPlaybackRecipeSettingsPanel: View {
+    @ObservedObject var store: MainWindowEditorSettingsStore
+    @ObservedObject var runtimeConfigCoordinator: SimulationRuntimeConfigCoordinator
+
+    private var playbackControlsEnabled: Bool {
+        runtimeConfigCoordinator.activeModules.isPlaybackModuleFamily
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            EventuallyAppliedSlider(
+                title: "Sphere Size",
+                appliedValue: Binding(
+                    get: { store.editorState.visualState.sphereSize },
+                    set: {
+                        var next = store.editorState.visualState
+                        next.sphereSize = $0
+                        store.setVisualState(next)
+                    }
+                ),
+                range: 0.002...0.02,
+                step: 0.0005,
+                valueText: { String(format: "%.3f", $0) }
+            )
+
+            EventuallyAppliedSlider(
+                title: "Spectrum Offset",
+                appliedValue: Binding(
+                    get: { store.editorState.visualState.spectrumOffset },
+                    set: {
+                        var next = store.editorState.visualState
+                        next.spectrumOffset = $0
+                        store.setVisualState(next)
+                    }
+                ),
+                range: 0...1,
+                step: 0.01,
+                valueText: { String(format: "%.2f", $0) }
+            )
+
+            EventuallyAppliedSegmentedPicker(
+                title: "Recipe",
+                appliedValue: Binding(
+                    get: { store.editorState.visualState.mlPlaybackRecipe },
+                    set: {
+                        runtimeConfigCoordinator.setPlaybackRecipe($0)
+                    }
+                ),
+                options: MLPlaybackVisualRecipe.allCases,
+                optionTitle: { $0.shortTitle }
+            )
+            .disabled(!playbackControlsEnabled)
+
+            EventuallyAppliedSegmentedPicker(
+                title: "Normalize",
+                appliedValue: Binding(
+                    get: { store.editorState.visualState.mlPlaybackNormalizationMode },
+                    set: { runtimeConfigCoordinator.setPlaybackNormalizationMode($0) }
+                ),
+                options: MLPlaybackNormalizationMode.allCases,
+                optionTitle: { $0.shortTitle }
+            )
+            .disabled(!playbackControlsEnabled)
+
+            AppSwitchToggle(
+                "Loop Playback",
+                isOn: Binding(
+                    get: { runtimeConfigCoordinator.playbackTimelineSnapshot.isLooping },
+                    set: { runtimeConfigCoordinator.setPlaybackLooping($0) }
+                ),
+                helpText: runtimeConfigCoordinator.playbackTimelineSnapshot.isLooping
+                    ? "Loop playback at the end"
+                    : "Stop playback at end"
+            )
+            .disabled(!playbackControlsEnabled)
+
+            EventuallyAppliedToggle(
+                title: "Lerp Between Frames",
+                appliedValue: Binding(
+                    get: { store.editorState.playbackSettings.interpolationEnabled },
+                    set: { runtimeConfigCoordinator.setPlaybackInterpolationEnabled($0) }
+                )
+            )
+            .disabled(!playbackControlsEnabled)
+
+            EventuallyAppliedToggle(
+                title: "Surface Mesh",
+                appliedValue: Binding(
+                    get: { store.editorState.visualState.playbackSurfaceMeshEnabled },
+                    set: { runtimeConfigCoordinator.setPlaybackSurfaceMeshEnabled($0) }
+                )
+            )
+            .disabled(!playbackControlsEnabled)
+
+            EventuallyAppliedSlider(
+                title: "Surface Smoothing",
+                appliedValue: Binding(
+                    get: { store.editorState.visualState.playbackSurfaceSmoothing },
+                    set: { runtimeConfigCoordinator.setPlaybackSurfaceSmoothing($0) }
+                ),
+                range: 0...1,
+                step: 0.02,
+                valueText: { String(format: "%.2f", $0) }
+            )
+            .disabled(!playbackControlsEnabled || !store.editorState.visualState.playbackSurfaceMeshEnabled)
+
+            AppSwitchToggle(
+                "Front Layer",
+                isOn: Binding(
+                    get: { store.editorState.visualState.playbackFrontLayerVisible },
+                    set: { runtimeConfigCoordinator.setPlaybackLayerVisible(layer: .front, isVisible: $0) }
+                )
+            )
+            .disabled(!playbackControlsEnabled)
+
+            EventuallyAppliedIntSlider(
+                title: "Front Neuron",
+                appliedValue: Binding(
+                    get: { store.editorState.visualState.playbackFrontLayerSlot },
+                    set: { runtimeConfigCoordinator.setPlaybackLayerSlot(layer: .front, slot: $0) }
+                ),
+                range: 0...4
+            )
+            .disabled(!playbackControlsEnabled || !store.editorState.visualState.playbackFrontLayerVisible)
+
+            EventuallyAppliedSlider(
+                title: "Front Height",
+                appliedValue: Binding(
+                    get: { store.editorState.visualState.playbackFrontLayerOffset },
+                    set: { runtimeConfigCoordinator.setPlaybackLayerOffset(layer: .front, value: $0) }
+                ),
+                range: -1.5...1.5,
+                step: 0.02,
+                valueText: { String(format: "%.2f", $0) }
+            )
+            .disabled(!playbackControlsEnabled || !store.editorState.visualState.playbackFrontLayerVisible)
+
+            AppSwitchToggle(
+                "Middle Layer",
+                isOn: Binding(
+                    get: { store.editorState.visualState.playbackMiddleLayerVisible },
+                    set: { runtimeConfigCoordinator.setPlaybackLayerVisible(layer: .middle, isVisible: $0) }
+                )
+            )
+            .disabled(!playbackControlsEnabled)
+
+            EventuallyAppliedIntSlider(
+                title: "Middle Neuron",
+                appliedValue: Binding(
+                    get: { store.editorState.visualState.playbackMiddleLayerSlot },
+                    set: { runtimeConfigCoordinator.setPlaybackLayerSlot(layer: .middle, slot: $0) }
+                ),
+                range: 0...4
+            )
+            .disabled(!playbackControlsEnabled || !store.editorState.visualState.playbackMiddleLayerVisible)
+
+            EventuallyAppliedSlider(
+                title: "Middle Height",
+                appliedValue: Binding(
+                    get: { store.editorState.visualState.playbackMiddleLayerOffset },
+                    set: { runtimeConfigCoordinator.setPlaybackLayerOffset(layer: .middle, value: $0) }
+                ),
+                range: -1.5...1.5,
+                step: 0.02,
+                valueText: { String(format: "%.2f", $0) }
+            )
+            .disabled(!playbackControlsEnabled || !store.editorState.visualState.playbackMiddleLayerVisible)
+
+            AppSwitchToggle(
+                "Final Layer",
+                isOn: Binding(
+                    get: { store.editorState.visualState.playbackFinalLayerVisible },
+                    set: { runtimeConfigCoordinator.setPlaybackLayerVisible(layer: .final, isVisible: $0) }
+                )
+            )
+            .disabled(!playbackControlsEnabled)
+
+            EventuallyAppliedIntSlider(
+                title: "Final Neuron",
+                appliedValue: Binding(
+                    get: { store.editorState.visualState.playbackFinalLayerSlot },
+                    set: { runtimeConfigCoordinator.setPlaybackLayerSlot(layer: .final, slot: $0) }
+                ),
+                range: 0...4
+            )
+            .disabled(!playbackControlsEnabled || !store.editorState.visualState.playbackFinalLayerVisible)
+
+            EventuallyAppliedSlider(
+                title: "Final Height",
+                appliedValue: Binding(
+                    get: { store.editorState.visualState.playbackFinalLayerOffset },
+                    set: { runtimeConfigCoordinator.setPlaybackLayerOffset(layer: .final, value: $0) }
+                ),
+                range: -1.5...1.5,
+                step: 0.02,
+                valueText: { String(format: "%.2f", $0) }
+            )
+            .disabled(!playbackControlsEnabled || !store.editorState.visualState.playbackFinalLayerVisible)
+
+            Text(store.editorState.visualState.mlPlaybackRecipe.detail)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
+            if !playbackControlsEnabled {
+                Text("Playback controls unlock when the full ML playback trio is active.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 }

@@ -17,6 +17,21 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
     var sphereSize: Double
     var spectrumOffset: Double
     var showOptimizationInfo: Bool
+    var mlPlaybackRecipe: Int
+    var mlPlaybackNormalizationMode: Int
+    var playbackSurfaceMeshEnabled: Bool
+    var playbackSurfaceSmoothing: Double
+    var playbackFrontLayerVisible: Bool
+    var playbackMiddleLayerVisible: Bool
+    var playbackFinalLayerVisible: Bool
+    var playbackFrontLayerSlot: Int
+    var playbackMiddleLayerSlot: Int
+    var playbackFinalLayerSlot: Int
+    var playbackFrontLayerOffset: Double
+    var playbackMiddleLayerOffset: Double
+    var playbackFinalLayerOffset: Double
+    var playbackTimeScale: Double
+    var playbackInterpolationEnabled: Bool
     var showLeaderCommunicationLog: Bool
     var fixedGridSubdivisions: Int
     var fixedGridSubspaceCap: Int
@@ -38,6 +53,21 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
         case sphereSize
         case spectrumOffset
         case showOptimizationInfo
+        case mlPlaybackRecipe
+        case mlPlaybackNormalizationMode
+        case playbackSurfaceMeshEnabled
+        case playbackSurfaceSmoothing
+        case playbackFrontLayerVisible
+        case playbackMiddleLayerVisible
+        case playbackFinalLayerVisible
+        case playbackFrontLayerSlot
+        case playbackMiddleLayerSlot
+        case playbackFinalLayerSlot
+        case playbackFrontLayerOffset
+        case playbackMiddleLayerOffset
+        case playbackFinalLayerOffset
+        case playbackTimeScale
+        case playbackInterpolationEnabled
         case showLeaderCommunicationLog
         case fixedGridSubdivisions
         case fixedGridSubspaceCap
@@ -60,6 +90,21 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
         sphereSize: 0.008,
         spectrumOffset: 0.0,
         showOptimizationInfo: false,
+        mlPlaybackRecipe: MLPlaybackVisualRecipe.typeSpectrum.rawValue,
+        mlPlaybackNormalizationMode: MLPlaybackNormalizationMode.global.rawValue,
+        playbackSurfaceMeshEnabled: true,
+        playbackSurfaceSmoothing: 0.35,
+        playbackFrontLayerVisible: true,
+        playbackMiddleLayerVisible: true,
+        playbackFinalLayerVisible: true,
+        playbackFrontLayerSlot: 0,
+        playbackMiddleLayerSlot: 0,
+        playbackFinalLayerSlot: 0,
+        playbackFrontLayerOffset: 0.32,
+        playbackMiddleLayerOffset: 0.0,
+        playbackFinalLayerOffset: -0.32,
+        playbackTimeScale: 1.0,
+        playbackInterpolationEnabled: false,
         showLeaderCommunicationLog: false,
         fixedGridSubdivisions: 8,
         fixedGridSubspaceCap: 2,
@@ -82,6 +127,21 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
         sphereSize: Double,
         spectrumOffset: Double,
         showOptimizationInfo: Bool,
+        mlPlaybackRecipe: Int,
+        mlPlaybackNormalizationMode: Int,
+        playbackSurfaceMeshEnabled: Bool,
+        playbackSurfaceSmoothing: Double,
+        playbackFrontLayerVisible: Bool,
+        playbackMiddleLayerVisible: Bool,
+        playbackFinalLayerVisible: Bool,
+        playbackFrontLayerSlot: Int,
+        playbackMiddleLayerSlot: Int,
+        playbackFinalLayerSlot: Int,
+        playbackFrontLayerOffset: Double,
+        playbackMiddleLayerOffset: Double,
+        playbackFinalLayerOffset: Double,
+        playbackTimeScale: Double,
+        playbackInterpolationEnabled: Bool,
         showLeaderCommunicationLog: Bool,
         fixedGridSubdivisions: Int,
         fixedGridSubspaceCap: Int,
@@ -102,6 +162,21 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
         self.sphereSize = sphereSize
         self.spectrumOffset = spectrumOffset
         self.showOptimizationInfo = showOptimizationInfo
+        self.mlPlaybackRecipe = mlPlaybackRecipe
+        self.mlPlaybackNormalizationMode = mlPlaybackNormalizationMode
+        self.playbackSurfaceMeshEnabled = playbackSurfaceMeshEnabled
+        self.playbackSurfaceSmoothing = playbackSurfaceSmoothing
+        self.playbackFrontLayerVisible = playbackFrontLayerVisible
+        self.playbackMiddleLayerVisible = playbackMiddleLayerVisible
+        self.playbackFinalLayerVisible = playbackFinalLayerVisible
+        self.playbackFrontLayerSlot = playbackFrontLayerSlot
+        self.playbackMiddleLayerSlot = playbackMiddleLayerSlot
+        self.playbackFinalLayerSlot = playbackFinalLayerSlot
+        self.playbackFrontLayerOffset = playbackFrontLayerOffset
+        self.playbackMiddleLayerOffset = playbackMiddleLayerOffset
+        self.playbackFinalLayerOffset = playbackFinalLayerOffset
+        self.playbackTimeScale = playbackTimeScale
+        self.playbackInterpolationEnabled = playbackInterpolationEnabled
         self.showLeaderCommunicationLog = showLeaderCommunicationLog
         self.fixedGridSubdivisions = fixedGridSubdivisions
         self.fixedGridSubspaceCap = fixedGridSubspaceCap
@@ -127,6 +202,48 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
         sphereSize = try container.decode(Double.self, forKey: .sphereSize)
         spectrumOffset = try container.decode(Double.self, forKey: .spectrumOffset)
         showOptimizationInfo = try container.decode(Bool.self, forKey: .showOptimizationInfo)
+        mlPlaybackRecipe = try container.decodeIfPresent(Int.self, forKey: .mlPlaybackRecipe)
+            ?? fallback.mlPlaybackRecipe
+        mlPlaybackNormalizationMode = try container.decodeIfPresent(Int.self, forKey: .mlPlaybackNormalizationMode)
+            ?? fallback.mlPlaybackNormalizationMode
+        playbackSurfaceMeshEnabled = try container.decodeIfPresent(Bool.self, forKey: .playbackSurfaceMeshEnabled)
+            ?? fallback.playbackSurfaceMeshEnabled
+        playbackSurfaceSmoothing = try container.decodeIfPresent(Double.self, forKey: .playbackSurfaceSmoothing)
+            ?? fallback.playbackSurfaceSmoothing
+        playbackFrontLayerVisible = try container.decodeIfPresent(Bool.self, forKey: .playbackFrontLayerVisible)
+            ?? fallback.playbackFrontLayerVisible
+        playbackMiddleLayerVisible = try container.decodeIfPresent(Bool.self, forKey: .playbackMiddleLayerVisible)
+            ?? fallback.playbackMiddleLayerVisible
+        playbackFinalLayerVisible = try container.decodeIfPresent(Bool.self, forKey: .playbackFinalLayerVisible)
+            ?? fallback.playbackFinalLayerVisible
+        playbackFrontLayerSlot = min(
+            max(0, try container.decodeIfPresent(Int.self, forKey: .playbackFrontLayerSlot) ?? fallback.playbackFrontLayerSlot),
+            4
+        )
+        playbackMiddleLayerSlot = min(
+            max(0, try container.decodeIfPresent(Int.self, forKey: .playbackMiddleLayerSlot) ?? fallback.playbackMiddleLayerSlot),
+            4
+        )
+        playbackFinalLayerSlot = min(
+            max(0, try container.decodeIfPresent(Int.self, forKey: .playbackFinalLayerSlot) ?? fallback.playbackFinalLayerSlot),
+            4
+        )
+        playbackFrontLayerOffset = min(
+            max(-1.5, try container.decodeIfPresent(Double.self, forKey: .playbackFrontLayerOffset) ?? fallback.playbackFrontLayerOffset),
+            1.5
+        )
+        playbackMiddleLayerOffset = min(
+            max(-1.5, try container.decodeIfPresent(Double.self, forKey: .playbackMiddleLayerOffset) ?? fallback.playbackMiddleLayerOffset),
+            1.5
+        )
+        playbackFinalLayerOffset = min(
+            max(-1.5, try container.decodeIfPresent(Double.self, forKey: .playbackFinalLayerOffset) ?? fallback.playbackFinalLayerOffset),
+            1.5
+        )
+        playbackTimeScale = try container.decodeIfPresent(Double.self, forKey: .playbackTimeScale)
+            ?? fallback.playbackTimeScale
+        playbackInterpolationEnabled = try container.decodeIfPresent(Bool.self, forKey: .playbackInterpolationEnabled)
+            ?? fallback.playbackInterpolationEnabled
         showLeaderCommunicationLog = try container.decode(Bool.self, forKey: .showLeaderCommunicationLog)
         fixedGridSubdivisions = try container.decodeIfPresent(Int.self, forKey: .fixedGridSubdivisions) ?? fallback.fixedGridSubdivisions
         fixedGridSubspaceCap = try container.decodeIfPresent(Int.self, forKey: .fixedGridSubspaceCap) ?? fallback.fixedGridSubspaceCap
@@ -142,6 +259,7 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
             physicsState: physicsState,
             visualState: visualState,
             optimizationState: optimizationState,
+            playbackSettings: playbackSettings,
             debugSettings: debugSettings,
             assignedModulePaths: assignedModules
         )
@@ -162,7 +280,20 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
         VisualModuleState(
             sphereSize: sphereSize,
             spectrumOffset: spectrumOffset,
-            showOptimizationInfo: showOptimizationInfo
+            showOptimizationInfo: showOptimizationInfo,
+            mlPlaybackRecipe: MLPlaybackVisualRecipe(rawValue: mlPlaybackRecipe) ?? .typeSpectrum,
+            mlPlaybackNormalizationMode: MLPlaybackNormalizationMode(rawValue: mlPlaybackNormalizationMode) ?? .global,
+            playbackSurfaceMeshEnabled: playbackSurfaceMeshEnabled,
+            playbackSurfaceSmoothing: min(max(0, playbackSurfaceSmoothing), 1),
+            playbackFrontLayerVisible: playbackFrontLayerVisible,
+            playbackMiddleLayerVisible: playbackMiddleLayerVisible,
+            playbackFinalLayerVisible: playbackFinalLayerVisible,
+            playbackFrontLayerSlot: playbackFrontLayerSlot,
+            playbackMiddleLayerSlot: playbackMiddleLayerSlot,
+            playbackFinalLayerSlot: playbackFinalLayerSlot,
+            playbackFrontLayerOffset: playbackFrontLayerOffset,
+            playbackMiddleLayerOffset: playbackMiddleLayerOffset,
+            playbackFinalLayerOffset: playbackFinalLayerOffset
         )
     }
 
@@ -172,6 +303,12 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
             fixedGridSubdivisions: fixedGridSubdivisions,
             fixedGridSubspaceCap: fixedGridSubspaceCap,
             fixedGridNeighborReadMode: FixedGridNeighborReadMode(rawValue: fixedGridNeighborReadMode) ?? .scratch
+        )
+    }
+
+    var playbackSettings: PlaybackSettingsState {
+        PlaybackSettingsState(
+            interpolationEnabled: playbackInterpolationEnabled
         )
     }
 
@@ -191,6 +328,7 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
         physicsState: PhysicsModuleState,
         visualState: VisualModuleState,
         optimizationState: OptimizationModuleState,
+        playbackSettings: PlaybackSettingsState,
         debugSettings: DebugSettingsState,
         assignedModulePaths: [String: String]
     ) -> MainWindowSimulationStateSnapshot {
@@ -206,6 +344,21 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
             sphereSize: visualState.sphereSize,
             spectrumOffset: visualState.spectrumOffset,
             showOptimizationInfo: visualState.showOptimizationInfo,
+            mlPlaybackRecipe: visualState.mlPlaybackRecipe.rawValue,
+            mlPlaybackNormalizationMode: visualState.mlPlaybackNormalizationMode.rawValue,
+            playbackSurfaceMeshEnabled: visualState.playbackSurfaceMeshEnabled,
+            playbackSurfaceSmoothing: min(max(0, visualState.playbackSurfaceSmoothing), 1),
+            playbackFrontLayerVisible: visualState.playbackFrontLayerVisible,
+            playbackMiddleLayerVisible: visualState.playbackMiddleLayerVisible,
+            playbackFinalLayerVisible: visualState.playbackFinalLayerVisible,
+            playbackFrontLayerSlot: min(max(0, visualState.playbackFrontLayerSlot), 4),
+            playbackMiddleLayerSlot: min(max(0, visualState.playbackMiddleLayerSlot), 4),
+            playbackFinalLayerSlot: min(max(0, visualState.playbackFinalLayerSlot), 4),
+            playbackFrontLayerOffset: min(max(-1.5, visualState.playbackFrontLayerOffset), 1.5),
+            playbackMiddleLayerOffset: min(max(-1.5, visualState.playbackMiddleLayerOffset), 1.5),
+            playbackFinalLayerOffset: min(max(-1.5, visualState.playbackFinalLayerOffset), 1.5),
+            playbackTimeScale: max(0.01, physicsState.timeScale),
+            playbackInterpolationEnabled: playbackSettings.interpolationEnabled,
             showLeaderCommunicationLog: optimizationState.showLeaderCommunicationLog,
             fixedGridSubdivisions: optimizationState.fixedGridSubdivisions,
             fixedGridSubspaceCap: optimizationState.fixedGridSubspaceCap,
@@ -222,6 +375,7 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
             physicsState: editorState.physicsState,
             visualState: editorState.visualState,
             optimizationState: editorState.optimizationState,
+            playbackSettings: editorState.playbackSettings,
             debugSettings: editorState.debugSettings,
             assignedModulePaths: editorState.assignedModulePaths
         )
@@ -308,6 +462,20 @@ final class MainWindowEditorSettingsStore: ObservableObject {
             details: [
                 "from": InteractionSnapshotFormat.debug(previous),
                 "to": InteractionSnapshotFormat.debug(nextState),
+            ]
+        )
+    }
+
+    func setPlaybackSettings(_ nextState: PlaybackSettingsState) {
+        let previous = editorState.playbackSettings
+        updateEditorState {
+            $0.playbackSettings = nextState
+        }
+        InteractionSnapshotRecorder.shared.record(
+            event: "ui.set_playback_settings",
+            details: [
+                "from": "interpolation=\(previous.interpolationEnabled)",
+                "to": "interpolation=\(nextState.interpolationEnabled)",
             ]
         )
     }

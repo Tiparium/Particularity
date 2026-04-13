@@ -154,6 +154,85 @@ final class SimulationRuntimeConfigCoordinator: ObservableObject {
         session.setPlaybackLooping(isLooping)
     }
 
+    func setPlaybackInterpolationEnabled(_ isEnabled: Bool) {
+        guard activeModules.isPlaybackModuleFamily else { return }
+        var next = editorSettingsStore.editorState.playbackSettings
+        next.interpolationEnabled = isEnabled
+        editorSettingsStore.setPlaybackSettings(next)
+    }
+
+    func setPlaybackRecipe(_ recipe: MLPlaybackVisualRecipe) {
+        guard activeModules.isPlaybackModuleFamily else { return }
+        var nextVisualState = editorSettingsStore.editorState.visualState
+        nextVisualState.mlPlaybackRecipe = recipe
+        editorSettingsStore.setVisualState(nextVisualState)
+    }
+
+    func setPlaybackNormalizationMode(_ mode: MLPlaybackNormalizationMode) {
+        guard activeModules.isPlaybackModuleFamily else { return }
+        var nextVisualState = editorSettingsStore.editorState.visualState
+        nextVisualState.mlPlaybackNormalizationMode = mode
+        editorSettingsStore.setVisualState(nextVisualState)
+    }
+
+    func setPlaybackSurfaceMeshEnabled(_ isEnabled: Bool) {
+        guard activeModules.isPlaybackModuleFamily else { return }
+        var nextVisualState = editorSettingsStore.editorState.visualState
+        nextVisualState.playbackSurfaceMeshEnabled = isEnabled
+        editorSettingsStore.setVisualState(nextVisualState)
+    }
+
+    func setPlaybackSurfaceSmoothing(_ value: Double) {
+        guard activeModules.isPlaybackModuleFamily else { return }
+        var nextVisualState = editorSettingsStore.editorState.visualState
+        nextVisualState.playbackSurfaceSmoothing = min(max(0, value), 1)
+        editorSettingsStore.setVisualState(nextVisualState)
+    }
+
+    func setPlaybackLayerVisible(layer: PlaybackLayer, isVisible: Bool) {
+        guard activeModules.isPlaybackModuleFamily else { return }
+        var nextVisualState = editorSettingsStore.editorState.visualState
+        switch layer {
+        case .front:
+            nextVisualState.playbackFrontLayerVisible = isVisible
+        case .middle:
+            nextVisualState.playbackMiddleLayerVisible = isVisible
+        case .final:
+            nextVisualState.playbackFinalLayerVisible = isVisible
+        }
+        editorSettingsStore.setVisualState(nextVisualState)
+    }
+
+    func setPlaybackLayerSlot(layer: PlaybackLayer, slot: Int) {
+        guard activeModules.isPlaybackModuleFamily else { return }
+        let boundedSlot = min(max(0, slot), 4)
+        var nextVisualState = editorSettingsStore.editorState.visualState
+        switch layer {
+        case .front:
+            nextVisualState.playbackFrontLayerSlot = boundedSlot
+        case .middle:
+            nextVisualState.playbackMiddleLayerSlot = boundedSlot
+        case .final:
+            nextVisualState.playbackFinalLayerSlot = boundedSlot
+        }
+        editorSettingsStore.setVisualState(nextVisualState)
+    }
+
+    func setPlaybackLayerOffset(layer: PlaybackLayer, value: Double) {
+        guard activeModules.isPlaybackModuleFamily else { return }
+        let bounded = min(max(-1.5, value), 1.5)
+        var nextVisualState = editorSettingsStore.editorState.visualState
+        switch layer {
+        case .front:
+            nextVisualState.playbackFrontLayerOffset = bounded
+        case .middle:
+            nextVisualState.playbackMiddleLayerOffset = bounded
+        case .final:
+            nextVisualState.playbackFinalLayerOffset = bounded
+        }
+        editorSettingsStore.setVisualState(nextVisualState)
+    }
+
     func beginPlaybackScrub() {
         guard activeModules.isPlaybackModuleFamily else { return }
         playbackScrubShouldResume = transportState == .running

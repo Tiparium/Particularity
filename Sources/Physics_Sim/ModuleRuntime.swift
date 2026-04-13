@@ -30,26 +30,23 @@ struct PhysicsModuleState {
     var timeScale: Double = 1.0
 }
 
-enum TimeScaleControlMapping {
-    static let sliderRange: ClosedRange<Double> = 0...2
-    static let textEntryRange: ClosedRange<Double> = 0...16
-    static let sliderStep: Double = 0.01
-
-    private static let runtimeScalePerControlUnit: Double = 0.25
-
-    static func controlValue(forRuntimeScale runtimeScale: Double) -> Double {
-        max(0, runtimeScale / runtimeScalePerControlUnit)
-    }
-
-    static func runtimeScale(forControlValue controlValue: Double) -> Double {
-        max(0, controlValue * runtimeScalePerControlUnit)
-    }
-}
-
 struct VisualModuleState {
     var sphereSize: Double = 0.008
     var spectrumOffset: Double = 0.0
     var showOptimizationInfo = false
+    var mlPlaybackRecipe: MLPlaybackVisualRecipe = .typeSpectrum
+    var mlPlaybackNormalizationMode: MLPlaybackNormalizationMode = .global
+    var playbackSurfaceMeshEnabled = true
+    var playbackSurfaceSmoothing: Double = 0.35
+    var playbackFrontLayerVisible = true
+    var playbackMiddleLayerVisible = true
+    var playbackFinalLayerVisible = true
+    var playbackFrontLayerSlot = 0
+    var playbackMiddleLayerSlot = 0
+    var playbackFinalLayerSlot = 0
+    var playbackFrontLayerOffset: Double = 0.32
+    var playbackMiddleLayerOffset: Double = 0.0
+    var playbackFinalLayerOffset: Double = -0.32
 }
 
 struct OptimizationModuleState {
@@ -57,6 +54,10 @@ struct OptimizationModuleState {
     var fixedGridSubdivisions: Int = 8
     var fixedGridSubspaceCap: Int = 2
     var fixedGridNeighborReadMode: FixedGridNeighborReadMode = .scratch
+}
+
+struct PlaybackSettingsState {
+    var interpolationEnabled = false
 }
 
 enum FixedGridNeighborReadMode: String, CaseIterable, Equatable, Sendable {
@@ -113,6 +114,7 @@ struct SimulationEditorState {
     var physicsState = PhysicsModuleState()
     var visualState = VisualModuleState()
     var optimizationState = OptimizationModuleState()
+    var playbackSettings = PlaybackSettingsState()
     var debugSettings = DebugSettingsState()
     var assignedModulePaths: [String: String] = [:]
 }
@@ -157,6 +159,85 @@ enum MLPlaybackModuleFamily {
     static let physicsModuleName = "MLPlaybackFrameApplicator"
     static let visualModuleName = "MLPlaybackRecipeVisualizer"
     static let optimizationModuleName = "MLPlaybackSidecarLayout"
+}
+
+enum MLPlaybackVisualRecipe: Int, CaseIterable, Hashable, Codable {
+    case typeSpectrum = 0
+    case confidenceMargin = 1
+    case predictionDelta = 2
+
+    var shortTitle: String {
+        switch self {
+        case .typeSpectrum:
+            return "Surface"
+        case .confidenceMargin:
+            return "Bands"
+        case .predictionDelta:
+            return "Focus"
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .typeSpectrum:
+            return "Activation Surface"
+        case .confidenceMargin:
+            return "Target Bands"
+        case .predictionDelta:
+            return "Periodicity Focus"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .typeSpectrum:
+            return "Primary field view. Height and color track neuron activation across the x/y grid."
+        case .confidenceMargin:
+            return "Highlights modular target bands so you can compare activation ridges against output classes."
+        case .predictionDelta:
+            return "Suppresses weak regions and emphasizes high-periodicity structure in the activation field."
+        }
+    }
+}
+
+enum MLPlaybackNormalizationMode: Int, CaseIterable, Hashable, Codable {
+    case global = 0
+    case perFrame = 1
+
+    var shortTitle: String {
+        switch self {
+        case .global:
+            return "Global"
+        case .perFrame:
+            return "Frame"
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .global:
+            return "Global Range"
+        case .perFrame:
+            return "Per-Frame Range"
+        }
+    }
+}
+
+enum PlaybackLayer: String, CaseIterable, Hashable {
+    case front
+    case middle
+    case final
+
+    var title: String {
+        switch self {
+        case .front:
+            return "Front Layer"
+        case .middle:
+            return "Middle Layer"
+        case .final:
+            return "Final Layer"
+        }
+    }
 }
 
 enum ModuleCatalog {
@@ -336,6 +417,22 @@ struct SimulationViewportState: Equatable {
     var sphereSize: Float
     var spectrumOffset: Float
     var showOptimizationInfo: Bool
+    var mlPlaybackRecipe: MLPlaybackVisualRecipe
+    var mlPlaybackNormalizationMode: MLPlaybackNormalizationMode
+    var isPlaybackVisualModule: Bool
+    var playbackTimeScale: Float
+    var playbackInterpolationEnabled: Bool
+    var playbackSurfaceMeshEnabled: Bool
+    var playbackSurfaceSmoothing: Float
+    var playbackFrontLayerVisible: Bool
+    var playbackMiddleLayerVisible: Bool
+    var playbackFinalLayerVisible: Bool
+    var playbackFrontLayerSlot: Int
+    var playbackMiddleLayerSlot: Int
+    var playbackFinalLayerSlot: Int
+    var playbackFrontLayerOffset: Float
+    var playbackMiddleLayerOffset: Float
+    var playbackFinalLayerOffset: Float
     var showLeaderCommunicationLog: Bool
     var fixedGridSubdivisions: Int
     var fixedGridSubspaceCap: Int

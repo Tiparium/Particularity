@@ -247,25 +247,6 @@ struct TypeMatrixLocalPhysicsModuleSettingsPanel: View {
                 settings: settings,
                 physicsModuleSettingsStore: physicsModuleSettingsStore
             )
-            EventuallyAppliedSlider(
-                title: "Time Scale",
-                appliedValue: Binding(
-                    get: {
-                        TimeScaleControlMapping.controlValue(
-                            forRuntimeScale: store.editorState.physicsState.timeScale
-                        )
-                    },
-                    set: {
-                        var next = store.editorState.physicsState
-                        next.timeScale = TimeScaleControlMapping.runtimeScale(forControlValue: $0)
-                        store.setPhysicsState(next)
-                    }
-                ),
-                range: TimeScaleControlMapping.sliderRange,
-                textEntryRange: TimeScaleControlMapping.textEntryRange,
-                step: TimeScaleControlMapping.sliderStep,
-                valueText: { String(format: "%.2fx", $0) }
-            )
             EventuallyAppliedToggle(
                 title: "Randomize On Simulation Start",
                 appliedValue: Binding(

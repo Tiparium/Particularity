@@ -431,14 +431,16 @@ private struct ViewportAxisIndicator: View {
 
     private var projectedAxes: [AxisProjection] {
         let cameraState = model.cameraState
-        let eye = SIMD3<Float>(
+        // Match the renderer's Z-up camera basis so compass motion stays in sync.
+        let eyeDirection = SIMD3<Float>(
+            cosf(cameraState.pitch) * cosf(cameraState.yaw),
             cosf(cameraState.pitch) * sinf(cameraState.yaw),
-            sinf(cameraState.pitch),
-            cosf(cameraState.pitch) * cosf(cameraState.yaw)
+            sinf(cameraState.pitch)
         )
-        let zAxis = simd_normalize(eye)
-        let xAxis = simd_normalize(simd_cross(SIMD3<Float>(0, 1, 0), zAxis))
-        let yAxis = simd_cross(zAxis, xAxis)
+        let worldUp = SIMD3<Float>(0, 0, 1)
+        let forward = simd_normalize(-eyeDirection)
+        let right = simd_normalize(simd_cross(forward, worldUp))
+        let up = simd_cross(right, forward)
         let center = CGPoint(x: 36, y: 36)
         let scale: Float = 22
 
@@ -451,9 +453,9 @@ private struct ViewportAxisIndicator: View {
         return worldAxes
             .map { label, color, axis in
                 let cameraSpace = SIMD3<Float>(
-                    simd_dot(xAxis, axis),
-                    simd_dot(yAxis, axis),
-                    simd_dot(zAxis, axis)
+                    simd_dot(right, axis),
+                    simd_dot(up, axis),
+                    simd_dot(-forward, axis)
                 )
                 let endpoint = CGPoint(
                     x: center.x + CGFloat(cameraSpace.x * scale),

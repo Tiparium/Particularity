@@ -138,6 +138,8 @@ final class SimulationRuntime: @unchecked Sendable {
         let particleCapacity: Int
         let debugLineBuffer: MTLBuffer?
         let debugRenderSegments: [SimulationDebugRenderSegment]
+        let playbackActivationMinimum: Float
+        let playbackActivationMaximum: Float
 
         var particlePositionBuffer: MTLBuffer? { particleBuffer }
         var particleColorBuffer: MTLBuffer? { nil }
@@ -162,11 +164,14 @@ final class SimulationRuntime: @unchecked Sendable {
     private var leaderCommunicationLogSink: @MainActor ([LeaderCommunicationLogEntry]) -> Void
     private let simulationQueue = DispatchQueue(label: "physics-sim.runtime.queue", qos: .userInitiated)
     private let snapshotLock = NSLock()
+    private let playbackSeekLock = NSLock()
 
     private var simulationTimer: DispatchSourceTimer?
     private var simulationWorkInFlight = false
     private var tickingSuspended = false
     private var idleCallbacks: [@Sendable () -> Void] = []
+    private var pendingPlaybackSeekSeconds: Double?
+    private var playbackSeekScheduled = false
 
     private var particleFrontBuffer: MTLBuffer?
     private var particleBackBuffer: MTLBuffer?
@@ -189,6 +194,8 @@ final class SimulationRuntime: @unchecked Sendable {
     private var debugLineSegmentBuffer: MTLBuffer?
     private var activeParticleCount = 0
     private var particleCapacity = 0
+    private var playbackActivationMinimum: Float = 0
+    private var playbackActivationMaximum: Float = 1
     private var debugHistory = SimulationDebugHistory(historyCapacity: 8, visibilityDuration: 0.11)
     private var leaderCommunicationLogEntries: [LeaderCommunicationLogEntry] = []
     private var needsParticleRebuild = true
@@ -207,6 +214,22 @@ final class SimulationRuntime: @unchecked Sendable {
         sphereSize: 0.025,
         spectrumOffset: 0.0,
         showOptimizationInfo: false,
+        mlPlaybackRecipe: .typeSpectrum,
+        mlPlaybackNormalizationMode: .global,
+        isPlaybackVisualModule: false,
+        playbackTimeScale: 1.0,
+        playbackInterpolationEnabled: false,
+        playbackSurfaceMeshEnabled: false,
+        playbackSurfaceSmoothing: 0,
+        playbackFrontLayerVisible: true,
+        playbackMiddleLayerVisible: true,
+        playbackFinalLayerVisible: true,
+        playbackFrontLayerSlot: 0,
+        playbackMiddleLayerSlot: 0,
+        playbackFinalLayerSlot: 0,
+        playbackFrontLayerOffset: 0.32,
+        playbackMiddleLayerOffset: 0,
+        playbackFinalLayerOffset: -0.32,
         showLeaderCommunicationLog: false,
         fixedGridSubdivisions: FixedGridOptimizationModuleRuntime.defaultSubdivisions,
         fixedGridSubspaceCap: 2,
@@ -227,7 +250,9 @@ final class SimulationRuntime: @unchecked Sendable {
         activeParticleCount: 0,
         particleCapacity: 0,
         debugLineBuffer: nil,
-        debugRenderSegments: []
+        debugRenderSegments: [],
+        playbackActivationMinimum: 0,
+        playbackActivationMaximum: 1
     )
     private var simulationStateSnapshot = SimulationViewportState(
         transportState: .stopped,
@@ -240,6 +265,22 @@ final class SimulationRuntime: @unchecked Sendable {
         sphereSize: 0.025,
         spectrumOffset: 0.0,
         showOptimizationInfo: false,
+        mlPlaybackRecipe: .typeSpectrum,
+        mlPlaybackNormalizationMode: .global,
+        isPlaybackVisualModule: false,
+        playbackTimeScale: 1.0,
+        playbackInterpolationEnabled: false,
+        playbackSurfaceMeshEnabled: false,
+        playbackSurfaceSmoothing: 0,
+        playbackFrontLayerVisible: true,
+        playbackMiddleLayerVisible: true,
+        playbackFinalLayerVisible: true,
+        playbackFrontLayerSlot: 0,
+        playbackMiddleLayerSlot: 0,
+        playbackFinalLayerSlot: 0,
+        playbackFrontLayerOffset: 0.32,
+        playbackMiddleLayerOffset: 0,
+        playbackFinalLayerOffset: -0.32,
         showLeaderCommunicationLog: false,
         fixedGridSubdivisions: FixedGridOptimizationModuleRuntime.defaultSubdivisions,
         fixedGridSubspaceCap: 2,
@@ -395,15 +436,17 @@ final class SimulationRuntime: @unchecked Sendable {
     }
 
     func setPlaybackTime(_ seconds: Double) {
+        playbackSeekLock.lock()
+        pendingPlaybackSeekSeconds = seconds
+        let shouldSchedule = !playbackSeekScheduled
+        if shouldSchedule {
+            playbackSeekScheduled = true
+        }
+        playbackSeekLock.unlock()
+
+        guard shouldSchedule else { return }
         simulationQueue.async {
-            guard self.activeModules.isPlaybackModuleFamily else { return }
-            guard let fixture = self.playbackFixture ?? MLPlaybackPrototypeFixtureLoader.loadFixture() else { return }
-            self.playbackFixture = fixture
-            self.playbackCurrentSeconds = min(max(0, seconds), fixture.durationSeconds)
-            self.playbackLastUptime = ProcessInfo.processInfo.systemUptime
-            let frame = fixture.particles(at: self.playbackCurrentSeconds)
-            self.uploadPlaybackParticles(frame.particles)
-            self.publishSnapshots()
+            self.processLatestPlaybackSeek()
         }
     }
 
@@ -417,8 +460,56 @@ final class SimulationRuntime: @unchecked Sendable {
         PlaybackTimelineSnapshot(
             currentSeconds: playbackCurrentSeconds,
             durationSeconds: playbackFixture?.durationSeconds ?? PlaybackTimelineSnapshot.placeholder.durationSeconds,
-            isLooping: playbackLooping
+            isLooping: playbackLooping,
+            playbackTimeScale: Double(currentSimulationState.playbackTimeScale),
+            interpolationEnabled: currentSimulationState.playbackInterpolationEnabled
         )
+    }
+
+    private func processLatestPlaybackSeek() {
+        playbackSeekLock.lock()
+        guard let seconds = pendingPlaybackSeekSeconds else {
+            playbackSeekScheduled = false
+            playbackSeekLock.unlock()
+            return
+        }
+        pendingPlaybackSeekSeconds = nil
+        playbackSeekLock.unlock()
+
+        applyPlaybackSeek(seconds)
+
+        playbackSeekLock.lock()
+        let hasPendingSeek = pendingPlaybackSeekSeconds != nil
+        if !hasPendingSeek {
+            playbackSeekScheduled = false
+        }
+        playbackSeekLock.unlock()
+
+        if hasPendingSeek {
+            simulationQueue.async {
+                self.processLatestPlaybackSeek()
+            }
+        }
+    }
+
+    private func applyPlaybackSeek(_ seconds: Double) {
+        guard activeModules.isPlaybackModuleFamily else { return }
+        guard let fixture = playbackFixture ?? MLPlaybackPrototypeFixtureLoader.loadFixture() else { return }
+        playbackFixture = fixture
+        playbackCurrentSeconds = min(max(0, seconds), fixture.durationSeconds)
+        playbackLastUptime = ProcessInfo.processInfo.systemUptime
+        let selection = currentPlaybackSurfaceSelection()
+        let frame = currentSimulationState.playbackInterpolationEnabled
+            ? fixture.interpolatedParticles(
+                at: playbackCurrentSeconds,
+                selection: selection
+            )
+            : fixture.particles(
+                at: playbackCurrentSeconds,
+                selection: selection
+            )
+        uploadPlaybackParticles(frame.particles)
+        publishSnapshots()
     }
 
     func updateActiveModules(_ nextModules: ActiveModuleSet) throws {
@@ -437,7 +528,10 @@ final class SimulationRuntime: @unchecked Sendable {
                 }
             }
             if nextModules.isPlaybackModuleFamily {
-                playbackFixture = playbackFixture ?? MLPlaybackPrototypeFixtureLoader.loadFixture()
+                // Do not eagerly load playback fixtures here.
+                // Coordinator startup and module switching call updateActiveModules synchronously.
+                // Large fixture IO/decode must stay off this path to keep launch responsive.
+                playbackFixture = nil
                 needsParticleRebuild = true
                 needsInteractionPlanRefresh = true
                 cachedDefaultInteractionParticleCount = nil
@@ -484,6 +578,13 @@ final class SimulationRuntime: @unchecked Sendable {
 
         let previous = currentSimulationState
         currentSimulationState = nextState
+        let playbackSelectionChanged =
+            previous.playbackFrontLayerVisible != nextState.playbackFrontLayerVisible
+            || previous.playbackMiddleLayerVisible != nextState.playbackMiddleLayerVisible
+            || previous.playbackFinalLayerVisible != nextState.playbackFinalLayerVisible
+            || previous.playbackFrontLayerSlot != nextState.playbackFrontLayerSlot
+            || previous.playbackMiddleLayerSlot != nextState.playbackMiddleLayerSlot
+            || previous.playbackFinalLayerSlot != nextState.playbackFinalLayerSlot
         let shouldRebuildParticles =
             previous.particleCount != nextState.particleCount
             || previous.randomDistribution != nextState.randomDistribution
@@ -544,6 +645,11 @@ final class SimulationRuntime: @unchecked Sendable {
         }
 
         publishSnapshots()
+        if activeModules.isPlaybackModuleFamily,
+           playbackSelectionChanged,
+           currentSimulationState.transportState != .stopped {
+            applyPlaybackSeek(playbackCurrentSeconds)
+        }
         reconfigureSimulationLoop()
         let stateSummary = InteractionSnapshotFormat.viewport(nextState)
         let renderSummary = InteractionSnapshotFormat.renderState(
@@ -552,7 +658,9 @@ final class SimulationRuntime: @unchecked Sendable {
                 activeParticleCount: activeParticleCount,
                 particleCapacity: particleCapacity,
                 debugLineBuffer: debugLineBuffer,
-                debugRenderSegments: debugHistory.renderSegments
+                debugRenderSegments: debugHistory.renderSegments,
+                playbackActivationMinimum: playbackActivationMinimum,
+                playbackActivationMaximum: playbackActivationMaximum
             )
         )
         Task { @MainActor in
@@ -857,14 +965,23 @@ final class SimulationRuntime: @unchecked Sendable {
 
         let previousUptime = playbackLastUptime ?? now
         playbackLastUptime = now
-        let deltaSeconds = max(0, now - previousUptime) * Double(currentSimulationState.timeScale)
+        let deltaSeconds = max(0, now - previousUptime) * Double(currentSimulationState.playbackTimeScale)
         playbackCurrentSeconds = advancedPlaybackTime(
             from: playbackCurrentSeconds,
             by: deltaSeconds,
             duration: fixture.durationSeconds
         )
 
-        let frame = fixture.particles(at: playbackCurrentSeconds)
+        let selection = currentPlaybackSurfaceSelection()
+        let frame = currentSimulationState.playbackInterpolationEnabled
+            ? fixture.interpolatedParticles(
+                at: playbackCurrentSeconds,
+                selection: selection
+            )
+            : fixture.particles(
+                at: playbackCurrentSeconds,
+                selection: selection
+            )
         uploadPlaybackParticles(frame.particles)
         metricsAccumulator.recordPhysicsStep(at: now)
         publishSnapshots()
@@ -880,6 +997,23 @@ final class SimulationRuntime: @unchecked Sendable {
     }
 
     private func uploadPlaybackParticles(_ particles: [ParticleState]) {
+        let particles = preparePlaybackParticlesForDisplay(particles)
+        var activationMinimum = Float.greatestFiniteMagnitude
+        var activationMaximum = -Float.greatestFiniteMagnitude
+        for particle in particles {
+            let activation = particle.velocity.x
+            activationMinimum = min(activationMinimum, activation)
+            activationMaximum = max(activationMaximum, activation)
+        }
+        if particles.isEmpty || !activationMinimum.isFinite || !activationMaximum.isFinite {
+            activationMinimum = 0
+            activationMaximum = 1
+        } else if activationMinimum == activationMaximum {
+            activationMaximum = activationMinimum + 0.0001
+        }
+        playbackActivationMinimum = activationMinimum
+        playbackActivationMaximum = activationMaximum
+
         let particleLength = max(1, MemoryLayout<ParticleState>.stride * particles.count)
         if let existing = particleFrontBuffer, existing.length >= particleLength {
             let pointer = existing.contents().bindMemory(to: ParticleState.self, capacity: particles.count)
@@ -904,6 +1038,102 @@ final class SimulationRuntime: @unchecked Sendable {
         needsInteractionPlanRefresh = false
         cachedDefaultInteractionParticleCount = nil
         cachedFixedGridTopology = nil
+    }
+
+    private func preparePlaybackParticlesForDisplay(_ particles: [ParticleState]) -> [ParticleState] {
+        guard currentSimulationState.isPlaybackVisualModule, !particles.isEmpty else {
+            return particles
+        }
+
+        var preparedParticles = particles
+        let surfaceParticleCount: Int? = {
+            let selectedSurfaceCount = currentPlaybackSurfaceSelection().count
+            if selectedSurfaceCount > 0, particles.count % selectedSurfaceCount == 0 {
+                return particles.count / selectedSurfaceCount
+            }
+            if particles.count % 15 == 0 {
+                return particles.count / 15
+            }
+            return nil
+        }()
+        guard let surfaceParticleCount, surfaceParticleCount > 0 else {
+            return preparedParticles
+        }
+
+        let surfaceHeightScale: Float = 0.72
+        let surfaceCount = max(1, particles.count / surfaceParticleCount)
+        for surfaceIndex in 0..<surfaceCount {
+            let surfaceStart = surfaceIndex * surfaceParticleCount
+            let surfaceEnd = min(particles.count, surfaceStart + surfaceParticleCount)
+            guard surfaceStart < surfaceEnd else { continue }
+
+            var rawMinimum = Float.greatestFiniteMagnitude
+            var rawMaximum = -Float.greatestFiniteMagnitude
+            for index in surfaceStart..<surfaceEnd {
+                let rawActivation = particles[index].velocity.x
+                rawMinimum = min(rawMinimum, rawActivation)
+                rawMaximum = max(rawMaximum, rawActivation)
+            }
+            let rawMidpoint = (rawMinimum + rawMaximum) * 0.5
+            let rawHalfRange = max(0.000001, (rawMaximum - rawMinimum) * 0.5)
+
+            var mean: Float = 0
+            for index in surfaceStart..<surfaceEnd {
+                let height: Float
+                switch currentSimulationState.mlPlaybackNormalizationMode {
+                case .global:
+                    height = particles[index].position.z
+                case .perFrame:
+                    height = ((particles[index].velocity.x - rawMidpoint) / rawHalfRange) * surfaceHeightScale
+                }
+                preparedParticles[index].position.z = height
+                mean += height
+            }
+            mean /= Float(max(1, surfaceEnd - surfaceStart))
+
+            var maxCenteredMagnitude: Float = 0.000001
+            for index in surfaceStart..<surfaceEnd {
+                let centeredHeight = preparedParticles[index].position.z - mean
+                preparedParticles[index].position.z = centeredHeight
+                maxCenteredMagnitude = max(maxCenteredMagnitude, abs(centeredHeight))
+            }
+
+            let normalizationScale = surfaceHeightScale / maxCenteredMagnitude
+            for index in surfaceStart..<surfaceEnd {
+                preparedParticles[index].position.z *= normalizationScale
+            }
+        }
+
+        return preparedParticles
+    }
+
+    private func currentPlaybackSurfaceSelection() -> [MLPlaybackSurfaceSelection] {
+        var selection: [MLPlaybackSurfaceSelection] = []
+        if currentSimulationState.playbackFrontLayerVisible {
+            selection.append(
+                MLPlaybackSurfaceSelection(
+                    layer: 0,
+                    slot: min(max(0, currentSimulationState.playbackFrontLayerSlot), 4)
+                )
+            )
+        }
+        if currentSimulationState.playbackMiddleLayerVisible {
+            selection.append(
+                MLPlaybackSurfaceSelection(
+                    layer: 1,
+                    slot: min(max(0, currentSimulationState.playbackMiddleLayerSlot), 4)
+                )
+            )
+        }
+        if currentSimulationState.playbackFinalLayerVisible {
+            selection.append(
+                MLPlaybackSurfaceSelection(
+                    layer: 2,
+                    slot: min(max(0, currentSimulationState.playbackFinalLayerSlot), 4)
+                )
+            )
+        }
+        return selection
     }
 
     private func encodePhysicsAccumulate(
@@ -1231,7 +1461,9 @@ final class SimulationRuntime: @unchecked Sendable {
             activeParticleCount: activeParticleCount,
             particleCapacity: particleCapacity,
             debugLineBuffer: debugLineBuffer,
-            debugRenderSegments: debugHistory.renderSegments
+            debugRenderSegments: debugHistory.renderSegments,
+            playbackActivationMinimum: playbackActivationMinimum,
+            playbackActivationMaximum: playbackActivationMaximum
         )
         let simulationState = currentSimulationState
 

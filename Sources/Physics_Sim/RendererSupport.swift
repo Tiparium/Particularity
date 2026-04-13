@@ -15,7 +15,31 @@ struct ParticleUniforms {
     var spectrumOffset: Float
     var particleTypeCount: UInt32
     var showOptimizationInfo: UInt32
-    var padding: UInt32 = 0
+    var playbackRecipe: UInt32
+    var isPlaybackVisual: UInt32
+    var playbackFrontLayerVisible: UInt32
+    var playbackMiddleLayerVisible: UInt32
+    var playbackFinalLayerVisible: UInt32
+    var playbackFrontLayerSlot: UInt32
+    var playbackMiddleLayerSlot: UInt32
+    var playbackFinalLayerSlot: UInt32
+    var playbackFrontLayerOffset: Float
+    var playbackMiddleLayerOffset: Float
+    var playbackFinalLayerOffset: Float
+    var playbackForceLayer: UInt32
+    var playbackForceSlot: UInt32
+    var playbackNormalizationMode: UInt32
+    var playbackUsePreparedHeight: UInt32
+    var playbackActivationMinimum: Float
+    var playbackActivationMaximum: Float
+    var padding0: UInt32 = 0
+}
+
+struct PlaybackMeshSmoothParams {
+    var particleCount: UInt32
+    var gridSide: UInt32
+    var smoothing: Float
+    var padding0: UInt32 = 0
 }
 
 struct LineVertex {
@@ -47,11 +71,14 @@ final class CameraState {
     }
 
     func viewMatrix() -> float4x4 {
-        let cx = cosf(pitch) * sinf(yaw)
-        let cy = sinf(pitch)
-        let cz = cosf(pitch) * cosf(yaw)
+        // Z-up camera basis:
+        // - yaw rotates around +Z
+        // - pitch elevates above the XY plane
+        let cx = cosf(pitch) * cosf(yaw)
+        let cy = cosf(pitch) * sinf(yaw)
+        let cz = sinf(pitch)
         let eye = float3(cx, cy, cz) * radius
-        return .lookAt(eye: eye, center: float3(0, 0, 0), up: float3(0, 1, 0))
+        return .lookAt(eye: eye, center: float3(0, 0, 0), up: float3(0, 0, 1))
     }
 
     var viewportCameraState: ViewportCameraState {
