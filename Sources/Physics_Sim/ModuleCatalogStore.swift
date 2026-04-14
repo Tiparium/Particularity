@@ -92,7 +92,9 @@ final class MainWindowModuleCatalogStore: ObservableObject {
             name: manifest.name,
             visibility: .production,
             isDefaultFallback: false,
-            acceptsOptimizationDebugInfo: false
+            acceptsOptimizationDebugInfo: false,
+            providesOptimizationDebugInfo: false,
+            supportsLeaderCommunicationLog: false
         )
     }
 }

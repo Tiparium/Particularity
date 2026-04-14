@@ -56,19 +56,78 @@ enum SimulationConfigurationDerivation {
         )
         let projectedBytes = projectedMemoryBytes(editorState: editorState)
 
-        if let issue = ModuleCompatibility.incompatibilityReason(for: activeModules, state: simulationState) {
-            return RuntimeValidationReport(issue: issue, projectedBytes: projectedBytes)
-        }
+        var issues: [RuntimeValidationIssue] = []
 
-        if editorState.optimizationState.showLeaderCommunicationLog,
-           activeModules.optimization.name != ModuleCatalog.defaultOptimization.name {
-            return RuntimeValidationReport(
-                issue: "Leader communication log is only available with \(ModuleCatalog.defaultOptimization.name).",
-                projectedBytes: projectedBytes
+        issues.append(contentsOf: moduleAssignmentIssues(editorState: editorState, availableFiles: availableFiles))
+
+        if editorState.physicsState.particleCount < 1 {
+            issues.append(
+                RuntimeValidationIssue(
+                    field: .particleCount,
+                    message: "Particle count must be at least 1."
+                )
             )
         }
 
-        return RuntimeValidationReport(issue: nil, projectedBytes: projectedBytes)
+        if editorState.physicsState.particleCount > SimulationParticleLimits.engineCap {
+            issues.append(
+                RuntimeValidationIssue(
+                    field: .particleCount,
+                    message: "Particle count exceeds the engine limit of \(SimulationParticleLimits.engineCap.formatted())."
+                )
+            )
+        }
+
+        if let issue = ModuleCompatibility.incompatibilityReason(for: activeModules, state: simulationState) {
+            issues.append(RuntimeValidationIssue(field: nil, message: issue))
+        }
+
+        if editorState.optimizationState.showLeaderCommunicationLog,
+           !activeModules.optimization.supportsLeaderCommunicationLog {
+            issues.append(
+                RuntimeValidationIssue(
+                    field: nil,
+                    message: "Leader communication log is not available with optimization module \(activeModules.optimization.name)."
+                )
+            )
+        }
+
+        issues.append(
+            contentsOf: DefaultOptimizationModuleRuntime.validationIssues(
+                activeModules: activeModules,
+                editorState: editorState
+            )
+        )
+
+        return RuntimeValidationReport(issues: issues, projectedBytes: projectedBytes)
+    }
+
+    private static func moduleAssignmentIssues(
+        editorState: SimulationEditorState,
+        availableFiles: [ModuleFile]
+    ) -> [RuntimeValidationIssue] {
+        ModuleKind.allCases.compactMap { kind in
+            guard let assignedPath = editorState.assignedModulePaths[kind.rawValue] else { return nil }
+            guard let file = resolvedAssignedModuleFile(for: kind, assignedPath: assignedPath, availableFiles: availableFiles) else {
+                return RuntimeValidationIssue(
+                    field: .assignedModule(kind),
+                    message: "\(kind.displayName) assignment is missing in this checkout: \(URL(fileURLWithPath: assignedPath).lastPathComponent)."
+                )
+            }
+            guard let descriptor = file.descriptor else {
+                return RuntimeValidationIssue(
+                    field: .assignedModule(kind),
+                    message: "\(kind.displayName) assignment could not be read: \(file.url.lastPathComponent)."
+                )
+            }
+            guard ModuleCatalog.knownModulesByName[descriptor.name] != nil else {
+                return RuntimeValidationIssue(
+                    field: .assignedModule(kind),
+                    message: "\(kind.displayName) assignment is not supported by this build: \(descriptor.name)."
+                )
+            }
+            return nil
+        }
     }
 
     static func projectedMemoryBytes(editorState: SimulationEditorState) -> UInt64 {
@@ -87,7 +146,7 @@ enum SimulationConfigurationDerivation {
         availableFiles: [ModuleFile]
     ) -> Bool {
         resolveModule(for: .visual, editorState: editorState, availableFiles: availableFiles).acceptsOptimizationDebugInfo
-            && resolveModule(for: .optimization, editorState: editorState, availableFiles: availableFiles).name == ModuleCatalog.defaultOptimization.name
+            && resolveModule(for: .optimization, editorState: editorState, availableFiles: availableFiles).providesOptimizationDebugInfo
     }
 
     static func resolveModule(

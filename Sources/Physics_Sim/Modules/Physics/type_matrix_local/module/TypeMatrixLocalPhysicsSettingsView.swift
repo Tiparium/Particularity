@@ -18,6 +18,7 @@ struct TypeMatrixLocalPhysicsModuleSettingsPanel: View {
         VStack(alignment: .leading, spacing: 6) {
             EventuallyAppliedIntSlider(
                 title: "Particle Count",
+                field: .particleCount,
                 appliedValue: Binding(
                     get: { store.editorState.physicsState.particleCount },
                     set: {

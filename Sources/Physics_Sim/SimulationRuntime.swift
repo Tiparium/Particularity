@@ -497,7 +497,7 @@ final class SimulationRuntime: @unchecked Sendable {
 
     private func stepSimulation(at now: TimeInterval) {
         guard !simulationWorkInFlight else { return }
-        ensureParticleStateBuffers()
+        guard ensureParticleStateBuffers() else { return }
 
         guard currentSimulationState.transportState == .running,
               let particleFrontBuffer,
@@ -830,16 +830,23 @@ final class SimulationRuntime: @unchecked Sendable {
         publishLeaderCommunicationLog()
     }
 
-    private func ensureParticleStateBuffers() {
+    private func ensureParticleStateBuffers() -> Bool {
         guard needsParticleRebuild
             || particleFrontBuffer == nil
             || particleBackBuffer == nil
             || interactionOffsetsBuffer == nil
-            || interactionIndicesBuffer == nil else { return }
+            || interactionIndicesBuffer == nil else { return true }
 
         let spawnData = DefaultPhysicsModuleRuntime.rebuildParticles(from: currentSimulationState)
         let particles = spawnData.particles
-        let interactionPlan = DefaultOptimizationModuleRuntime.rebuildInteractionPlan(particleCount: spawnData.activeCount)
+        let interactionPlan: DefaultOptimizationModuleRuntime.InteractionPlanData
+        do {
+            interactionPlan = try DefaultOptimizationModuleRuntime.rebuildInteractionPlan(particleCount: spawnData.activeCount)
+        } catch {
+            RuntimeEventLogger.log("simulation_runtime interaction_plan_failed error=\(error.localizedDescription)")
+            stopSimulationLoop()
+            return false
+        }
         interactionTraversalMode = interactionPlan.traversalMode
 
         let particleLength = max(1, MemoryLayout<ParticleState>.stride * particles.count)
@@ -919,6 +926,7 @@ final class SimulationRuntime: @unchecked Sendable {
         if debugLineSegmentBuffer == nil || debugLineSegmentBuffer?.length ?? 0 < segmentBufferLength {
             debugLineSegmentBuffer = device.makeBuffer(length: segmentBufferLength)
         }
+        return true
     }
 
     private func publishSnapshots() {

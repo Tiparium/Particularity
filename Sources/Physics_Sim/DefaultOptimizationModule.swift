@@ -1,6 +1,19 @@
 import Foundation
 
 enum DefaultOptimizationModuleRuntime {
+    enum InteractionPlanError: LocalizedError {
+        case particleCountExceedsCap(Int, Int)
+
+        var errorDescription: String? {
+            switch self {
+            case .particleCountExceedsCap(let count, let cap):
+                return "\(ModuleCatalog.defaultOptimization.name) supports at most \(cap.formatted()) particles. Current particle count is \(count.formatted())."
+            }
+        }
+    }
+
+    static let particleCountCap = 65_535
+
     enum InteractionTraversalMode: UInt32 {
         case explicitIndices = 0
         case canonicalRange = 1
@@ -74,8 +87,11 @@ enum DefaultOptimizationModuleRuntime {
     }
     """
 
-    static func rebuildInteractionPlan(particleCount: Int) -> InteractionPlanData {
+    static func rebuildInteractionPlan(particleCount: Int) throws -> InteractionPlanData {
         let safeParticleCount = max(1, particleCount)
+        guard safeParticleCount <= particleCountCap else {
+            throw InteractionPlanError.particleCountExceedsCap(safeParticleCount, particleCountCap)
+        }
 
         var offsets: [UInt32] = []
         offsets.reserveCapacity(safeParticleCount + 1)
@@ -88,5 +104,23 @@ enum DefaultOptimizationModuleRuntime {
             offsets: offsets,
             indices: []
         )
+    }
+
+    static func validationIssues(
+        activeModules: ActiveModuleSet,
+        editorState: SimulationEditorState
+    ) -> [RuntimeValidationIssue] {
+        guard activeModules.optimization.name == ModuleCatalog.defaultOptimization.name else {
+            return []
+        }
+
+        let particleCount = editorState.physicsState.particleCount
+        guard particleCount > particleCountCap else { return [] }
+        return [
+            RuntimeValidationIssue(
+                field: .particleCount,
+                message: "\(ModuleCatalog.defaultOptimization.name) supports at most \(particleCountCap.formatted()) particles. Current particle count is \(particleCount.formatted())."
+            )
+        ]
     }
 }

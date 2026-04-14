@@ -169,6 +169,7 @@ final class SimulationRuntimeConfigCoordinator: ObservableObject {
                 "validationIssue": nextValidationReport.issue ?? "<nil>",
             ]
         )
+        guard nextValidationReport.canStart else { return }
         applyToSession(
             simulationState: nextSimulationState,
             activeModules: nextActiveModules

@@ -16,6 +16,11 @@ enum SimulationTransportState: String {
     }
 }
 
+enum SimulationParticleLimits {
+    static let engineCap = 1_000_000
+    static let settingsUICap = 250_000
+}
+
 struct PhysicsModuleState {
     var particleCount: Int = 20_000
     var randomDistribution = true
@@ -55,7 +60,7 @@ struct DebugSettingsState {
     var protectLeaderFromUnload = true
 }
 
-enum ModuleKind: String, CaseIterable, Identifiable {
+enum ModuleKind: String, CaseIterable, Identifiable, Hashable {
     case physics
     case visual
     case optimization
@@ -101,6 +106,29 @@ struct ModuleDescriptor: Identifiable, Equatable {
     let visibility: BuildVisibility
     let isDefaultFallback: Bool
     let acceptsOptimizationDebugInfo: Bool
+    let providesOptimizationDebugInfo: Bool
+    let supportsLeaderCommunicationLog: Bool
+    let moduleFamilyID: String?
+
+    init(
+        kind: String,
+        name: String,
+        visibility: BuildVisibility,
+        isDefaultFallback: Bool,
+        acceptsOptimizationDebugInfo: Bool,
+        providesOptimizationDebugInfo: Bool,
+        supportsLeaderCommunicationLog: Bool,
+        moduleFamilyID: String? = nil
+    ) {
+        self.kind = kind
+        self.name = name
+        self.visibility = visibility
+        self.isDefaultFallback = isDefaultFallback
+        self.acceptsOptimizationDebugInfo = acceptsOptimizationDebugInfo
+        self.providesOptimizationDebugInfo = providesOptimizationDebugInfo
+        self.supportsLeaderCommunicationLog = supportsLeaderCommunicationLog
+        self.moduleFamilyID = moduleFamilyID
+    }
 
     var id: String {
         "\(kind)|\(name)"
@@ -113,7 +141,9 @@ enum ModuleCatalog {
         name: "DefaultPhysicsSlideLoop",
         visibility: .production,
         isDefaultFallback: true,
-        acceptsOptimizationDebugInfo: false
+        acceptsOptimizationDebugInfo: false,
+        providesOptimizationDebugInfo: false,
+        supportsLeaderCommunicationLog: false
     )
 
     static let defaultVisual = ModuleDescriptor(
@@ -121,7 +151,9 @@ enum ModuleCatalog {
         name: "DefaultRainbowUnlitSpheres",
         visibility: .production,
         isDefaultFallback: true,
-        acceptsOptimizationDebugInfo: true
+        acceptsOptimizationDebugInfo: true,
+        providesOptimizationDebugInfo: false,
+        supportsLeaderCommunicationLog: false
     )
 
     static let defaultOptimization = ModuleDescriptor(
@@ -129,7 +161,9 @@ enum ModuleCatalog {
         name: "DefaultOptimizationAllPairs",
         visibility: .production,
         isDefaultFallback: true,
-        acceptsOptimizationDebugInfo: false
+        acceptsOptimizationDebugInfo: false,
+        providesOptimizationDebugInfo: true,
+        supportsLeaderCommunicationLog: true
     )
 
     static let knownModulesByName: [String: ModuleDescriptor] = [
@@ -138,28 +172,36 @@ enum ModuleCatalog {
             name: PhysicsModuleTemplateRuntime.moduleName,
             visibility: .production,
             isDefaultFallback: false,
-            acceptsOptimizationDebugInfo: false
+            acceptsOptimizationDebugInfo: false,
+            providesOptimizationDebugInfo: false,
+            supportsLeaderCommunicationLog: false
         ),
         "TypeMatrixLocalAttractionRepulsion": ModuleDescriptor(
             kind: "physics",
             name: "TypeMatrixLocalAttractionRepulsion",
             visibility: .production,
             isDefaultFallback: false,
-            acceptsOptimizationDebugInfo: false
+            acceptsOptimizationDebugInfo: false,
+            providesOptimizationDebugInfo: false,
+            supportsLeaderCommunicationLog: false
         ),
         "DefaultGreySpheres": ModuleDescriptor(
             kind: "visual",
             name: "DefaultGreySpheres",
             visibility: .production,
             isDefaultFallback: false,
-            acceptsOptimizationDebugInfo: false
+            acceptsOptimizationDebugInfo: false,
+            providesOptimizationDebugInfo: false,
+            supportsLeaderCommunicationLog: false
         ),
         "UniformGrid": ModuleDescriptor(
             kind: "optimization",
             name: "UniformGrid",
             visibility: .production,
             isDefaultFallback: false,
-            acceptsOptimizationDebugInfo: false
+            acceptsOptimizationDebugInfo: false,
+            providesOptimizationDebugInfo: false,
+            supportsLeaderCommunicationLog: false
         ),
     ]
 
@@ -177,12 +219,43 @@ enum ModuleCatalog {
     }
 }
 
+enum RuntimeValidationField: Hashable {
+    case assignedModule(ModuleKind)
+    case particleCount
+    case randomDistribution
+    case allParticlesIntercommunicate
+    case particleTypes
+    case timeScale
+    case sphereSize
+    case spectrumOffset
+    case showOptimizationInfo
+    case showLeaderCommunicationLog
+    case moduleSetting(moduleName: String, key: String)
+}
+
+struct RuntimeValidationIssue: Identifiable, Equatable {
+    let field: RuntimeValidationField?
+    let message: String
+
+    var id: String {
+        "\(String(describing: field))|\(message)"
+    }
+}
+
 struct RuntimeValidationReport {
-    let issue: String?
+    let issues: [RuntimeValidationIssue]
     let projectedBytes: UInt64
 
     var canStart: Bool {
-        issue == nil
+        issues.isEmpty
+    }
+
+    var issue: String? {
+        issues.first?.message
+    }
+
+    func issue(for field: RuntimeValidationField) -> RuntimeValidationIssue? {
+        issues.first { $0.field == field }
     }
 }
 
@@ -190,17 +263,35 @@ struct ActiveModuleSet: Equatable {
     var physics: ModuleDescriptor
     var visual: ModuleDescriptor
     var optimization: ModuleDescriptor
+
+    var completeModuleFamilyID: String? {
+        guard let physicsFamilyID = physics.moduleFamilyID,
+              physicsFamilyID == visual.moduleFamilyID,
+              physicsFamilyID == optimization.moduleFamilyID else {
+            return nil
+        }
+        return physicsFamilyID
+    }
+
+    var hasPartialModuleFamilySelection: Bool {
+        let familyIDs = [physics.moduleFamilyID, visual.moduleFamilyID, optimization.moduleFamilyID]
+            .compactMap { $0 }
+        return !familyIDs.isEmpty && completeModuleFamilyID == nil
+    }
 }
 
 enum ModuleCompatibility {
     static func incompatibilityReason(for modules: ActiveModuleSet, state: SimulationViewportState) -> String? {
-        if modules.visual.acceptsOptimizationDebugInfo,
-           modules.optimization.name != ModuleCatalog.defaultOptimization.name {
-            return "Visual module \(modules.visual.name) requires optimization debug compatibility, but optimization module \(modules.optimization.name) does not provide it."
+        if modules.hasPartialModuleFamilySelection {
+            return "Playback module families must be selected as a compatible physics, visual, and optimization trio."
         }
 
         if state.showOptimizationInfo && !modules.visual.acceptsOptimizationDebugInfo {
             return "Visual module \(modules.visual.name) does not accept optimization debug data."
+        }
+
+        if state.showOptimizationInfo && !modules.optimization.providesOptimizationDebugInfo {
+            return "Optimization module \(modules.optimization.name) does not provide optimization debug data."
         }
 
         return nil

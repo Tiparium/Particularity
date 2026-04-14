@@ -29,6 +29,54 @@ enum AppSliderTickBehavior {
     case visible
 }
 
+private struct RuntimeValidationReportEnvironmentKey: EnvironmentKey {
+    static let defaultValue = RuntimeValidationReport(issues: [], projectedBytes: 0)
+}
+
+private struct HighlightedValidationFieldEnvironmentKey: EnvironmentKey {
+    static let defaultValue: RuntimeValidationField? = nil
+}
+
+extension EnvironmentValues {
+    var runtimeValidationReport: RuntimeValidationReport {
+        get { self[RuntimeValidationReportEnvironmentKey.self] }
+        set { self[RuntimeValidationReportEnvironmentKey.self] = newValue }
+    }
+
+    var highlightedValidationField: RuntimeValidationField? {
+        get { self[HighlightedValidationFieldEnvironmentKey.self] }
+        set { self[HighlightedValidationFieldEnvironmentKey.self] = newValue }
+    }
+}
+
+struct ValidationControlDecoration: ViewModifier {
+    let issue: RuntimeValidationIssue?
+    let isHighlighted: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .padding(issue == nil ? 0 : 6)
+            .background {
+                if issue != nil {
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color.red.opacity(isHighlighted ? 0.22 : 0.10))
+                }
+            }
+            .overlay {
+                if issue != nil {
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color.red.opacity(0.95), lineWidth: isHighlighted ? 2.5 : 1.5)
+                }
+            }
+    }
+}
+
+extension View {
+    func validationDecoration(issue: RuntimeValidationIssue?, isHighlighted: Bool) -> some View {
+        modifier(ValidationControlDecoration(issue: issue, isHighlighted: isHighlighted))
+    }
+}
+
 struct AppSwitchSurface: View {
     let isOn: Bool
     let isHovered: Bool
@@ -579,6 +627,7 @@ private struct AppSliderControl: NSViewRepresentable {
 
 struct EventuallyAppliedSlider: View {
     let title: String
+    let field: RuntimeValidationField?
     @Binding var appliedValue: Double
     let range: ClosedRange<Double>
     let textEntryRange: ClosedRange<Double>
@@ -587,12 +636,15 @@ struct EventuallyAppliedSlider: View {
     let delay: TimeInterval
     let valueText: (Double) -> String
 
+    @Environment(\.runtimeValidationReport) private var validationReport
+    @Environment(\.highlightedValidationField) private var highlightedValidationField
     @State private var draftText: String
     @State private var draftValue: Double
     @State private var deferredCommit = DeferredActionHandler()
 
     init(
         title: String,
+        field: RuntimeValidationField? = nil,
         appliedValue: Binding<Double>,
         range: ClosedRange<Double>,
         textEntryRange: ClosedRange<Double>? = nil,
@@ -602,6 +654,7 @@ struct EventuallyAppliedSlider: View {
         valueText: @escaping (Double) -> String
     ) {
         self.title = title
+        self.field = field
         _appliedValue = appliedValue
         self.range = range
         self.textEntryRange = textEntryRange ?? range
@@ -614,10 +667,12 @@ struct EventuallyAppliedSlider: View {
     }
 
     var body: some View {
+        let issue = validationIssue
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text(title)
                     .font(.caption)
+                    .foregroundStyle(issue == nil ? Color.primary : Color.red.opacity(0.95))
                 Spacer()
                 InlineEditableValueLabel(
                     text: $draftText,
@@ -641,11 +696,24 @@ struct EventuallyAppliedSlider: View {
                 helpText: nil,
                 onEditingEnded: flushCommit
             )
+
+            if let issue {
+                Text(issue.message)
+                    .font(.caption2)
+                    .foregroundStyle(Color.red.opacity(0.95))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
+        .validationDecoration(issue: issue, isHighlighted: field != nil && highlightedValidationField == field)
         .onChange(of: appliedValue) { _, nextValue in
             draftValue = nextValue
             draftText = Self.editingText(for: nextValue)
         }
+    }
+
+    private var validationIssue: RuntimeValidationIssue? {
+        guard let field else { return nil }
+        return validationReport.issue(for: field)
     }
 
     private func commitTextEntry() {
@@ -691,24 +759,42 @@ struct EventuallyAppliedSlider: View {
 
 struct EventuallyAppliedToggle: View {
     let title: String
+    let field: RuntimeValidationField?
     @Binding var appliedValue: Bool
     let delay: TimeInterval
+    @Environment(\.runtimeValidationReport) private var validationReport
+    @Environment(\.highlightedValidationField) private var highlightedValidationField
 
-    init(title: String, appliedValue: Binding<Bool>, delay: TimeInterval = 1.0) {
+    init(title: String, field: RuntimeValidationField? = nil, appliedValue: Binding<Bool>, delay: TimeInterval = 1.0) {
         self.title = title
+        self.field = field
         _appliedValue = appliedValue
         self.delay = delay
     }
 
     var body: some View {
+        let issue = validationIssue
         VStack(alignment: .leading, spacing: 4) {
             AppCheckboxToggle(title, isOn: $appliedValue)
+            if let issue {
+                Text(issue.message)
+                    .font(.caption2)
+                    .foregroundStyle(Color.red.opacity(0.95))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
+        .validationDecoration(issue: issue, isHighlighted: field != nil && highlightedValidationField == field)
+    }
+
+    private var validationIssue: RuntimeValidationIssue? {
+        guard let field else { return nil }
+        return validationReport.issue(for: field)
     }
 }
 
 struct EventuallyAppliedIntSlider: View {
     let title: String
+    let field: RuntimeValidationField?
     @Binding var appliedValue: Int
     let range: ClosedRange<Int>
     let textEntryRange: ClosedRange<Int>
@@ -716,12 +802,15 @@ struct EventuallyAppliedIntSlider: View {
     let delay: TimeInterval
     let helpText: String?
 
+    @Environment(\.runtimeValidationReport) private var validationReport
+    @Environment(\.highlightedValidationField) private var highlightedValidationField
     @State private var draftText: String
     @State private var draftValue: Int
     @State private var deferredCommit = DeferredActionHandler()
 
     init(
         title: String,
+        field: RuntimeValidationField? = nil,
         appliedValue: Binding<Int>,
         range: ClosedRange<Int>,
         textEntryRange: ClosedRange<Int>? = nil,
@@ -730,6 +819,7 @@ struct EventuallyAppliedIntSlider: View {
         helpText: String? = nil
     ) {
         self.title = title
+        self.field = field
         _appliedValue = appliedValue
         self.range = range
         self.textEntryRange = textEntryRange ?? range
@@ -741,10 +831,12 @@ struct EventuallyAppliedIntSlider: View {
     }
 
     var body: some View {
+        let issue = validationIssue
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text(title)
                     .font(.caption)
+                    .foregroundStyle(issue == nil ? Color.primary : Color.red.opacity(0.95))
                 Spacer()
                 InlineEditableValueLabel(
                     text: $draftText,
@@ -768,11 +860,24 @@ struct EventuallyAppliedIntSlider: View {
                 helpText: helpText,
                 onEditingEnded: flushCommit
             )
+
+            if let issue {
+                Text(issue.message)
+                    .font(.caption2)
+                    .foregroundStyle(Color.red.opacity(0.95))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
+        .validationDecoration(issue: issue, isHighlighted: field != nil && highlightedValidationField == field)
         .onChange(of: appliedValue) { _, nextValue in
             draftValue = nextValue
             draftText = "\(nextValue)"
         }
+    }
+
+    private var validationIssue: RuntimeValidationIssue? {
+        guard let field else { return nil }
+        return validationReport.issue(for: field)
     }
 
     private func commitTextEntry() {
@@ -804,19 +909,24 @@ struct EventuallyAppliedIntSlider: View {
 
 struct EventuallyAppliedSegmentedPicker<Option: Hashable>: View {
     let title: String
+    let field: RuntimeValidationField?
     @Binding var appliedValue: Option
     let options: [Option]
     let delay: TimeInterval
     let optionTitle: (Option) -> String
+    @Environment(\.runtimeValidationReport) private var validationReport
+    @Environment(\.highlightedValidationField) private var highlightedValidationField
 
     init(
         title: String,
+        field: RuntimeValidationField? = nil,
         appliedValue: Binding<Option>,
         options: [Option],
         delay: TimeInterval = 1.0,
         optionTitle: @escaping (Option) -> String
     ) {
         self.title = title
+        self.field = field
         _appliedValue = appliedValue
         self.options = options
         self.delay = delay
@@ -824,9 +934,11 @@ struct EventuallyAppliedSegmentedPicker<Option: Hashable>: View {
     }
 
     var body: some View {
+        let issue = validationIssue
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
                 .font(.caption)
+                .foregroundStyle(issue == nil ? Color.primary : Color.red.opacity(0.95))
 
             Picker(title, selection: $appliedValue) {
                 ForEach(options, id: \.self) { option in
@@ -834,7 +946,20 @@ struct EventuallyAppliedSegmentedPicker<Option: Hashable>: View {
                 }
             }
             .pickerStyle(.segmented)
+
+            if let issue {
+                Text(issue.message)
+                    .font(.caption2)
+                    .foregroundStyle(Color.red.opacity(0.95))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
+        .validationDecoration(issue: issue, isHighlighted: field != nil && highlightedValidationField == field)
+    }
+
+    private var validationIssue: RuntimeValidationIssue? {
+        guard let field else { return nil }
+        return validationReport.issue(for: field)
     }
 }
 

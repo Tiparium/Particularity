@@ -190,8 +190,8 @@ struct MainWindowContentDependencies {
 }
 
 struct ContentView: View {
-    private let particleCountEngineCap = 10_000_000
-    private let particleCountUICap = 100_000
+    private let particleCountEngineCap = SimulationParticleLimits.engineCap
+    private let particleCountUICap = SimulationParticleLimits.settingsUICap
     @State private var isImporterPresented = false
     @State private var importerTargetKind: ModuleKind = .physics
     @State private var hoveredGrabPanelID: UUID?
@@ -203,6 +203,7 @@ struct ContentView: View {
     @State private var panelFramesByZone: [DockZone: [UUID: CGRect]] = [:]
     @State private var zoneFramesInRoot: [DockZone: CGRect] = [:]
     @State private var viewportGeneration: Int = 0
+    @State private var highlightedValidationField: RuntimeValidationField?
     private let session: SimulationSession
     @ObservedObject private var chromeStateStore: MainWindowChromeStateStore
     private let editorSettingsStore: MainWindowEditorSettingsStore
@@ -299,8 +300,11 @@ struct ContentView: View {
                 }
             )
         }
+        .environment(\.runtimeValidationReport, runtimeConfigCoordinator.validationReport)
+        .environment(\.highlightedValidationField, highlightedValidationField)
         .onAppear {
             moduleCatalogStore.refresh()
+            CrashReportImporter.importRecentReports(diagnosticsStore: diagnosticsStore)
             chromeStateStore.ensureSelectedFileID(availableFiles: moduleCatalogStore.availableFiles)
             PerformanceReviewLogger.shared.configure(
                 runtimeConfigCoordinator: runtimeConfigCoordinator,
@@ -371,6 +375,7 @@ struct ContentView: View {
                 leftPanelVisible: chromeStateStore.leftPanelVisible,
                 rightPanelVisible: chromeStateStore.rightPanelVisible,
                 bottomPanelVisible: chromeStateStore.bottomPanelVisible,
+                highlightedValidationField: $highlightedValidationField,
                 onToggleAllDockPanelsVisibility: { chromeStateStore.toggleAllDockPanelsVisibility() },
                 onToggleLeftPanelVisibility: { chromeStateStore.toggleLeftPanelVisibility() },
                 onToggleRightPanelVisibility: { chromeStateStore.toggleRightPanelVisibility() },
@@ -1173,6 +1178,7 @@ private struct SimulationCenterPane: View {
     let leftPanelVisible: Bool
     let rightPanelVisible: Bool
     let bottomPanelVisible: Bool
+    @Binding var highlightedValidationField: RuntimeValidationField?
     let onToggleAllDockPanelsVisibility: () -> Void
     let onToggleLeftPanelVisibility: () -> Void
     let onToggleRightPanelVisibility: () -> Void
@@ -1181,6 +1187,13 @@ private struct SimulationCenterPane: View {
     private var transportState: SimulationTransportState { runtimeConfigCoordinator.transportState }
     private var validationReport: RuntimeValidationReport { runtimeConfigCoordinator.validationReport }
     private var viewportRuntimeError: String? { diagnosticsStore.viewportRuntimeError }
+    private var activeValidationMessages: [(field: RuntimeValidationField?, message: String)] {
+        var messages = validationReport.issues.map { (field: $0.field, message: $0.message) }
+        if let viewportRuntimeError {
+            messages.insert((field: nil, message: viewportRuntimeError), at: 0)
+        }
+        return messages
+    }
 
     var body: some View {
         VStack(spacing: 10) {
@@ -1274,13 +1287,9 @@ private struct SimulationCenterPane: View {
                 LabeledContent("Transport", value: transportState.title)
                 LabeledContent("Projected", value: ByteCountFormatter.string(fromByteCount: Int64(validationReport.projectedBytes), countStyle: .memory))
                 Spacer()
-                if let issue = viewportRuntimeError ?? validationReport.issue {
-                    Text(issue)
-                        .font(.caption)
-                        .foregroundStyle(Color.red.opacity(0.9))
-                        .lineLimit(2)
-                        .multilineTextAlignment(.trailing)
-                }
+                Text(validationReport.canStart ? "Ready" : "Blocked")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(validationReport.canStart ? Color.green.opacity(0.9) : Color.red.opacity(0.9))
             }
             .font(.caption)
             .padding(.horizontal, 10)
@@ -1300,6 +1309,16 @@ private struct SimulationCenterPane: View {
                 RoundedRectangle(cornerRadius: 12)
                     .stroke(Color(nsColor: .separatorColor).opacity(0.5), lineWidth: 1)
             )
+            .overlay {
+                SimulationViewportNotificationOverlay(
+                    notifications: diagnosticsStore.notifications,
+                    blockingMessages: activeValidationMessages,
+                    highlightedValidationField: $highlightedValidationField,
+                    onDismissNotification: { diagnosticsStore.dismissNotification(id: $0) },
+                    onDismissAllNotifications: { diagnosticsStore.dismissAllNotifications() },
+                    onDumpErrors: dumpValidationIssues
+                )
+            }
 
             HStack(spacing: 16) {
                 Text("Drag: Orbit")
@@ -1310,6 +1329,86 @@ private struct SimulationCenterPane: View {
             .font(.caption)
             .foregroundStyle(.secondary)
         }
+        .onChange(of: validationReport.issues.map(\.id)) { _, _ in
+            guard let highlightedValidationField else { return }
+            if validationReport.issue(for: highlightedValidationField) == nil {
+                self.highlightedValidationField = nil
+            }
+        }
+    }
+
+    private func dumpValidationIssues() {
+        let messages = activeValidationMessages
+        guard !messages.isEmpty else { return }
+
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd_HHmmss"
+        let fileName = "\(formatter.string(from: Date()))_validation-errors.txt"
+        let directory = IssueReportPaths.validationReportsDirectory
+        let url = directory.appendingPathComponent(fileName, isDirectory: false)
+        let body = messages.enumerated().map { index, item in
+            let field = item.field.map { String(describing: $0) } ?? "general"
+            return "\(index + 1). [\(field)] \(item.message)"
+        }.joined(separator: "\n")
+
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try body.write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            RuntimeEventLogger.log("validation_report_dump_failed error=\(error.localizedDescription)")
+        }
+    }
+}
+
+private struct SimulationViewportNotificationOverlay: View {
+    let notifications: [DiagnosticsNotification]
+    let blockingMessages: [(field: RuntimeValidationField?, message: String)]
+    @Binding var highlightedValidationField: RuntimeValidationField?
+    let onDismissNotification: (DiagnosticsNotification.ID) -> Void
+    let onDismissAllNotifications: () -> Void
+    let onDumpErrors: () -> Void
+
+    private var columnKinds: [ColumnKind] {
+        var kinds: [ColumnKind] = []
+        if !notifications.isEmpty {
+            kinds.append(.notifications)
+        }
+        if !blockingMessages.isEmpty {
+            kinds.append(.blocking)
+        }
+        return kinds
+    }
+
+    var body: some View {
+        if !columnKinds.isEmpty {
+            HStack(alignment: .center, spacing: 12) {
+                ForEach(columnKinds) { kind in
+                    switch kind {
+                    case .notifications:
+                        DiagnosticsNotificationColumn(
+                            notifications: notifications,
+                            onDismissNotification: onDismissNotification,
+                            onDismissAllNotifications: onDismissAllNotifications
+                        )
+                    case .blocking:
+                        BlockingIssuesColumn(
+                            messages: blockingMessages,
+                            highlightedValidationField: $highlightedValidationField,
+                            onDumpErrors: onDumpErrors
+                        )
+                    }
+                }
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        }
+    }
+
+    private enum ColumnKind: String, Identifiable {
+        case notifications
+        case blocking
+
+        var id: String { rawValue }
     }
 }
 
@@ -1335,12 +1434,162 @@ private struct SimulationViewportSurface: View {
     }
 }
 
+private struct DiagnosticsNotificationColumn: View {
+    let notifications: [DiagnosticsNotification]
+    let onDismissNotification: (DiagnosticsNotification.ID) -> Void
+    let onDismissAllNotifications: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Notifications")
+                    .font(.caption.weight(.semibold))
+                Spacer()
+                Button("Dismiss All") {
+                    onDismissAllNotifications()
+                }
+                .buttonStyle(AppFramedButtonStyle())
+            }
+
+            if notifications.count > 3 {
+                ScrollView {
+                    notificationRows
+                }
+                .frame(maxHeight: 160)
+            } else {
+                notificationRows
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: 340, alignment: .leading)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(AppControlPalette.stroke, lineWidth: 1)
+        )
+    }
+
+    private var notificationRows: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(notifications) { notification in
+                DiagnosticsNotificationRow(
+                    notification: notification,
+                    onDismiss: { onDismissNotification(notification.id) }
+                )
+            }
+        }
+    }
+}
+
+private struct DiagnosticsNotificationRow: View {
+    let notification: DiagnosticsNotification
+    let onDismiss: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(notification.title)
+                    .font(.caption.weight(.semibold))
+                Text(notification.message)
+                    .font(.caption2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+            Button("Dismiss") {
+                onDismiss()
+            }
+            .buttonStyle(AppFramedButtonStyle())
+        }
+        .padding(8)
+        .background(notificationBackground(for: notification.severity), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(notificationStroke(for: notification.severity), lineWidth: 1)
+        )
+    }
+
+    private func notificationBackground(for severity: DiagnosticsNotification.Severity) -> Color {
+        switch severity {
+        case .info:
+            return AppControlPalette.idleBackground
+        case .warning:
+            return Color.yellow.opacity(0.16)
+        case .error:
+            return Color.red.opacity(0.12)
+        }
+    }
+
+    private func notificationStroke(for severity: DiagnosticsNotification.Severity) -> Color {
+        switch severity {
+        case .info:
+            return AppControlPalette.stroke
+        case .warning:
+            return Color.yellow.opacity(0.65)
+        case .error:
+            return Color.red.opacity(0.75)
+        }
+    }
+}
+
+private struct BlockingIssuesColumn: View {
+    let messages: [(field: RuntimeValidationField?, message: String)]
+    @Binding var highlightedValidationField: RuntimeValidationField?
+    let onDumpErrors: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Configuration Blocked")
+                    .font(.caption.weight(.semibold))
+                Spacer()
+                Button("Dump Errors") {
+                    onDumpErrors()
+                }
+                .buttonStyle(AppFramedButtonStyle(.destructive))
+            }
+
+            if messages.count > 4 {
+                ScrollView {
+                    issueRows
+                }
+                .frame(maxHeight: 170)
+            } else {
+                issueRows
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: 380, alignment: .leading)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.red.opacity(0.85), lineWidth: 1.5)
+        )
+    }
+
+    private var issueRows: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(messages.indices, id: \.self) { index in
+                let item = messages[index]
+                Text(item.message)
+                    .font(.caption)
+                    .foregroundStyle(Color.red.opacity(0.95))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .onHover { hovering in
+                        highlightedValidationField = hovering ? item.field : nil
+                    }
+            }
+        }
+    }
+}
+
 private struct ModuleSlotsPanel: View {
     @ObservedObject var editorSettingsStore: MainWindowEditorSettingsStore
     @ObservedObject var moduleCatalogStore: MainWindowModuleCatalogStore
     @ObservedObject var chromeStateStore: MainWindowChromeStateStore
     @Binding var importerTargetKind: ModuleKind
     @Binding var isImporterPresented: Bool
+    @Environment(\.runtimeValidationReport) private var validationReport
+    @Environment(\.highlightedValidationField) private var highlightedValidationField
 
     private var availableFiles: [ModuleFile] {
         moduleCatalogStore.availableFiles
@@ -1356,6 +1605,7 @@ private struct ModuleSlotsPanel: View {
             ForEach(ModuleKind.allCases) { kind in
                 let assigned = EditorViewSupport.assignedModules(from: editorSettingsStore)[kind]
                 let resolved = EditorViewSupport.resolvedModule(for: kind, store: editorSettingsStore, availableFiles: availableFiles)
+                let issue = validationReport.issue(for: .assignedModule(kind))
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
                         Text(kind.displayName)
@@ -1411,6 +1661,10 @@ private struct ModuleSlotsPanel: View {
                         }
                     }
                 }
+                .validationDecoration(
+                    issue: issue,
+                    isHighlighted: highlightedValidationField == .assignedModule(kind)
+                )
             }
         }
     }
@@ -1459,7 +1713,11 @@ private struct ModuleSettingsPanelView: View {
                 switch kind {
                 case .physics:
                     if resolved.name == ModuleCatalog.defaultPhysics.name {
-                        PhysicsSettingsPanel(store: editorSettingsStore, particleCountUICap: particleCountUICap, particleCountEngineCap: particleCountEngineCap)
+                        PhysicsSettingsPanel(
+                            store: editorSettingsStore,
+                            particleCountUICap: particleCountUICap,
+                            particleCountEngineCap: particleCountEngineCap
+                        )
                     } else if resolved.name == TypeMatrixLocalPhysicsSettings.moduleName {
                         TypeMatrixLocalPhysicsModuleSettingsPanel(
                             store: editorSettingsStore,
@@ -1513,6 +1771,7 @@ private struct PhysicsSettingsPanel: View {
         VStack(alignment: .leading, spacing: 6) {
             EventuallyAppliedIntSlider(
                 title: "Particle Count",
+                field: .particleCount,
                 appliedValue: Binding(
                     get: { store.editorState.physicsState.particleCount },
                     set: {
@@ -1524,7 +1783,7 @@ private struct PhysicsSettingsPanel: View {
                 range: 1...particleCountUICap,
                 helpText: "UI cap: \(particleCountUICap.formatted()). Hard engine limit: \(particleCountEngineCap.formatted())."
             )
-            EventuallyAppliedToggle(title: "Random Distribution", appliedValue: Binding(
+            EventuallyAppliedToggle(title: "Random Distribution", field: .randomDistribution, appliedValue: Binding(
                 get: { store.editorState.physicsState.randomDistribution },
                 set: {
                     var next = store.editorState.physicsState
@@ -1532,7 +1791,7 @@ private struct PhysicsSettingsPanel: View {
                     store.setPhysicsState(next)
                 }
             ))
-            EventuallyAppliedToggle(title: "Inter-Particle Communication", appliedValue: Binding(
+            EventuallyAppliedToggle(title: "Inter-Particle Communication", field: .allParticlesIntercommunicate, appliedValue: Binding(
                 get: { store.editorState.physicsState.allParticlesIntercommunicate },
                 set: {
                     var next = store.editorState.physicsState
@@ -1542,6 +1801,7 @@ private struct PhysicsSettingsPanel: View {
             ))
             EventuallyAppliedSlider(
                 title: "Particle Types",
+                field: .particleTypes,
                 appliedValue: Binding(
                     get: { Double(store.editorState.physicsState.particleTypes) },
                     set: {
@@ -1564,6 +1824,7 @@ private struct PhysicsSettingsPanel: View {
             ForEach([("Direction X", \SIMD3<Double>.x), ("Direction Y", \SIMD3<Double>.y), ("Direction Z", \SIMD3<Double>.z)], id: \.0) { title, keyPath in
                 EventuallyAppliedSlider(
                     title: title,
+                    field: .moduleSetting(moduleName: ModuleCatalog.defaultPhysics.name, key: title),
                     appliedValue: Binding(
                         get: { store.editorState.physicsState.movementDirection[keyPath: keyPath] },
                         set: {
@@ -1579,6 +1840,7 @@ private struct PhysicsSettingsPanel: View {
             }
             EventuallyAppliedSlider(
                 title: "Time Scale",
+                field: .timeScale,
                 appliedValue: Binding(
                     get: {
                         TimeScaleControlMapping.controlValue(
@@ -1608,6 +1870,7 @@ private struct VisualSettingsPanel: View {
         VStack(alignment: .leading, spacing: 6) {
             EventuallyAppliedSlider(
                 title: "Sphere Size",
+                field: .sphereSize,
                 appliedValue: Binding(
                     get: { store.editorState.visualState.sphereSize },
                     set: {
@@ -1622,6 +1885,7 @@ private struct VisualSettingsPanel: View {
             )
             EventuallyAppliedSlider(
                 title: "Spectrum Offset",
+                field: .spectrumOffset,
                 appliedValue: Binding(
                     get: { store.editorState.visualState.spectrumOffset },
                     set: {
@@ -1636,6 +1900,7 @@ private struct VisualSettingsPanel: View {
             )
             EventuallyAppliedToggle(
                 title: "Show Optimization Info",
+                field: .showOptimizationInfo,
                 appliedValue: Binding(
                     get: { store.editorState.visualState.showOptimizationInfo },
                     set: {
@@ -1657,6 +1922,7 @@ private struct OptimizationSettingsPanel: View {
         VStack(alignment: .leading, spacing: 6) {
             EventuallyAppliedToggle(
                 title: "Leader Communication Log",
+                field: .showLeaderCommunicationLog,
                 appliedValue: Binding(
                     get: { store.editorState.optimizationState.showLeaderCommunicationLog },
                     set: {
