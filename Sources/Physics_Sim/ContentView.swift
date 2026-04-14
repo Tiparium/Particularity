@@ -369,6 +369,7 @@ struct ContentView: View {
                 session: session,
                 viewportStateStore: viewportStateStore,
                 runtimeConfigCoordinator: runtimeConfigCoordinator,
+                editorSettingsStore: editorSettingsStore,
                 diagnosticsStore: diagnosticsStore,
                 viewportGeneration: viewportGeneration,
                 anyDockPanelsVisible: chromeStateStore.anyDockPanelsVisible,
@@ -1172,6 +1173,7 @@ private struct SimulationCenterPane: View {
     let session: SimulationSession
     @ObservedObject var viewportStateStore: MainWindowViewportStateStore
     @ObservedObject var runtimeConfigCoordinator: SimulationRuntimeConfigCoordinator
+    @ObservedObject var editorSettingsStore: MainWindowEditorSettingsStore
     @ObservedObject var diagnosticsStore: MainWindowDiagnosticsStore
     let viewportGeneration: Int
     let anyDockPanelsVisible: Bool
@@ -1263,6 +1265,31 @@ private struct SimulationCenterPane: View {
 
                 Divider()
                     .frame(height: 18)
+
+                HStack(spacing: 8) {
+                    Text("Time Scale")
+                        .font(.caption)
+                        .foregroundStyle(validationReport.issue(for: .timeScale) == nil ? Color.secondary : Color.red.opacity(0.95))
+                    Slider(
+                        value: Binding(
+                            get: { Double(runtimeConfigCoordinator.simulationState.timeScale) },
+                            set: {
+                                var next = editorSettingsStore.editorState.physicsState
+                                next.timeScale = min(max(0.1, $0), 4.0)
+                                editorSettingsStore.setPhysicsState(next)
+                            }
+                        ),
+                        in: 0.1...4.0
+                    )
+                    .frame(width: 120)
+                    Text(String(format: "%.2fx", runtimeConfigCoordinator.simulationState.timeScale))
+                        .font(.caption.monospacedDigit())
+                        .frame(width: 52, alignment: .trailing)
+                }
+                .validationDecoration(
+                    issue: validationReport.issue(for: .timeScale),
+                    isHighlighted: highlightedValidationField == .timeScale
+                )
 
                 AppSwitchToggle(
                     "Slow Rotation",
@@ -1839,26 +1866,6 @@ private struct PhysicsSettingsPanel: View {
                     valueText: { String(format: "%.2f", $0) }
                 )
             }
-            EventuallyAppliedSlider(
-                title: "Time Scale",
-                field: .timeScale,
-                appliedValue: Binding(
-                    get: {
-                        TimeScaleControlMapping.controlValue(
-                            forRuntimeScale: store.editorState.physicsState.timeScale
-                        )
-                    },
-                    set: {
-                        var next = store.editorState.physicsState
-                        next.timeScale = TimeScaleControlMapping.runtimeScale(forControlValue: $0)
-                        store.setPhysicsState(next)
-                    }
-                ),
-                range: TimeScaleControlMapping.sliderRange,
-                textEntryRange: TimeScaleControlMapping.textEntryRange,
-                step: TimeScaleControlMapping.sliderStep,
-                valueText: { String(format: "%.2fx", $0) }
-            )
         }
     }
 }
