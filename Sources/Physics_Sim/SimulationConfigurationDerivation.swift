@@ -2,6 +2,8 @@ import Foundation
 import simd
 
 enum SimulationConfigurationDerivation {
+    private static let fixedGridProjectedMemorySafetyLimitBytes: UInt64 = 256 * 1024 * 1024
+
     static func simulationState(
         transportState: SimulationTransportState,
         editorState: SimulationEditorState,
@@ -25,7 +27,16 @@ enum SimulationConfigurationDerivation {
                 editorState: editorState,
                 availableFiles: availableFiles
             ) && editorState.visualState.showOptimizationInfo,
-            showLeaderCommunicationLog: editorState.optimizationState.showLeaderCommunicationLog
+            showLeaderCommunicationLog: editorState.optimizationState.showLeaderCommunicationLog,
+            fixedGridSubdivisions: max(1, editorState.optimizationState.fixedGridSubdivisions),
+            fixedGridSubspaceCap: max(
+                1,
+                min(
+                    max(1, editorState.optimizationState.fixedGridSubspaceCap),
+                    max(1, editorState.optimizationState.fixedGridSubdivisions)
+                )
+            ),
+            fixedGridNeighborReadMode: editorState.optimizationState.fixedGridNeighborReadMode
         )
     }
 
@@ -92,6 +103,23 @@ enum SimulationConfigurationDerivation {
             )
         }
 
+        if activeModules.optimization.name == FixedGridOptimizationModuleRuntime.moduleName {
+            let topologyBytes = FixedGridOptimizationModuleRuntime.projectedTopologyBytes(
+                settings: FixedGridOptimizationSettings(
+                    subdivisions: editorState.optimizationState.fixedGridSubdivisions,
+                    subspaceCap: editorState.optimizationState.fixedGridSubspaceCap
+                )
+            )
+            if topologyBytes > fixedGridProjectedMemorySafetyLimitBytes {
+                issues.append(
+                    RuntimeValidationIssue(
+                        field: .moduleSetting(moduleName: FixedGridOptimizationModuleRuntime.moduleName, key: "Subdivisions"),
+                        message: "Fixed-grid topology is too large to start safely with the current subdivisions and subspace cap."
+                    )
+                )
+            }
+        }
+
         issues.append(
             contentsOf: DefaultOptimizationModuleRuntime.validationIssues(
                 activeModules: activeModules,
@@ -137,8 +165,20 @@ enum SimulationConfigurationDerivation {
         let optimizationStride = 16
         let typeBudget = 32 * 32
         let debugBudget = editorState.optimizationState.showLeaderCommunicationLog ? 8 * 1024 * 1024 : 0
-        let reserved = particleCount * (baseParticleStride + visualStride + optimizationStride) + typeBudget + debugBudget
-        return UInt64(reserved)
+        var reserved = UInt64(particleCount * (baseParticleStride + visualStride + optimizationStride) + typeBudget + debugBudget)
+        let modules = activeModules(editorState: editorState, availableFiles: [])
+        if modules.optimization.name == FixedGridOptimizationModuleRuntime.moduleName {
+            reserved += FixedGridOptimizationModuleRuntime.projectedTopologyBytes(
+                settings: FixedGridOptimizationSettings(
+                    subdivisions: editorState.optimizationState.fixedGridSubdivisions,
+                    subspaceCap: editorState.optimizationState.fixedGridSubspaceCap
+                )
+            )
+            if editorState.optimizationState.fixedGridNeighborReadMode == .scratch {
+                reserved += FixedGridOptimizationModuleRuntime.projectedScratchBytes(particleCount: particleCount)
+            }
+        }
+        return reserved
     }
 
     static func visualSupportsOptimizationDebug(
@@ -159,7 +199,8 @@ enum SimulationConfigurationDerivation {
         }
 
         guard let file = resolvedAssignedModuleFile(for: kind, assignedPath: path, availableFiles: availableFiles),
-              let descriptor = file.descriptor else {
+              let descriptor = file.descriptor,
+              descriptor.kind == kind.rawValue else {
             return ModuleCatalog.fallback(for: kind.rawValue)
         }
 
@@ -172,13 +213,23 @@ enum SimulationConfigurationDerivation {
         availableFiles: [ModuleFile]
     ) -> ModuleFile? {
         let assignedURL = URL(fileURLWithPath: assignedPath)
-        if let exact = availableFiles.first(where: { $0.kind == kind && $0.url == assignedURL }) {
+        if let exact = availableFiles.first(where: { $0.kind == kind && $0.url == assignedURL && $0.descriptor?.kind == kind.rawValue }) {
             return exact
         }
 
         // Support module-folder migrations by matching the manifest filename when the
         // stored absolute path is stale but the module package kept the same manifest name.
         let manifestName = assignedURL.lastPathComponent
-        return availableFiles.first(where: { $0.kind == kind && $0.url.lastPathComponent == manifestName })
+        if let filenameMatch = availableFiles.first(where: { $0.kind == kind && $0.url.lastPathComponent == manifestName && $0.descriptor?.kind == kind.rawValue }) {
+            return filenameMatch
+        }
+
+        if kind == .optimization, manifestName == "uniform_grid.module.json" {
+            return availableFiles.first {
+                $0.kind == kind && $0.descriptor?.name == FixedGridOptimizationModuleRuntime.moduleName
+            }
+        }
+
+        return nil
     }
 }

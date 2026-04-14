@@ -13,7 +13,7 @@ final class MainWindowModuleCatalogStore: ObservableObject {
 
     @Published private(set) var availableFiles: [ModuleFile] = []
 
-    private let projectRootURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+    private let projectRootURL = MainWindowModuleCatalogStore.findProjectRoot()
 
     var modulesRootURL: URL {
         projectRootURL.appendingPathComponent("Modules", isDirectory: true)
@@ -96,5 +96,25 @@ final class MainWindowModuleCatalogStore: ObservableObject {
             providesOptimizationDebugInfo: false,
             supportsLeaderCommunicationLog: false
         )
+    }
+
+    private static func findProjectRoot() -> URL {
+        let fileManager = FileManager.default
+        var candidate = URL(fileURLWithPath: fileManager.currentDirectoryPath, isDirectory: true)
+
+        while true {
+            let packageFile = candidate.appendingPathComponent("Package.swift").path
+            let modulesDirectory = candidate.appendingPathComponent("Modules").path
+            if fileManager.fileExists(atPath: packageFile),
+               fileManager.fileExists(atPath: modulesDirectory) {
+                return candidate
+            }
+
+            let parent = candidate.deletingLastPathComponent()
+            if parent.path == candidate.path {
+                return URL(fileURLWithPath: fileManager.currentDirectoryPath, isDirectory: true)
+            }
+            candidate = parent
+        }
     }
 }

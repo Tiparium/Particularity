@@ -54,6 +54,23 @@ struct VisualModuleState {
 
 struct OptimizationModuleState {
     var showLeaderCommunicationLog = false
+    var fixedGridSubdivisions: Int = FixedGridOptimizationModuleRuntime.defaultSubdivisions
+    var fixedGridSubspaceCap: Int = 2
+    var fixedGridNeighborReadMode: FixedGridNeighborReadMode = .scratch
+}
+
+enum FixedGridNeighborReadMode: String, CaseIterable, Equatable, Sendable {
+    case raw
+    case scratch
+
+    var title: String {
+        switch self {
+        case .raw:
+            return "Raw"
+        case .scratch:
+            return "Scratch"
+        }
+    }
 }
 
 struct DebugSettingsState {
@@ -194,14 +211,14 @@ enum ModuleCatalog {
             providesOptimizationDebugInfo: false,
             supportsLeaderCommunicationLog: false
         ),
-        "UniformGrid": ModuleDescriptor(
+        FixedGridOptimizationModuleRuntime.moduleName: ModuleDescriptor(
             kind: "optimization",
-            name: "UniformGrid",
+            name: FixedGridOptimizationModuleRuntime.moduleName,
             visibility: .production,
             isDefaultFallback: false,
             acceptsOptimizationDebugInfo: false,
-            providesOptimizationDebugInfo: false,
-            supportsLeaderCommunicationLog: false
+            providesOptimizationDebugInfo: true,
+            supportsLeaderCommunicationLog: true
         ),
     ]
 
@@ -310,6 +327,9 @@ struct SimulationViewportState: Equatable {
     var spectrumOffset: Float
     var showOptimizationInfo: Bool
     var showLeaderCommunicationLog: Bool
+    var fixedGridSubdivisions: Int
+    var fixedGridSubspaceCap: Int
+    var fixedGridNeighborReadMode: FixedGridNeighborReadMode
 }
 
 struct LeaderCommunicationLogEntry: Identifiable, Equatable {

@@ -72,7 +72,6 @@ struct SimulationMetricsAccumulator {
 struct SimulationDebugHistory {
     private struct CachedLeaderSweepSegment {
         var sourceParticleIndex: Int
-        var interactionOffset: Int
         var interactionCount: Int
         var startedAt: TimeInterval
     }
@@ -95,14 +94,12 @@ struct SimulationDebugHistory {
 
     mutating func cacheSegment(
         sourceParticleIndex: Int,
-        interactionOffset: Int,
         interactionCount: Int,
         startedAt: TimeInterval
     ) {
         cachedSegments.append(
             CachedLeaderSweepSegment(
                 sourceParticleIndex: sourceParticleIndex,
-                interactionOffset: interactionOffset,
                 interactionCount: interactionCount,
                 startedAt: startedAt
             )
@@ -145,7 +142,6 @@ struct SimulationDebugHistory {
             gpuSegments.append(
                 SimulationDebugLineSegment(
                     sourceParticleIndex: UInt32(cachedSegment.sourceParticleIndex),
-                    interactionOffset: UInt32(cachedSegment.interactionOffset),
                     interactionCount: UInt32(cachedSegment.interactionCount),
                     firstVertexIndex: UInt32(nextVertexStart)
                 )

@@ -1735,8 +1735,9 @@ private struct ModuleSettingsPanelView: View {
                         unavailable
                     }
                 case .optimization:
-                    if resolved.name == ModuleCatalog.defaultOptimization.name {
-                        OptimizationSettingsPanel(store: editorSettingsStore)
+                    if resolved.name == ModuleCatalog.defaultOptimization.name
+                        || resolved.name == FixedGridOptimizationModuleRuntime.moduleName {
+                        OptimizationSettingsPanel(store: editorSettingsStore, resolvedOptimization: resolved)
                     } else {
                         unavailable
                     }
@@ -1917,6 +1918,7 @@ private struct VisualSettingsPanel: View {
 
 private struct OptimizationSettingsPanel: View {
     @ObservedObject var store: MainWindowEditorSettingsStore
+    let resolvedOptimization: ModuleDescriptor
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -1943,9 +1945,65 @@ private struct OptimizationSettingsPanel: View {
                     }
                 )
             )
-            Text("Naive all-pairs traversal is the default optimization MVP.")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+
+            if resolvedOptimization.name == FixedGridOptimizationModuleRuntime.moduleName {
+                EventuallyAppliedIntSlider(
+                    title: "Subdivisions",
+                    field: .moduleSetting(moduleName: FixedGridOptimizationModuleRuntime.moduleName, key: "Subdivisions"),
+                    appliedValue: Binding(
+                        get: { store.editorState.optimizationState.fixedGridSubdivisions },
+                        set: {
+                            var next = store.editorState.optimizationState
+                            next.fixedGridSubdivisions = min(FixedGridOptimizationModuleRuntime.maxSubdivisions, max(1, $0))
+                            next.fixedGridSubspaceCap = min(next.fixedGridSubspaceCap, next.fixedGridSubdivisions)
+                            store.setOptimizationState(next)
+                        }
+                    ),
+                    range: 1...FixedGridOptimizationModuleRuntime.maxSubdivisions
+                )
+
+                EventuallyAppliedIntSlider(
+                    title: "Subspace Cap",
+                    field: .moduleSetting(moduleName: FixedGridOptimizationModuleRuntime.moduleName, key: "Subspace Cap"),
+                    appliedValue: Binding(
+                        get: {
+                            min(
+                                store.editorState.optimizationState.fixedGridSubspaceCap,
+                                store.editorState.optimizationState.fixedGridSubdivisions
+                            )
+                        },
+                        set: {
+                            var next = store.editorState.optimizationState
+                            next.fixedGridSubspaceCap = min(max(1, $0), next.fixedGridSubdivisions)
+                            store.setOptimizationState(next)
+                        }
+                    ),
+                    range: 1...max(1, store.editorState.optimizationState.fixedGridSubdivisions)
+                )
+
+                EventuallyAppliedSegmentedPicker(
+                    title: "Neighbor Read Mode",
+                    field: .moduleSetting(moduleName: FixedGridOptimizationModuleRuntime.moduleName, key: "Neighbor Read Mode"),
+                    appliedValue: Binding(
+                        get: { store.editorState.optimizationState.fixedGridNeighborReadMode },
+                        set: {
+                            var next = store.editorState.optimizationState
+                            next.fixedGridNeighborReadMode = $0
+                            store.setOptimizationState(next)
+                        }
+                    ),
+                    options: FixedGridNeighborReadMode.allCases,
+                    optionTitle: { $0.title }
+                )
+
+                Text("Wrapped fixed-grid traversal publishes multi-range candidate spans.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("Naive all-pairs traversal is the default optimization MVP.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 }
