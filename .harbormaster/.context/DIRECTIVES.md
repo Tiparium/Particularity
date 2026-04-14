@@ -1,14 +1,14 @@
-## Context system (API-first)
+## Context system (file-based)
 
 **Location:** `.harbormaster/.context/`  
 **Purpose:** Keep a compact, structured memory for project state, decisions, and operational rules.
 
-### Context API (authoritative)
-**Rule:** All context changes must go through the Context API. Do not edit context files directly unless explicitly instructed.  
-**Note:** Current files are treated as derived views while the backend is in transition.
+### Context files
+**Rule:** Context changes are made by editing the relevant files in `.harbormaster/.context/`.
+**Future direction:** A Context API may eventually own these updates, but it does not exist yet.
 
-### Official modules (supported out of the box)
-The API must support these modules:
+### Official modules
+The context system currently uses these modules:
 - `PROJECT_STATE.md`
 - `DECISIONS_LOG.md`
 - `DOCUMENTS.md`
@@ -20,7 +20,7 @@ The API must support these modules:
 
 ### `PROJECT_STATE.md` (small, always read)
 **Purpose:** Current working context that should be loaded at the start of every session/task.  
-**Agent behavior:** Read before doing any work; update only when state changes (via API).  
+**Agent behavior:** Read before doing any work; update only when state changes.  
 **User behavior:** Keep it short; update goals/plan/status as they evolve.
 
 **Hard rules:**
@@ -38,7 +38,7 @@ The API must support these modules:
 
 ### `DECISIONS_LOG.md` (append-only)
 **Purpose:** Durable record of important decisions so the project does not "forget why."  
-**Agent behavior:** Append entries only for notable decisions (via API).  
+**Agent behavior:** Append entries only for notable decisions.  
 **User behavior:** Add/confirm decision entries when the project direction changes.
 
 **Rules:**
@@ -54,7 +54,7 @@ The API must support these modules:
 
 ### `DOCUMENTS.md`
 **Purpose:** Command reference, runbook details, and stable usage notes.  
-**Agent behavior:** Add entries only for true runbook-level changes (via API).  
+**Agent behavior:** Add entries only for true runbook-level changes.  
 **User behavior:** Treat as reference docs, not a command log.
 
 ### `PERSONALITY.md`
@@ -64,11 +64,11 @@ The API must support these modules:
 
 ### `DIRECTIVES.md`
 **Purpose:** Operating rules for the agent and project.  
-**Agent behavior:** Read and follow; update only via API when instructed.
+**Agent behavior:** Read and follow; update when instructed.
 
 ### `SHELF.md`
 **Purpose:** Task parking lot and priority staging.  
-**Agent behavior:** Check occasionally and surface relevant items (via API).  
+**Agent behavior:** Check occasionally and surface relevant items.  
 **User behavior:** Primary project tracking interface. This is how the user tracks objectives, completed milestones, etc.
 
 ---
