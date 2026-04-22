@@ -21,6 +21,7 @@ enum AppButtonVariant {
 enum AppControlVariant {
     case neutral
     case accent
+    case active
     case destructive
 }
 
@@ -181,6 +182,8 @@ struct AppIconControlSurface: View {
         switch variant {
         case .neutral, .accent:
             return (isHovered || isPressed) ? .primary : .secondary
+        case .active:
+            return isDimmed ? .secondary : Color.white.opacity(0.98)
         case .destructive:
             return (isHovered || isPressed) ? Color.red.opacity(0.95) : .secondary
         }
@@ -190,6 +193,17 @@ struct AppIconControlSurface: View {
         switch variant {
         case .neutral, .accent:
             return isPressed ? AppControlPalette.pressedBackground : (isHovered ? AppControlPalette.hoverBackground : AppControlPalette.idleBackground)
+        case .active:
+            if isDimmed {
+                return AppControlPalette.idleBackground
+            }
+            if isPressed {
+                return AppControlPalette.accent.opacity(0.92)
+            }
+            if isHovered {
+                return AppControlPalette.accent.opacity(0.82)
+            }
+            return AppControlPalette.accent
         case .destructive:
             return isPressed ? AppControlPalette.destructivePressedBackground : (isHovered ? AppControlPalette.destructiveHoverBackground : AppControlPalette.idleBackground)
         }
@@ -199,6 +213,8 @@ struct AppIconControlSurface: View {
         switch variant {
         case .neutral, .accent:
             return (isHovered || isPressed) ? AppControlPalette.accent.opacity(0.55) : AppControlPalette.stroke
+        case .active:
+            return isDimmed ? AppControlPalette.stroke : AppControlPalette.accent.opacity(0.95)
         case .destructive:
             return (isHovered || isPressed) ? Color.red.opacity(0.75) : Color.red.opacity(0.55)
         }

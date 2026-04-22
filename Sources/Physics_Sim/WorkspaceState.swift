@@ -1,4 +1,5 @@
 import Foundation
+import simd
 
 struct SceneObjectState: Codable, Equatable, Identifiable, Sendable {
     let id: UUID
@@ -45,7 +46,7 @@ extension ViewportCameraState {
     func isMeaningfullyDifferent(from other: ViewportCameraState) -> Bool {
         abs(yaw - other.yaw) > 0.0005
             || abs(pitch - other.pitch) > 0.0005
-            || abs(radius - other.radius) > 0.0005
+            || simd_length(position - other.position) > 0.0005
     }
 }
 
@@ -93,8 +94,28 @@ final class MainWindowViewportStateStore: ObservableObject {
         schedulePersistence()
     }
 
-    func updateCameraState(_ nextState: ViewportCameraState) {
+    func updateLiveCameraState(_ nextState: ViewportCameraState) {
         applyCameraState(nextState)
+    }
+
+    func checkpointCameraState(_ nextState: ViewportCameraState) {
+        applyCameraState(nextState)
+        schedulePersistence()
+    }
+
+    func setCameraMode(_ mode: ViewportCameraMode) {
+        guard viewportState.camera.mode != mode else { return }
+        var nextCameraState = viewportState.camera
+        nextCameraState.mode = mode
+        applyCameraState(nextCameraState)
+    }
+
+    func setCameraMovementSpeed(_ speed: Float) {
+        let clampedSpeed = CameraMath.clampMovementSpeed(speed)
+        guard abs(viewportState.camera.movementSpeed - clampedSpeed) > 0.0005 else { return }
+        var nextCameraState = viewportState.camera
+        nextCameraState.movementSpeed = clampedSpeed
+        applyCameraState(nextCameraState)
     }
 
     func setSlowRotationEnabled(_ isEnabled: Bool) {
@@ -126,7 +147,6 @@ final class MainWindowViewportStateStore: ObservableObject {
         var nextViewportState = viewportState
         nextViewportState.camera = nextState
         viewportState = nextViewportState
-        schedulePersistence()
     }
 
     private func persist() {

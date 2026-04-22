@@ -16,51 +16,6 @@ enum DockZone: String, CaseIterable, Identifiable, Codable {
     }
 }
 
-enum DockPanelType: String, CaseIterable, Codable {
-    case moduleSlots
-    case physicsSettings
-    case visualSettings
-    case optimizationSettings
-    case fileView
-    case inspector
-    case leaderCommunicationLog
-
-    var title: String {
-        switch self {
-        case .moduleSlots: return "Module Slots"
-        case .physicsSettings: return "Physics Settings"
-        case .visualSettings: return "Visual Settings"
-        case .optimizationSettings: return "Optimization Settings"
-        case .fileView: return "File View"
-        case .inspector: return "Debug Inspector"
-        case .leaderCommunicationLog: return "Leader Communication Log"
-        }
-    }
-
-    var subtype: DockPanelSubtype {
-        switch self {
-        case .moduleSlots, .physicsSettings, .visualSettings, .optimizationSettings, .fileView:
-            return .core
-        case .inspector, .leaderCommunicationLog:
-            return .diagnostics
-        }
-    }
-}
-
-enum DockPanelSubtype: String, CaseIterable, Identifiable {
-    case core
-    case diagnostics
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .core: return "Core"
-        case .diagnostics: return "Diagnostics"
-        }
-    }
-}
-
 struct DockPanel: Identifiable, Codable, Equatable {
     let id: UUID
     let type: DockPanelType
@@ -91,13 +46,7 @@ struct MainWindowChromeStateSnapshot: Codable, Equatable, Sendable {
         case centerDockHeight
     }
 
-    static let currentDefaultPanels: [DockPanel] = [
-        DockPanel(id: UUID(), type: .moduleSlots, zone: .left),
-        DockPanel(id: UUID(), type: .inspector, zone: .center),
-        DockPanel(id: UUID(), type: .physicsSettings, zone: .right),
-        DockPanel(id: UUID(), type: .visualSettings, zone: .right),
-        DockPanel(id: UUID(), type: .optimizationSettings, zone: .right),
-    ]
+    static let currentDefaultPanels: [DockPanel] = DockPanelRegistry.defaultPanels
 
     static let `default` = MainWindowChromeStateSnapshot(
         panels: currentDefaultPanels,
@@ -125,13 +74,7 @@ struct MainWindowChromeStateSnapshot: Codable, Equatable, Sendable {
         "fileView:right",
     ]
 
-    static let currentDefaultLayoutSignature: Set<String> = [
-        "moduleSlots:left",
-        "inspector:center",
-        "physicsSettings:right",
-        "visualSettings:right",
-        "optimizationSettings:right",
-    ]
+    static let currentDefaultLayoutSignature: Set<String> = layoutSignature(for: currentDefaultPanels)
 
     static func layoutSignature(for panels: [DockPanel]) -> Set<String> {
         Set(panels.map { "\($0.type.rawValue):\($0.zone.rawValue)" })
@@ -139,9 +82,10 @@ struct MainWindowChromeStateSnapshot: Codable, Equatable, Sendable {
 
     func normalized() -> MainWindowChromeStateSnapshot {
         var next = self
-        let signature = Self.layoutSignature(for: panels)
+        next.panels = next.panels.filter { DockPanelRegistry.definition(for: $0.type) != nil }
+        let signature = Self.layoutSignature(for: next.panels)
 
-        if panels.isEmpty
+        if next.panels.isEmpty
             || signature == Self.legacyDefaultLayoutSignature
             || signature == Self.fileBrowserDefaultLayoutSignature {
             next.panels = Self.currentDefaultPanels
@@ -240,6 +184,7 @@ final class MainWindowChromeStateStore: ObservableObject {
     }
 
     func addPanel(type: DockPanelType, to zone: DockZone) {
+        guard DockPanelRegistry.definition(for: type) != nil else { return }
         panels.append(DockPanel(id: UUID(), type: type, zone: zone))
         schedulePersistence()
     }

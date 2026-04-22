@@ -321,6 +321,7 @@ final class WindowSimulationSessionStore {
     private let mainPhysicsModuleSettingsStore = MainWindowPhysicsModuleSettingsStore.shared
     private let mainModuleCatalogStore = MainWindowModuleCatalogStore.shared
     private let mainDiagnosticsStore = MainWindowDiagnosticsStore.shared
+    private let mainDebugSettingsStore = MainWindowDebugSettingsStore.shared
     private var mainRuntimeConfigCoordinator: SimulationRuntimeConfigCoordinator?
 
     func mainWindowChromeStateStore() -> MainWindowChromeStateStore {
@@ -345,6 +346,10 @@ final class WindowSimulationSessionStore {
 
     func mainWindowDiagnosticsStore() -> MainWindowDiagnosticsStore {
         mainDiagnosticsStore
+    }
+
+    func mainWindowDebugSettingsStore() -> MainWindowDebugSettingsStore {
+        mainDebugSettingsStore
     }
 
     func mainWindowRuntimeConfigCoordinator() async throws -> SimulationRuntimeConfigCoordinator {

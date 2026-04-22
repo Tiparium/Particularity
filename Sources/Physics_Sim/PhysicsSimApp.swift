@@ -176,29 +176,18 @@ struct PhysicsSimApp: App {
             CommandGroup(after: .windowArrangement) {
                 Divider()
                 Menu("Add Panel") {
-                    Menu("Core") {
-                        Button("Module Slots") {
-                            NotificationCenter.default.post(
-                                name: .requestAddDockPanel,
-                                object: nil,
-                                userInfo: [AppMenuEventKey.panelType: "moduleSlots"]
-                            )
-                        }
-                        Button("File View") {
-                            NotificationCenter.default.post(
-                                name: .requestAddDockPanel,
-                                object: nil,
-                                userInfo: [AppMenuEventKey.panelType: "fileView"]
-                            )
-                        }
-                    }
-                    Menu("Diagnostics") {
-                        Button("Inspector") {
-                            NotificationCenter.default.post(
-                                name: .requestAddDockPanel,
-                                object: nil,
-                                userInfo: [AppMenuEventKey.panelType: "inspector"]
-                            )
+                    ForEach(DockPanelRegistry.orderedSubtypes) { subtype in
+                        let panelDefinitions = DockPanelRegistry.definitions(for: subtype)
+                        Menu(subtype.title) {
+                            ForEach(panelDefinitions, id: \.type.rawValue) { definition in
+                                Button(definition.title) {
+                                    NotificationCenter.default.post(
+                                        name: .requestAddDockPanel,
+                                        object: nil,
+                                        userInfo: [AppMenuEventKey.panelType: definition.type.rawValue]
+                                    )
+                                }
+                            }
                         }
                     }
                 }

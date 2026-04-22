@@ -365,8 +365,92 @@ struct SimulationPerformanceMetrics: Equatable {
     var sampleWindowSeconds: Double = 3.0
 }
 
-struct ViewportCameraState: Codable, Equatable {
-    var yaw: Float = 0.75
-    var pitch: Float = 0.45
-    var radius: Float = 3.6
+enum ViewportCameraMode: String, Codable, CaseIterable, Equatable, Sendable {
+    case navigation
+    case orbit
+
+    var title: String {
+        switch self {
+        case .navigation:
+            return "Nav"
+        case .orbit:
+            return "Orbit"
+        }
+    }
+}
+
+struct ViewportCameraState: Codable, Equatable, Sendable {
+    var positionX: Float = Self.defaultPosition.x
+    var positionY: Float = Self.defaultPosition.y
+    var positionZ: Float = Self.defaultPosition.z
+    var yaw: Float = Self.defaultYaw
+    var pitch: Float = Self.defaultPitch
+    var movementSpeed: Float = 1.0
+    var mode: ViewportCameraMode = .navigation
+
+    static let defaultYaw: Float = 0.75
+    static let defaultPitch: Float = 0.45
+    static let defaultRadius: Float = 2.45
+    static let defaultMovementSpeed: Float = 1.0
+    static let defaultPosition = SIMD3<Float>(
+        cosf(defaultPitch) * sinf(defaultYaw) * defaultRadius,
+        sinf(defaultPitch) * defaultRadius,
+        cosf(defaultPitch) * cosf(defaultYaw) * defaultRadius
+    )
+
+    private enum CodingKeys: String, CodingKey {
+        case positionX
+        case positionY
+        case positionZ
+        case yaw
+        case pitch
+        case movementSpeed
+        case mode
+
+        // Legacy orbit-only camera payload.
+        case radius
+    }
+
+    init() {}
+
+    var position: SIMD3<Float> {
+        get { SIMD3<Float>(positionX, positionY, positionZ) }
+        set {
+            positionX = newValue.x
+            positionY = newValue.y
+            positionZ = newValue.z
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        yaw = try container.decodeIfPresent(Float.self, forKey: .yaw) ?? Self.defaultYaw
+        pitch = try container.decodeIfPresent(Float.self, forKey: .pitch) ?? Self.defaultPitch
+        movementSpeed = try container.decodeIfPresent(Float.self, forKey: .movementSpeed) ?? Self.defaultMovementSpeed
+        mode = try container.decodeIfPresent(ViewportCameraMode.self, forKey: .mode) ?? .navigation
+
+        if let positionX = try container.decodeIfPresent(Float.self, forKey: .positionX),
+           let positionY = try container.decodeIfPresent(Float.self, forKey: .positionY),
+           let positionZ = try container.decodeIfPresent(Float.self, forKey: .positionZ) {
+            self.positionX = positionX
+            self.positionY = positionY
+            self.positionZ = positionZ
+        } else {
+            let radius = try container.decodeIfPresent(Float.self, forKey: .radius) ?? Self.defaultRadius
+            self.positionX = cosf(pitch) * sinf(yaw) * radius
+            self.positionY = sinf(pitch) * radius
+            self.positionZ = cosf(pitch) * cosf(yaw) * radius
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(positionX, forKey: .positionX)
+        try container.encode(positionY, forKey: .positionY)
+        try container.encode(positionZ, forKey: .positionZ)
+        try container.encode(yaw, forKey: .yaw)
+        try container.encode(pitch, forKey: .pitch)
+        try container.encode(movementSpeed, forKey: .movementSpeed)
+        try container.encode(mode, forKey: .mode)
+    }
 }

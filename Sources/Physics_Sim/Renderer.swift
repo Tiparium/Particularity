@@ -55,10 +55,12 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     private var frameRateTracker = RendererFrameRateTracker(windowSeconds: 3.0)
     private var activeKeys: Set<String> = []
-    private let keyboardAngularSpeed: Float = 1.2
+    private let orbitAngularSpeed: Float = 1.2
+    private let orbitRadiusSpeed: Float = 1.6
+    private let navigationTranslationSpeed: Float = 1.8
     private let slowRotationAngularSpeed: Float = 0.16
     private let slowRotationResumeDelay: TimeInterval = 3.0
-    private let liveCameraState = CameraState()
+    private let liveCameraState: CameraState
     private var lastManualCameraInteractionTime: TimeInterval = -.infinity
     private var lastSlowRotationEnabled = false
 
@@ -78,6 +80,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         self.queue = queue
         self.viewportStateStore = viewportStateStore
         self.cameraStateSink = cameraStateSink
+        self.liveCameraState = CameraState(viewportCameraState: viewportStateStore.viewportState.camera)
 
         let library = session.library
 
@@ -155,7 +158,6 @@ final class Renderer: NSObject, MTKViewDelegate {
         lineIndexCount = geometry.indexCount
         super.init()
         lastPublishedCameraState = viewportStateStore.viewportState.camera
-        liveCameraState.viewportCameraState = viewportStateStore.viewportState.camera
         publishCameraState()
     }
 
@@ -169,38 +171,35 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     func orbitByDrag(deltaX: Float, deltaY: Float) {
         registerManualCameraInteraction()
-        let camera = currentCameraState()
-        camera.orbit(yawDelta: deltaX * 0.01, pitchDelta: deltaY * 0.01)
-        liveCameraState.viewportCameraState = camera.viewportCameraState
+        let pitchDelta = -deltaY * 0.01
+        if liveCameraState.authoritativeState.mode == .orbit {
+            liveCameraState.updateOrbitMotion(yawDelta: deltaX * 0.01, pitchDelta: pitchDelta, radiusDelta: 0)
+        } else {
+            liveCameraState.rotateInPlace(yawDelta: deltaX * 0.01, pitchDelta: pitchDelta)
+        }
         publishCameraState()
     }
 
     func dollyByScroll(deltaY: Float) {
         registerManualCameraInteraction()
-        let camera = currentCameraState()
-        camera.dolly(delta: deltaY * 0.0035)
-        liveCameraState.viewportCameraState = camera.viewportCameraState
+        liveCameraState.adjustMovementSpeed(byScrollDelta: deltaY)
+        viewportStateStore.setCameraMovementSpeed(liveCameraState.authoritativeState.movementSpeed)
         publishCameraState()
     }
 
     func dollyByMagnification(_ magnification: Float) {
-        registerManualCameraInteraction()
-        let camera = currentCameraState()
-        camera.dolly(delta: -magnification * 0.6)
-        liveCameraState.viewportCameraState = camera.viewportCameraState
-        publishCameraState()
+        _ = magnification
     }
 
     func resetCamera() {
         registerManualCameraInteraction()
-        let camera = currentCameraState()
-        camera.reset()
+        liveCameraState.reset()
         commitCameraState()
         publishCameraState()
     }
 
     func commitCameraState() {
-        viewportStateStore.updateCameraState(liveCameraState.viewportCameraState)
+        viewportStateStore.checkpointCameraState(liveCameraState.authoritativeState)
     }
 
     func updateSimulationState(_ nextState: SimulationViewportState) {
@@ -219,9 +218,12 @@ final class Renderer: NSObject, MTKViewDelegate {
     func draw(in view: MTKView) {
         let now = ProcessInfo.processInfo.systemUptime
         frameRateTracker.recordFrame(at: now)
+        syncCameraControlsFromViewportState(now: now)
         syncSlowRotationState(at: now)
-        updateKeyboardOrbit(deltaTime: 1.0 / 60.0)
+        updateKeyboardCamera(deltaTime: 1.0 / 60.0)
         updateSlowRotation(deltaTime: 1.0 / 60.0, now: now)
+        liveCameraState.updateTransition(now: now)
+        publishCameraState()
 
         guard
             let drawable = view.currentDrawable,
@@ -243,7 +245,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         let projection = float4x4.perspective(fovY: 60.0 * .pi / 180.0, aspect: aspect, near: 0.1, far: 100.0)
         let projectionYScale = projection.columns.1.y
         let model = float4x4.identity()
-        let mvp = projection * currentCameraState().viewMatrix() * model
+        let mvp = projection * liveCameraState.viewMatrix() * model
 
         var lineUniforms = LineUniforms(mvp: mvp, color: SIMD4<Float>(0.78, 0.78, 0.80, 1.0))
         encoder.setRenderPipelineState(linePipeline)
@@ -301,20 +303,34 @@ final class Renderer: NSObject, MTKViewDelegate {
         session.publishFrameMetrics(averageFPS: currentFPS, at: now)
     }
 
-    private func updateKeyboardOrbit(deltaTime: Float) {
-        var yawDelta: Float = 0
-        var pitchDelta: Float = 0
-        if activeKeys.contains("a") { yawDelta -= keyboardAngularSpeed * deltaTime }
-        if activeKeys.contains("d") { yawDelta += keyboardAngularSpeed * deltaTime }
-        if activeKeys.contains("w") { pitchDelta += keyboardAngularSpeed * deltaTime }
-        if activeKeys.contains("s") { pitchDelta -= keyboardAngularSpeed * deltaTime }
-        if yawDelta != 0 || pitchDelta != 0 {
-            registerManualCameraInteraction()
-            let camera = currentCameraState()
-            camera.orbit(yawDelta: yawDelta, pitchDelta: pitchDelta)
-            liveCameraState.viewportCameraState = camera.viewportCameraState
-            publishCameraState()
+    private func updateKeyboardCamera(deltaTime: Float) {
+        guard !liveCameraState.isTransitioning else { return }
+
+        let forward = axisIntent(positive: "w", negative: "s")
+        let right = axisIntent(positive: "d", negative: "a")
+        let up = axisIntent(positive: "q", negative: "e")
+        guard forward != 0 || right != 0 || up != 0 else { return }
+
+        registerManualCameraInteraction()
+        switch liveCameraState.authoritativeState.mode {
+        case .orbit:
+            let speed = liveCameraState.authoritativeState.movementSpeed
+            liveCameraState.updateOrbitMotion(
+                yawDelta: right * orbitAngularSpeed * speed * deltaTime,
+                pitchDelta: up * orbitAngularSpeed * speed * deltaTime,
+                radiusDelta: -forward * orbitRadiusSpeed * speed * deltaTime
+            )
+        case .navigation:
+            let speed = navigationTranslationSpeed * liveCameraState.authoritativeState.movementSpeed
+            let forwardScale: Float = forward >= 0 ? 1.0 : 0.75
+            liveCameraState.updateNavigationTranslation(
+                forward: forward * speed * forwardScale,
+                right: right * speed * 0.75,
+                up: up * speed * 0.5,
+                deltaTime: deltaTime
+            )
         }
+        publishCameraState()
     }
 
     private func syncSlowRotationState(at now: TimeInterval) {
@@ -328,14 +344,21 @@ final class Renderer: NSObject, MTKViewDelegate {
     private func updateSlowRotation(deltaTime: Float, now: TimeInterval) {
         guard viewportStateStore.viewportState.slowRotationEnabled else { return }
         guard now - lastManualCameraInteractionTime >= slowRotationResumeDelay else { return }
-        let camera = currentCameraState()
-        camera.orbit(yawDelta: slowRotationAngularSpeed * deltaTime, pitchDelta: 0)
-        liveCameraState.viewportCameraState = camera.viewportCameraState
+        switch liveCameraState.authoritativeState.mode {
+        case .orbit:
+            liveCameraState.updateOrbitMotion(
+                yawDelta: slowRotationAngularSpeed * deltaTime,
+                pitchDelta: 0,
+                radiusDelta: 0
+            )
+        case .navigation:
+            liveCameraState.rotateInPlace(yawDelta: slowRotationAngularSpeed * deltaTime, pitchDelta: 0)
+        }
         publishCameraState()
     }
 
     private func publishCameraState() {
-        let cameraState = currentCameraState().viewportCameraState
+        let cameraState = liveCameraState.renderedState
         guard cameraState.isMeaningfullyDifferent(from: lastPublishedCameraState) else { return }
         lastPublishedCameraState = cameraState
         cameraStateSink(cameraState)
@@ -345,8 +368,22 @@ final class Renderer: NSObject, MTKViewDelegate {
         lastManualCameraInteractionTime = ProcessInfo.processInfo.systemUptime
     }
 
-    private func currentCameraState() -> CameraState {
-        return liveCameraState
+    private func syncCameraControlsFromViewportState(now: TimeInterval) {
+        let desiredState = viewportStateStore.viewportState.camera
+        let modeDidChange = desiredState.mode != liveCameraState.authoritativeState.mode
+        liveCameraState.syncControls(from: desiredState, now: now)
+        if modeDidChange {
+            viewportStateStore.updateLiveCameraState(liveCameraState.authoritativeState)
+            commitCameraState()
+            publishCameraState()
+        }
+    }
+
+    private func axisIntent(positive: String, negative: String) -> Float {
+        var value: Float = 0
+        if activeKeys.contains(positive) { value += 1 }
+        if activeKeys.contains(negative) { value -= 1 }
+        return value
     }
 
 }

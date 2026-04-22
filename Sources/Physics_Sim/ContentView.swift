@@ -150,6 +150,7 @@ struct MainWindowContentDependencies {
     let moduleCatalogStore: MainWindowModuleCatalogStore
     let runtimeConfigCoordinator: SimulationRuntimeConfigCoordinator
     let diagnosticsStore: MainWindowDiagnosticsStore
+    let debugSettingsStore: MainWindowDebugSettingsStore
     let interactionSnapshotRecorder: InteractionSnapshotRecorder
     let performanceReviewLogger: PerformanceReviewLogger
 
@@ -183,6 +184,7 @@ struct MainWindowContentDependencies {
             moduleCatalogStore: moduleCatalogStore,
             runtimeConfigCoordinator: runtimeConfigCoordinator,
             diagnosticsStore: diagnosticsStore,
+            debugSettingsStore: WindowSimulationSessionStore.shared.mainWindowDebugSettingsStore(),
             interactionSnapshotRecorder: InteractionSnapshotRecorder.shared,
             performanceReviewLogger: PerformanceReviewLogger.shared
         )
@@ -212,6 +214,7 @@ struct ContentView: View {
     private let moduleCatalogStore: MainWindowModuleCatalogStore
     private let runtimeConfigCoordinator: SimulationRuntimeConfigCoordinator
     private let diagnosticsStore: MainWindowDiagnosticsStore
+    private let debugSettingsStore: MainWindowDebugSettingsStore
     private let interactionSnapshotRecorder: InteractionSnapshotRecorder
     private let performanceReviewLogger: PerformanceReviewLogger
 
@@ -224,6 +227,7 @@ struct ContentView: View {
         self.moduleCatalogStore = dependencies.moduleCatalogStore
         self.runtimeConfigCoordinator = dependencies.runtimeConfigCoordinator
         self.diagnosticsStore = dependencies.diagnosticsStore
+        self.debugSettingsStore = dependencies.debugSettingsStore
         self.interactionSnapshotRecorder = dependencies.interactionSnapshotRecorder
         self.performanceReviewLogger = dependencies.performanceReviewLogger
     }
@@ -234,6 +238,26 @@ struct ContentView: View {
 
     private var collapsedPanelIDs: Set<UUID> {
         chromeStateStore.collapsedPanelIDs
+    }
+
+    private func panelRenderContext(for panel: DockPanel) -> DockPanelRenderContext {
+        DockPanelRenderContext(
+            panel: panel,
+            editorSettingsStore: editorSettingsStore,
+            moduleCatalogStore: moduleCatalogStore,
+            chromeStateStore: chromeStateStore,
+            physicsModuleSettingsStore: physicsModuleSettingsStore,
+            runtimeConfigCoordinator: runtimeConfigCoordinator,
+            diagnosticsStore: diagnosticsStore,
+            debugSettingsStore: debugSettingsStore,
+            interactionSnapshotRecorder: interactionSnapshotRecorder,
+            performanceReviewLogger: performanceReviewLogger,
+            particleCountUICap: particleCountUICap,
+            particleCountEngineCap: particleCountEngineCap,
+            importerTargetKind: $importerTargetKind,
+            isImporterPresented: $isImporterPresented,
+            startInteractionSnapshotRecording: startInteractionSnapshotRecording
+        )
     }
 
     var body: some View {
@@ -316,8 +340,9 @@ struct ContentView: View {
             fflush(stderr)
         }
         .onReceive(NotificationCenter.default.publisher(for: .requestAddDockPanel)) { note in
-            guard let raw = note.userInfo?[AppMenuEventKey.panelType] as? String,
-                  let type = DockPanelType(rawValue: raw) else { return }
+            guard let raw = note.userInfo?[AppMenuEventKey.panelType] as? String else { return }
+            let type = DockPanelType(rawValue: raw)
+            guard DockPanelRegistry.definition(for: type) != nil else { return }
             menuInsertionType = type
             menuHoverZone = nil
         }
@@ -371,6 +396,7 @@ struct ContentView: View {
                 runtimeConfigCoordinator: runtimeConfigCoordinator,
                 editorSettingsStore: editorSettingsStore,
                 diagnosticsStore: diagnosticsStore,
+                debugSettingsStore: debugSettingsStore,
                 viewportGeneration: viewportGeneration,
                 anyDockPanelsVisible: chromeStateStore.anyDockPanelsVisible,
                 leftPanelVisible: chromeStateStore.leftPanelVisible,
@@ -557,13 +583,13 @@ struct ContentView: View {
             Spacer()
 
             Menu {
-                ForEach(DockPanelSubtype.allCases) { subtype in
-                    let panelTypes = DockPanelType.allCases.filter { $0.subtype == subtype }
-                    if !panelTypes.isEmpty {
+                ForEach(DockPanelRegistry.orderedSubtypes) { subtype in
+                    let panelDefinitions = DockPanelRegistry.definitions(for: subtype)
+                    if !panelDefinitions.isEmpty {
                         Menu(subtype.title) {
-                            ForEach(panelTypes, id: \.rawValue) { type in
-                                Button(type.title) {
-                                    addPanel(type: type, to: zone)
+                            ForEach(panelDefinitions, id: \.type.rawValue) { definition in
+                                Button(definition.title) {
+                                    addPanel(type: definition.type, to: zone)
                                 }
                             }
                         }
@@ -734,63 +760,12 @@ struct ContentView: View {
 
     @ViewBuilder
     private func panelBodyCore(for panel: DockPanel) -> some View {
-        switch panel.type {
-        case .moduleSlots:
-            ModuleSlotsPanel(
-                editorSettingsStore: editorSettingsStore,
-                moduleCatalogStore: moduleCatalogStore,
-                chromeStateStore: chromeStateStore,
-                importerTargetKind: $importerTargetKind,
-                isImporterPresented: $isImporterPresented
-            )
-        case .physicsSettings:
-            ModuleSettingsPanelView(
-                kind: .physics,
-                editorSettingsStore: editorSettingsStore,
-                physicsModuleSettingsStore: physicsModuleSettingsStore,
-                moduleCatalogStore: moduleCatalogStore,
-                runtimeConfigCoordinator: runtimeConfigCoordinator,
-                particleCountUICap: particleCountUICap,
-                particleCountEngineCap: particleCountEngineCap
-            )
-        case .visualSettings:
-            ModuleSettingsPanelView(
-                kind: .visual,
-                editorSettingsStore: editorSettingsStore,
-                physicsModuleSettingsStore: physicsModuleSettingsStore,
-                moduleCatalogStore: moduleCatalogStore,
-                runtimeConfigCoordinator: runtimeConfigCoordinator,
-                particleCountUICap: particleCountUICap,
-                particleCountEngineCap: particleCountEngineCap
-            )
-        case .optimizationSettings:
-            ModuleSettingsPanelView(
-                kind: .optimization,
-                editorSettingsStore: editorSettingsStore,
-                physicsModuleSettingsStore: physicsModuleSettingsStore,
-                moduleCatalogStore: moduleCatalogStore,
-                runtimeConfigCoordinator: runtimeConfigCoordinator,
-                particleCountUICap: particleCountUICap,
-                particleCountEngineCap: particleCountEngineCap
-            )
-        case .fileView:
-            FileViewPanel(
-                editorSettingsStore: editorSettingsStore,
-                moduleCatalogStore: moduleCatalogStore,
-                chromeStateStore: chromeStateStore
-            )
-        case .inspector:
-            InspectorPanel(
-                interactionSnapshotRecorder: interactionSnapshotRecorder,
-                performanceReviewLogger: performanceReviewLogger,
-                runtimeConfigCoordinator: runtimeConfigCoordinator,
-                diagnosticsStore: diagnosticsStore,
-                chromeStateStore: chromeStateStore,
-                onStartInteractionSnapshot: startInteractionSnapshotRecording,
-                onSetPerformanceReviewLoggingEnabled: { performanceReviewLogger.setEnabled($0) }
-            )
-        case .leaderCommunicationLog:
-            LeaderCommunicationLogPanel(diagnosticsStore: diagnosticsStore)
+        if let definition = DockPanelRegistry.definition(for: panel.type) {
+            definition.makeBody(panelRenderContext(for: panel))
+        } else {
+            Text("Panel \"\(panel.type.rawValue)\" is registered in layout state but has no registry definition.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -1175,6 +1150,7 @@ private struct SimulationCenterPane: View {
     @ObservedObject var runtimeConfigCoordinator: SimulationRuntimeConfigCoordinator
     @ObservedObject var editorSettingsStore: MainWindowEditorSettingsStore
     @ObservedObject var diagnosticsStore: MainWindowDiagnosticsStore
+    @ObservedObject var debugSettingsStore: MainWindowDebugSettingsStore
     let viewportGeneration: Int
     let anyDockPanelsVisible: Bool
     let leftPanelVisible: Bool
@@ -1281,6 +1257,7 @@ private struct SimulationCenterPane: View {
                         ),
                         in: 0.1...4.0
                     )
+                    .controlSize(.small)
                     .frame(width: 120)
                     Text(String(format: "%.2fx", runtimeConfigCoordinator.simulationState.timeScale))
                         .font(.caption.monospacedDigit())
@@ -1300,14 +1277,54 @@ private struct SimulationCenterPane: View {
                     helpText: viewportStateStore.viewportState.slowRotationEnabled ? "Disable slow rotation" : "Enable slow rotation"
                 )
 
+                Divider()
+                    .frame(height: 18)
+
+                AppIconButton(
+                    iconName: "arrow.up.left.and.arrow.down.right",
+                    helpText: viewportStateStore.viewportState.camera.mode == .navigation ? "Navigation mode active" : "Switch to navigation mode",
+                    variant: viewportStateStore.viewportState.camera.mode == .navigation ? .active : .neutral,
+                    isDimmed: viewportStateStore.viewportState.camera.mode == .navigation
+                ) {
+                    viewportStateStore.setCameraMode(.navigation)
+                }
+
+                AppIconButton(
+                    iconName: "arrow.triangle.2.circlepath",
+                    helpText: viewportStateStore.viewportState.camera.mode == .orbit ? "Orbit mode active" : "Switch to orbit mode",
+                    variant: viewportStateStore.viewportState.camera.mode == .orbit ? .active : .neutral,
+                    isDimmed: viewportStateStore.viewportState.camera.mode == .orbit
+                ) {
+                    viewportStateStore.setCameraMode(.orbit)
+                }
+
+                HStack(spacing: 8) {
+                    Text("Move Speed")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Slider(
+                        value: Binding(
+                            get: { Double(viewportStateStore.viewportState.camera.movementSpeed) },
+                            set: { viewportStateStore.setCameraMovementSpeed(Float($0)) }
+                        ),
+                        in: Double(CameraMath.movementSpeedRange.lowerBound)...Double(CameraMath.movementSpeedRange.upperBound)
+                    )
+                    .controlSize(.small)
+                    .frame(width: 120)
+                    Text(String(format: "%.2fx", viewportStateStore.viewportState.camera.movementSpeed))
+                        .font(.caption.monospacedDigit())
+                        .frame(width: 52, alignment: .trailing)
+                }
+
                 Spacer()
 
                 Text(validationReport.canStart ? "Ready" : "Blocked")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(validationReport.canStart ? Color.green.opacity(0.9) : Color.red.opacity(0.9))
             }
+            .frame(height: 38)
             .padding(.horizontal, 12)
-            .padding(.vertical, 10)
+            .padding(.vertical, 6)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
 
             HStack(spacing: 16) {
@@ -1328,7 +1345,8 @@ private struct SimulationCenterPane: View {
                 viewportStateStore: viewportStateStore,
                 transportState: transportState,
                 viewportGeneration: viewportGeneration,
-                diagnosticsStore: diagnosticsStore
+                diagnosticsStore: diagnosticsStore,
+                debugSettingsStore: debugSettingsStore
             )
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
@@ -1445,19 +1463,56 @@ private struct SimulationViewportSurface: View {
     let transportState: SimulationTransportState
     let viewportGeneration: Int
     let diagnosticsStore: MainWindowDiagnosticsStore
+    let debugSettingsStore: MainWindowDebugSettingsStore
 
     var body: some View {
         MetalViewportView(
             session: session,
             viewportStateStore: viewportStateStore,
             transportState: transportState,
-            diagnosticsStore: diagnosticsStore
+            diagnosticsStore: diagnosticsStore,
+            debugSettingsStore: debugSettingsStore
         )
         .id(viewportGeneration)
         .transaction { transaction in
             transaction.animation = nil
             transaction.disablesAnimations = true
         }
+    }
+}
+
+struct DebugSettingsPanel: View {
+    @ObservedObject var debugSettingsStore: MainWindowDebugSettingsStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Temporary development controls. Anything that stays useful should later become a real feature or move into a menu.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
+            EventuallyAppliedSlider(
+                title: "Compass Perspective Distance",
+                appliedValue: Binding(
+                    get: { debugSettingsStore.snapshot.compassPerspectiveDistance },
+                    set: { debugSettingsStore.setCompassPerspectiveDistance($0) }
+                ),
+                range: 1.0...4.0,
+                step: 0.05,
+                valueText: { String(format: "%.2f", $0) }
+            )
+
+            EventuallyAppliedSlider(
+                title: "Compass Perspective Strength",
+                appliedValue: Binding(
+                    get: { debugSettingsStore.snapshot.compassPerspectiveStrength },
+                    set: { debugSettingsStore.setCompassPerspectiveStrength($0) }
+                ),
+                range: 0.1...1.2,
+                step: 0.05,
+                valueText: { String(format: "%.2f", $0) }
+            )
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -1609,7 +1664,7 @@ private struct BlockingIssuesColumn: View {
     }
 }
 
-private struct ModuleSlotsPanel: View {
+struct ModuleSlotsPanel: View {
     @ObservedObject var editorSettingsStore: MainWindowEditorSettingsStore
     @ObservedObject var moduleCatalogStore: MainWindowModuleCatalogStore
     @ObservedObject var chromeStateStore: MainWindowChromeStateStore
@@ -1697,7 +1752,7 @@ private struct ModuleSlotsPanel: View {
     }
 }
 
-private struct ModuleSettingsPanelView: View {
+struct ModuleSettingsPanelView: View {
     let kind: ModuleKind
     @ObservedObject var editorSettingsStore: MainWindowEditorSettingsStore
     @ObservedObject var physicsModuleSettingsStore: MainWindowPhysicsModuleSettingsStore
@@ -2015,7 +2070,7 @@ private struct OptimizationSettingsPanel: View {
     }
 }
 
-private struct LeaderCommunicationLogPanel: View {
+struct LeaderCommunicationLogPanel: View {
     @ObservedObject var diagnosticsStore: MainWindowDiagnosticsStore
 
     private var entries: [LeaderCommunicationLogEntry] {
@@ -2056,7 +2111,7 @@ private struct LeaderCommunicationLogPanel: View {
     }
 }
 
-private struct FileViewPanel: View {
+struct FileViewPanel: View {
     @ObservedObject var editorSettingsStore: MainWindowEditorSettingsStore
     @ObservedObject var moduleCatalogStore: MainWindowModuleCatalogStore
     @ObservedObject var chromeStateStore: MainWindowChromeStateStore
@@ -2149,7 +2204,7 @@ private struct FileViewPanel: View {
     }
 }
 
-private struct InspectorPanel: View {
+struct InspectorPanel: View {
     @ObservedObject var interactionSnapshotRecorder: InteractionSnapshotRecorder
     @ObservedObject var performanceReviewLogger: PerformanceReviewLogger
     @ObservedObject var runtimeConfigCoordinator: SimulationRuntimeConfigCoordinator

@@ -298,6 +298,7 @@ struct MetalViewportView: NSViewRepresentable {
     let viewportStateStore: MainWindowViewportStateStore
     let transportState: SimulationTransportState
     let diagnosticsStore: MainWindowDiagnosticsStore
+    let debugSettingsStore: MainWindowDebugSettingsStore
 
     func makeCoordinator() -> MetalViewportCoordinator {
         MetalViewportCoordinator()
@@ -318,7 +319,11 @@ struct MetalViewportView: NSViewRepresentable {
         metalView.preferredFramesPerSecond = 60
 
         context.coordinator.axisModel.cameraState = session.viewportState.camera
-        let axisHostView = NSHostingView(rootView: ViewportAxisIndicator(model: context.coordinator.axisModel))
+        let axisHostView = NSHostingView(
+            rootView: ViewportAxisIndicator(model: context.coordinator.axisModel, debugSettingsStore: debugSettingsStore) {
+                context.coordinator.didPressReset()
+            }
+        )
         axisHostView.translatesAutoresizingMaskIntoConstraints = false
         axisHostView.setFrameSize(NSSize(width: 72, height: 72))
         axisHostView.wantsLayer = true
@@ -380,7 +385,7 @@ struct MetalViewportView: NSViewRepresentable {
             }
         }
         if context.coordinator.lastAppliedTransportState != transportState {
-            if transportState == .paused || transportState == .stopped {
+            if transportState == .running || transportState == .paused || transportState == .stopped {
                 context.coordinator.renderer?.commitCameraState()
             }
             context.coordinator.lastAppliedTransportState = transportState
@@ -399,6 +404,8 @@ private final class ViewportAxisModel: ObservableObject {
 
 private struct ViewportAxisIndicator: View {
     @ObservedObject var model: ViewportAxisModel
+    @ObservedObject var debugSettingsStore: MainWindowDebugSettingsStore
+    let onReset: () -> Void
 
     private struct AxisProjection {
         let label: String
@@ -427,37 +434,41 @@ private struct ViewportAxisIndicator: View {
         }
         .frame(width: 72, height: 72)
         .background(Color.clear)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onReset)
     }
 
     private var projectedAxes: [AxisProjection] {
         let cameraState = model.cameraState
-        let eye = SIMD3<Float>(
-            cosf(cameraState.pitch) * sinf(cameraState.yaw),
-            sinf(cameraState.pitch),
-            cosf(cameraState.pitch) * cosf(cameraState.yaw)
-        )
-        let zAxis = simd_normalize(eye)
-        let xAxis = simd_normalize(simd_cross(SIMD3<Float>(0, 1, 0), zAxis))
-        let yAxis = simd_cross(zAxis, xAxis)
+        let forward = CameraMath.forwardVector(yaw: cameraState.yaw, pitch: cameraState.pitch)
+        let right = CameraMath.rightVector(yaw: cameraState.yaw, pitch: cameraState.pitch)
+        let up = CameraMath.upVector(yaw: cameraState.yaw, pitch: cameraState.pitch)
         let center = CGPoint(x: 36, y: 36)
         let scale: Float = 22
+        let perspectiveDistance = Float(debugSettingsStore.snapshot.compassPerspectiveDistance)
+        let perspectiveStrength = Float(debugSettingsStore.snapshot.compassPerspectiveStrength)
 
+        // TODO: Temporary compass-only Z-up correction. The underlying renderer/camera stack
+        // is still Y-up and needs a proper engine-wide refactor so the whole program uses Z-up.
         let worldAxes: [(String, Color, SIMD3<Float>)] = [
             ("X", .red, SIMD3<Float>(1, 0, 0)),
-            ("Y", .green, SIMD3<Float>(0, 1, 0)),
-            ("Z", .blue, SIMD3<Float>(0, 0, 1)),
+            ("Y", .green, SIMD3<Float>(0, 0, 1)),
+            ("Z", .blue, SIMD3<Float>(0, 1, 0)),
         ]
 
         return worldAxes
             .map { label, color, axis in
                 let cameraSpace = SIMD3<Float>(
-                    simd_dot(xAxis, axis),
-                    simd_dot(yAxis, axis),
-                    simd_dot(zAxis, axis)
+                    simd_dot(right, axis),
+                    simd_dot(up, axis),
+                    simd_dot(forward, axis)
                 )
+                let divisor = max(0.8, perspectiveDistance - cameraSpace.z * perspectiveStrength)
+                let projectedX = cameraSpace.x * scale / divisor
+                let projectedY = cameraSpace.y * scale / divisor
                 let endpoint = CGPoint(
-                    x: center.x + CGFloat(cameraSpace.x * scale),
-                    y: center.y - CGFloat(cameraSpace.y * scale)
+                    x: center.x + CGFloat(projectedX),
+                    y: center.y - CGFloat(projectedY)
                 )
                 return AxisProjection(label: label, color: color, endpoint: endpoint, depth: cameraSpace.z)
             }
