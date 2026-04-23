@@ -308,7 +308,7 @@ final class Renderer: NSObject, MTKViewDelegate {
 
         let forward = axisIntent(positive: "w", negative: "s")
         let right = axisIntent(positive: "d", negative: "a")
-        let up = axisIntent(positive: "q", negative: "e")
+        let up = axisIntent(positive: "e", negative: "q")
         guard forward != 0 || right != 0 || up != 0 else { return }
 
         registerManualCameraInteraction()
