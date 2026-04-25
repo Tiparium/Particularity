@@ -1,0 +1,1 @@
+1. [general] Visual module DefaultRainbowUnlitSpheres requires optimization debug compatibility, but optimization module UniformGrid does not provide it.

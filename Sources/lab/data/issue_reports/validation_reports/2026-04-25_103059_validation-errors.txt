@@ -1,0 +1,1 @@
+1. [particleCount] DefaultOptimizationAllPairs supports at most 65,535 particles. Current particle count is 100,000.
