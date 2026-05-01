@@ -52,6 +52,15 @@ enum SimulationConfigurationDerivation {
             playbackFrontLayerSlot: isPlaybackVisualModule ? min(max(0, editorState.visualState.playbackFrontLayerSlot), 4) : 0,
             playbackMiddleLayerSlot: isPlaybackVisualModule ? min(max(0, editorState.visualState.playbackMiddleLayerSlot), 4) : 0,
             playbackFinalLayerSlot: isPlaybackVisualModule ? min(max(0, editorState.visualState.playbackFinalLayerSlot), 4) : 0,
+            playbackFrontLayerHorizontalOffset: isPlaybackVisualModule
+                ? Float(min(max(-1.5, editorState.visualState.playbackFrontLayerHorizontalOffset), 1.5))
+                : 0,
+            playbackMiddleLayerHorizontalOffset: isPlaybackVisualModule
+                ? Float(min(max(-1.5, editorState.visualState.playbackMiddleLayerHorizontalOffset), 1.5))
+                : 0,
+            playbackFinalLayerHorizontalOffset: isPlaybackVisualModule
+                ? Float(min(max(-1.5, editorState.visualState.playbackFinalLayerHorizontalOffset), 1.5))
+                : 0,
             playbackFrontLayerOffset: isPlaybackVisualModule
                 ? Float(min(max(-1.5, editorState.visualState.playbackFrontLayerOffset), 1.5))
                 : 0,

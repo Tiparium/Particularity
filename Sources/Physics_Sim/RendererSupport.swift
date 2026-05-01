@@ -23,6 +23,9 @@ struct ParticleUniforms {
     var playbackFrontLayerSlot: UInt32
     var playbackMiddleLayerSlot: UInt32
     var playbackFinalLayerSlot: UInt32
+    var playbackFrontLayerHorizontalOffset: Float
+    var playbackMiddleLayerHorizontalOffset: Float
+    var playbackFinalLayerHorizontalOffset: Float
     var playbackFrontLayerOffset: Float
     var playbackMiddleLayerOffset: Float
     var playbackFinalLayerOffset: Float

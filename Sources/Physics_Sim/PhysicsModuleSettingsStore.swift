@@ -21,6 +21,11 @@ final class MainWindowPhysicsModuleSettingsStore: ObservableObject {
         self.snapshot = store.load(fallback: MainWindowPhysicsModuleSettingsSnapshot())
     }
 
+    func setSnapshot(_ nextSnapshot: MainWindowPhysicsModuleSettingsSnapshot) {
+        snapshot = nextSnapshot
+        store.save(nextSnapshot)
+    }
+
     func decodeSettings<T: Codable>(for moduleName: String, fallback: T) -> T {
         decodeSettings(for: moduleName, fallback: fallback, from: snapshot)
     }

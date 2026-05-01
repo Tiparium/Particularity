@@ -227,6 +227,9 @@ final class SimulationRuntime: @unchecked Sendable {
         playbackFrontLayerSlot: 0,
         playbackMiddleLayerSlot: 0,
         playbackFinalLayerSlot: 0,
+        playbackFrontLayerHorizontalOffset: -0.24,
+        playbackMiddleLayerHorizontalOffset: 0,
+        playbackFinalLayerHorizontalOffset: 0.24,
         playbackFrontLayerOffset: 0.32,
         playbackMiddleLayerOffset: 0,
         playbackFinalLayerOffset: -0.32,
@@ -244,6 +247,7 @@ final class SimulationRuntime: @unchecked Sendable {
     private var playbackCurrentSeconds: Double = 0
     private var playbackLastUptime: TimeInterval?
     private var playbackLooping = true
+    private var playbackAdvanceSuppressed = false
 
     private var renderStateSnapshot = RenderState(
         particleBuffer: nil,
@@ -278,6 +282,9 @@ final class SimulationRuntime: @unchecked Sendable {
         playbackFrontLayerSlot: 0,
         playbackMiddleLayerSlot: 0,
         playbackFinalLayerSlot: 0,
+        playbackFrontLayerHorizontalOffset: -0.24,
+        playbackMiddleLayerHorizontalOffset: 0,
+        playbackFinalLayerHorizontalOffset: 0.24,
         playbackFrontLayerOffset: 0.32,
         playbackMiddleLayerOffset: 0,
         playbackFinalLayerOffset: -0.32,
@@ -436,6 +443,7 @@ final class SimulationRuntime: @unchecked Sendable {
     }
 
     func setPlaybackTime(_ seconds: Double) {
+        logPlayback("enqueue_seek requested=\(formatSeconds(seconds))")
         playbackSeekLock.lock()
         pendingPlaybackSeekSeconds = seconds
         let shouldSchedule = !playbackSeekScheduled
@@ -447,6 +455,26 @@ final class SimulationRuntime: @unchecked Sendable {
         guard shouldSchedule else { return }
         simulationQueue.async {
             self.processLatestPlaybackSeek()
+        }
+    }
+
+    func commitPlaybackTime(_ seconds: Double) {
+        simulationQueue.sync {
+            self.logPlayback("commit_seek requested=\(self.formatSeconds(seconds))")
+            playbackSeekLock.lock()
+            pendingPlaybackSeekSeconds = nil
+            playbackSeekScheduled = false
+            playbackSeekLock.unlock()
+            self.applyPlaybackSeek(seconds)
+        }
+    }
+
+    func setPlaybackAdvanceSuppressed(_ isSuppressed: Bool) {
+        simulationQueue.sync {
+            playbackAdvanceSuppressed = isSuppressed
+            if isSuppressed {
+                playbackLastUptime = nil
+            }
         }
     }
 
@@ -476,6 +504,7 @@ final class SimulationRuntime: @unchecked Sendable {
         pendingPlaybackSeekSeconds = nil
         playbackSeekLock.unlock()
 
+        logPlayback("process_seek seconds=\(formatSeconds(seconds))")
         applyPlaybackSeek(seconds)
 
         playbackSeekLock.lock()
@@ -497,6 +526,7 @@ final class SimulationRuntime: @unchecked Sendable {
         guard let fixture = playbackFixture ?? MLPlaybackPrototypeFixtureLoader.loadFixture() else { return }
         playbackFixture = fixture
         playbackCurrentSeconds = min(max(0, seconds), fixture.durationSeconds)
+        logPlayback("apply_seek requested=\(formatSeconds(seconds)) applied=\(formatSeconds(playbackCurrentSeconds))")
         playbackLastUptime = ProcessInfo.processInfo.systemUptime
         let selection = currentPlaybackSurfaceSelection()
         let frame = currentSimulationState.playbackInterpolationEnabled
@@ -512,12 +542,22 @@ final class SimulationRuntime: @unchecked Sendable {
         publishSnapshots()
     }
 
+    private func formatSeconds(_ seconds: Double) -> String {
+        String(format: "%.4f", seconds)
+    }
+
+    private func logPlayback(_ message: String) {
+        // TODO: Remove or gate this playback timeline debug logging once the scrub handoff bug is resolved.
+        RuntimeEventLogger.log("playback_debug runtime \(message)")
+    }
+
     func updateActiveModules(_ nextModules: ActiveModuleSet) throws {
         try simulationQueue.sync {
             if let reason = ModuleCompatibility.incompatibilityReason(for: nextModules, state: currentSimulationState) {
                 throw SimulationRuntimeError.incompatibleModules(nextModules, reason)
             }
             let previousModules = activeModules
+            let modulesChanged = previousModules != nextModules
             let previousOptimization = activeModules.optimization
             activeModules = nextModules
             if previousOptimization != nextModules.optimization {
@@ -527,21 +567,23 @@ final class SimulationRuntime: @unchecked Sendable {
                     cachedFixedGridTopology = nil
                 }
             }
-            if nextModules.isPlaybackModuleFamily {
+            if modulesChanged, nextModules.isPlaybackModuleFamily {
                 // Do not eagerly load playback fixtures here.
                 // Coordinator startup and module switching call updateActiveModules synchronously.
                 // Large fixture IO/decode must stay off this path to keep launch responsive.
                 playbackFixture = nil
+                playbackAdvanceSuppressed = false
                 needsParticleRebuild = true
                 needsInteractionPlanRefresh = true
                 cachedDefaultInteractionParticleCount = nil
                 cachedFixedGridTopology = nil
                 debugHistory.reset()
                 clearLeaderCommunicationLog()
-            } else if previousModules.isPlaybackModuleFamily {
+            } else if modulesChanged, previousModules.isPlaybackModuleFamily {
                 playbackFixture = nil
                 playbackCurrentSeconds = 0
                 playbackLastUptime = nil
+                playbackAdvanceSuppressed = false
             }
             if self.currentSimulationState.transportState == .stopped {
                 self.typeMatrixInteractionBuffer = nil
@@ -600,9 +642,15 @@ final class SimulationRuntime: @unchecked Sendable {
             tickingSuspended = false
             playbackCurrentSeconds = 0
             playbackLastUptime = nil
+            playbackAdvanceSuppressed = false
             idleCallbacks.removeAll(keepingCapacity: false)
             abandonEphemeralState()
         } else {
+            if previous.transportState != .running, nextState.transportState == .running {
+                playbackAdvanceSuppressed = false
+                playbackLastUptime = nil
+            }
+
             if shouldRebuildParticles {
                 needsParticleRebuild = true
                 needsInteractionPlanRefresh = true
@@ -951,7 +999,8 @@ final class SimulationRuntime: @unchecked Sendable {
     }
 
     private func stepPlayback(at now: TimeInterval) {
-        guard currentSimulationState.transportState == .running else {
+        guard currentSimulationState.transportState == .running,
+              !playbackAdvanceSuppressed else {
             publishSnapshots()
             return
         }

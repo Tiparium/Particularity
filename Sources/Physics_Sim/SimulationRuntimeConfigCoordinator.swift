@@ -14,7 +14,6 @@ final class SimulationRuntimeConfigCoordinator: ObservableObject {
     private let physicsModuleSettingsStore: MainWindowPhysicsModuleSettingsStore
     private let moduleCatalogStore: MainWindowModuleCatalogStore
     private var cancellables: Set<AnyCancellable> = []
-    private var playbackScrubShouldResume = false
 
     init(
         session: SimulationSession,
@@ -145,7 +144,14 @@ final class SimulationRuntimeConfigCoordinator: ObservableObject {
         guard activeModules.isPlaybackModuleFamily else { return }
         let boundedSeconds = min(max(0, seconds), playbackTimelineSnapshot.durationSeconds)
         playbackTimelineSnapshot.currentSeconds = boundedSeconds
-        session.setPlaybackTime(boundedSeconds)
+        logPlayback(
+            "set_time requested=\(formatSeconds(seconds)) bounded=\(formatSeconds(boundedSeconds)) transport=\(transportState.rawValue)"
+        )
+        if transportState == .paused {
+            session.commitPlaybackTime(boundedSeconds)
+        } else {
+            session.setPlaybackTime(boundedSeconds)
+        }
     }
 
     func setPlaybackLooping(_ isLooping: Bool) {
@@ -233,9 +239,27 @@ final class SimulationRuntimeConfigCoordinator: ObservableObject {
         editorSettingsStore.setVisualState(nextVisualState)
     }
 
+    func setPlaybackLayerHorizontalOffset(layer: PlaybackLayer, value: Double) {
+        guard activeModules.isPlaybackModuleFamily else { return }
+        let bounded = min(max(-1.5, value), 1.5)
+        var nextVisualState = editorSettingsStore.editorState.visualState
+        switch layer {
+        case .front:
+            nextVisualState.playbackFrontLayerHorizontalOffset = bounded
+        case .middle:
+            nextVisualState.playbackMiddleLayerHorizontalOffset = bounded
+        case .final:
+            nextVisualState.playbackFinalLayerHorizontalOffset = bounded
+        }
+        editorSettingsStore.setVisualState(nextVisualState)
+    }
+
     func beginPlaybackScrub() {
         guard activeModules.isPlaybackModuleFamily else { return }
-        playbackScrubShouldResume = transportState == .running
+        session.setPlaybackAdvanceSuppressed(true)
+        logPlayback(
+            "begin_scrub current=\(formatSeconds(playbackTimelineSnapshot.currentSeconds)) transport=\(transportState.rawValue)"
+        )
         guard transportState == .running else { return }
         transportState = .paused
         InteractionSnapshotRecorder.shared.record(
@@ -248,24 +272,17 @@ final class SimulationRuntimeConfigCoordinator: ObservableObject {
         )
     }
 
-    func endPlaybackScrub() {
+    func endPlaybackScrub(finalSeconds: Double) {
         guard activeModules.isPlaybackModuleFamily else {
-            playbackScrubShouldResume = false
             return
         }
 
-        let shouldResume = playbackScrubShouldResume
-        playbackScrubShouldResume = false
-        guard shouldResume, transportState == .paused, validationReport.canStart else { return }
-        transportState = .running
-        InteractionSnapshotRecorder.shared.record(
-            event: "ui.end_playback_scrub",
-            details: ["transport": "paused_to_running"]
+        let boundedSeconds = min(max(0, finalSeconds), playbackTimelineSnapshot.durationSeconds)
+        playbackTimelineSnapshot.currentSeconds = boundedSeconds
+        logPlayback(
+            "end_scrub final=\(formatSeconds(finalSeconds)) bounded=\(formatSeconds(boundedSeconds)) transport=\(transportState.rawValue)"
         )
-        recomputeAndApply(
-            editorState: editorSettingsStore.editorState,
-            availableFiles: moduleCatalogStore.availableFiles
-        )
+        session.commitPlaybackTime(boundedSeconds)
     }
 
     func refreshPlaybackTimelineSnapshot() {
@@ -274,6 +291,15 @@ final class SimulationRuntimeConfigCoordinator: ObservableObject {
             return
         }
         playbackTimelineSnapshot = session.playbackTimelineSnapshot
+    }
+
+    private func formatSeconds(_ seconds: Double) -> String {
+        String(format: "%.4f", seconds)
+    }
+
+    private func logPlayback(_ message: String) {
+        // TODO: Remove or gate this playback timeline debug logging once the scrub handoff bug is resolved.
+        RuntimeEventLogger.log("playback_debug coordinator \(message)")
     }
 
     private func recomputeAndApply(

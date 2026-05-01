@@ -27,6 +27,9 @@ enum DefaultVisualModuleRuntime {
         uint playbackFrontLayerSlot;
         uint playbackMiddleLayerSlot;
         uint playbackFinalLayerSlot;
+        float playbackFrontLayerHorizontalOffset;
+        float playbackMiddleLayerHorizontalOffset;
+        float playbackFinalLayerHorizontalOffset;
         float playbackFrontLayerOffset;
         float playbackMiddleLayerOffset;
         float playbackFinalLayerOffset;
@@ -141,6 +144,17 @@ enum DefaultVisualModuleRuntime {
         return u.playbackFinalLayerOffset;
     }
 
+    float playback_layer_horizontal_offset(ParticleState particle, constant ParticleUniforms& u) {
+        uint layer = playback_effective_layer_index(particle, u);
+        if (layer == 0u) {
+            return u.playbackFrontLayerHorizontalOffset;
+        }
+        if (layer == 1u) {
+            return u.playbackMiddleLayerHorizontalOffset;
+        }
+        return u.playbackFinalLayerHorizontalOffset;
+    }
+
     float playback_activation_normalized(ParticleState particle, constant ParticleUniforms& u) {
         if (u.playbackNormalizationMode == 1u) {
             float range = max(0.000001, u.playbackActivationMaximum - u.playbackActivationMinimum);
@@ -234,6 +248,7 @@ enum DefaultVisualModuleRuntime {
         ParticleState particle = particles[vertexID];
         float3 renderPosition = particle.position.xyz;
         if (u.isPlaybackVisual != 0) {
+            renderPosition.x += playback_layer_horizontal_offset(particle, u);
             renderPosition.z = playback_activation_height(particle, u);
             renderPosition.z += playback_layer_offset(particle, u);
         }
@@ -298,6 +313,7 @@ enum DefaultVisualModuleRuntime {
         ParticleState particle = particles[vertexID];
         float3 renderPosition = particle.position.xyz;
         if (u.isPlaybackVisual != 0) {
+            renderPosition.x += playback_layer_horizontal_offset(particle, u);
             renderPosition.z = playback_activation_height(particle, u);
             renderPosition.z += playback_layer_offset(particle, u);
         }

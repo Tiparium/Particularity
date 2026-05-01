@@ -186,6 +186,14 @@ final class SimulationSession {
         runtime?.setPlaybackTime(seconds)
     }
 
+    func commitPlaybackTime(_ seconds: Double) {
+        runtime?.commitPlaybackTime(seconds)
+    }
+
+    func setPlaybackAdvanceSuppressed(_ isSuppressed: Bool) {
+        runtime?.setPlaybackAdvanceSuppressed(isSuppressed)
+    }
+
     func setPlaybackLooping(_ isLooping: Bool) {
         runtime?.setPlaybackLooping(isLooping)
     }
@@ -333,6 +341,7 @@ final class WindowSimulationSessionStore {
     private let mainEditorSettingsStore = MainWindowEditorSettingsStore.shared
     private let mainViewportStateStore = MainWindowViewportStateStore.shared
     private let mainPhysicsModuleSettingsStore = MainWindowPhysicsModuleSettingsStore.shared
+    private let mainDemoPresetStore = MainWindowDemoPresetStore.shared
     private let mainModuleCatalogStore = MainWindowModuleCatalogStore.shared
     private let mainDiagnosticsStore = MainWindowDiagnosticsStore.shared
     private var mainRuntimeConfigCoordinator: SimulationRuntimeConfigCoordinator?
@@ -351,6 +360,10 @@ final class WindowSimulationSessionStore {
 
     func mainWindowPhysicsModuleSettingsStore() -> MainWindowPhysicsModuleSettingsStore {
         mainPhysicsModuleSettingsStore
+    }
+
+    func mainWindowDemoPresetStore() -> MainWindowDemoPresetStore {
+        mainDemoPresetStore
     }
 
     func mainWindowModuleCatalogStore() -> MainWindowModuleCatalogStore {

@@ -27,6 +27,9 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
     var playbackFrontLayerSlot: Int
     var playbackMiddleLayerSlot: Int
     var playbackFinalLayerSlot: Int
+    var playbackFrontLayerHorizontalOffset: Double
+    var playbackMiddleLayerHorizontalOffset: Double
+    var playbackFinalLayerHorizontalOffset: Double
     var playbackFrontLayerOffset: Double
     var playbackMiddleLayerOffset: Double
     var playbackFinalLayerOffset: Double
@@ -63,6 +66,9 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
         case playbackFrontLayerSlot
         case playbackMiddleLayerSlot
         case playbackFinalLayerSlot
+        case playbackFrontLayerHorizontalOffset
+        case playbackMiddleLayerHorizontalOffset
+        case playbackFinalLayerHorizontalOffset
         case playbackFrontLayerOffset
         case playbackMiddleLayerOffset
         case playbackFinalLayerOffset
@@ -100,6 +106,9 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
         playbackFrontLayerSlot: 0,
         playbackMiddleLayerSlot: 0,
         playbackFinalLayerSlot: 0,
+        playbackFrontLayerHorizontalOffset: -0.24,
+        playbackMiddleLayerHorizontalOffset: 0.0,
+        playbackFinalLayerHorizontalOffset: 0.24,
         playbackFrontLayerOffset: 0.32,
         playbackMiddleLayerOffset: 0.0,
         playbackFinalLayerOffset: -0.32,
@@ -137,6 +146,9 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
         playbackFrontLayerSlot: Int,
         playbackMiddleLayerSlot: Int,
         playbackFinalLayerSlot: Int,
+        playbackFrontLayerHorizontalOffset: Double,
+        playbackMiddleLayerHorizontalOffset: Double,
+        playbackFinalLayerHorizontalOffset: Double,
         playbackFrontLayerOffset: Double,
         playbackMiddleLayerOffset: Double,
         playbackFinalLayerOffset: Double,
@@ -172,6 +184,9 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
         self.playbackFrontLayerSlot = playbackFrontLayerSlot
         self.playbackMiddleLayerSlot = playbackMiddleLayerSlot
         self.playbackFinalLayerSlot = playbackFinalLayerSlot
+        self.playbackFrontLayerHorizontalOffset = playbackFrontLayerHorizontalOffset
+        self.playbackMiddleLayerHorizontalOffset = playbackMiddleLayerHorizontalOffset
+        self.playbackFinalLayerHorizontalOffset = playbackFinalLayerHorizontalOffset
         self.playbackFrontLayerOffset = playbackFrontLayerOffset
         self.playbackMiddleLayerOffset = playbackMiddleLayerOffset
         self.playbackFinalLayerOffset = playbackFinalLayerOffset
@@ -227,6 +242,18 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
         playbackFinalLayerSlot = min(
             max(0, try container.decodeIfPresent(Int.self, forKey: .playbackFinalLayerSlot) ?? fallback.playbackFinalLayerSlot),
             4
+        )
+        playbackFrontLayerHorizontalOffset = min(
+            max(-1.5, try container.decodeIfPresent(Double.self, forKey: .playbackFrontLayerHorizontalOffset) ?? fallback.playbackFrontLayerHorizontalOffset),
+            1.5
+        )
+        playbackMiddleLayerHorizontalOffset = min(
+            max(-1.5, try container.decodeIfPresent(Double.self, forKey: .playbackMiddleLayerHorizontalOffset) ?? fallback.playbackMiddleLayerHorizontalOffset),
+            1.5
+        )
+        playbackFinalLayerHorizontalOffset = min(
+            max(-1.5, try container.decodeIfPresent(Double.self, forKey: .playbackFinalLayerHorizontalOffset) ?? fallback.playbackFinalLayerHorizontalOffset),
+            1.5
         )
         playbackFrontLayerOffset = min(
             max(-1.5, try container.decodeIfPresent(Double.self, forKey: .playbackFrontLayerOffset) ?? fallback.playbackFrontLayerOffset),
@@ -291,6 +318,9 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
             playbackFrontLayerSlot: playbackFrontLayerSlot,
             playbackMiddleLayerSlot: playbackMiddleLayerSlot,
             playbackFinalLayerSlot: playbackFinalLayerSlot,
+            playbackFrontLayerHorizontalOffset: playbackFrontLayerHorizontalOffset,
+            playbackMiddleLayerHorizontalOffset: playbackMiddleLayerHorizontalOffset,
+            playbackFinalLayerHorizontalOffset: playbackFinalLayerHorizontalOffset,
             playbackFrontLayerOffset: playbackFrontLayerOffset,
             playbackMiddleLayerOffset: playbackMiddleLayerOffset,
             playbackFinalLayerOffset: playbackFinalLayerOffset
@@ -354,6 +384,9 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
             playbackFrontLayerSlot: min(max(0, visualState.playbackFrontLayerSlot), 4),
             playbackMiddleLayerSlot: min(max(0, visualState.playbackMiddleLayerSlot), 4),
             playbackFinalLayerSlot: min(max(0, visualState.playbackFinalLayerSlot), 4),
+            playbackFrontLayerHorizontalOffset: min(max(-1.5, visualState.playbackFrontLayerHorizontalOffset), 1.5),
+            playbackMiddleLayerHorizontalOffset: min(max(-1.5, visualState.playbackMiddleLayerHorizontalOffset), 1.5),
+            playbackFinalLayerHorizontalOffset: min(max(-1.5, visualState.playbackFinalLayerHorizontalOffset), 1.5),
             playbackFrontLayerOffset: min(max(-1.5, visualState.playbackFrontLayerOffset), 1.5),
             playbackMiddleLayerOffset: min(max(-1.5, visualState.playbackMiddleLayerOffset), 1.5),
             playbackFinalLayerOffset: min(max(-1.5, visualState.playbackFinalLayerOffset), 1.5),
@@ -408,6 +441,31 @@ final class MainWindowEditorSettingsStore: ObservableObject {
 
     init() {
         self.editorState = MainWindowSimulationStateStore.shared.load().editorState
+    }
+
+    func setEditorState(_ nextState: SimulationEditorState) {
+        let previous = editorState
+        editorState = nextState
+        persist()
+        InteractionSnapshotRecorder.shared.record(
+            event: "ui.set_editor_state",
+            details: [
+                "from": InteractionSnapshotFormat.viewport(
+                    SimulationConfigurationDerivation.simulationState(
+                        transportState: .stopped,
+                        editorState: previous,
+                        availableFiles: []
+                    )
+                ),
+                "to": InteractionSnapshotFormat.viewport(
+                    SimulationConfigurationDerivation.simulationState(
+                        transportState: .stopped,
+                        editorState: nextState,
+                        availableFiles: []
+                    )
+                ),
+            ]
+        )
     }
 
     func setPhysicsState(_ nextState: PhysicsModuleState) {

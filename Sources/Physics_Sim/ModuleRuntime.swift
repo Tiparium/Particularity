@@ -44,6 +44,9 @@ struct VisualModuleState {
     var playbackFrontLayerSlot = 0
     var playbackMiddleLayerSlot = 0
     var playbackFinalLayerSlot = 0
+    var playbackFrontLayerHorizontalOffset: Double = -0.24
+    var playbackMiddleLayerHorizontalOffset: Double = 0.0
+    var playbackFinalLayerHorizontalOffset: Double = 0.24
     var playbackFrontLayerOffset: Double = 0.32
     var playbackMiddleLayerOffset: Double = 0.0
     var playbackFinalLayerOffset: Double = -0.32
@@ -430,6 +433,9 @@ struct SimulationViewportState: Equatable {
     var playbackFrontLayerSlot: Int
     var playbackMiddleLayerSlot: Int
     var playbackFinalLayerSlot: Int
+    var playbackFrontLayerHorizontalOffset: Float
+    var playbackMiddleLayerHorizontalOffset: Float
+    var playbackFinalLayerHorizontalOffset: Float
     var playbackFrontLayerOffset: Float
     var playbackMiddleLayerOffset: Float
     var playbackFinalLayerOffset: Float

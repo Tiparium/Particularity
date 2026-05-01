@@ -147,6 +147,7 @@ struct MainWindowContentDependencies {
     let editorSettingsStore: MainWindowEditorSettingsStore
     let viewportStateStore: MainWindowViewportStateStore
     let physicsModuleSettingsStore: MainWindowPhysicsModuleSettingsStore
+    let demoPresetStore: MainWindowDemoPresetStore
     let moduleCatalogStore: MainWindowModuleCatalogStore
     let runtimeConfigCoordinator: SimulationRuntimeConfigCoordinator
     let diagnosticsStore: MainWindowDiagnosticsStore
@@ -165,6 +166,7 @@ struct MainWindowContentDependencies {
         await Task.yield()
         let editorSettingsStore = WindowSimulationSessionStore.shared.mainWindowEditorSettingsStore()
         let physicsModuleSettingsStore = WindowSimulationSessionStore.shared.mainWindowPhysicsModuleSettingsStore()
+        let demoPresetStore = WindowSimulationSessionStore.shared.mainWindowDemoPresetStore()
         let moduleCatalogStore = WindowSimulationSessionStore.shared.mainWindowModuleCatalogStore()
         let diagnosticsStore = WindowSimulationSessionStore.shared.mainWindowDiagnosticsStore()
 
@@ -180,6 +182,7 @@ struct MainWindowContentDependencies {
             editorSettingsStore: editorSettingsStore,
             viewportStateStore: WindowSimulationSessionStore.shared.mainWindowViewportStateStore(),
             physicsModuleSettingsStore: physicsModuleSettingsStore,
+            demoPresetStore: demoPresetStore,
             moduleCatalogStore: moduleCatalogStore,
             runtimeConfigCoordinator: runtimeConfigCoordinator,
             diagnosticsStore: diagnosticsStore,
@@ -208,6 +211,7 @@ struct ContentView: View {
     private let editorSettingsStore: MainWindowEditorSettingsStore
     private let viewportStateStore: MainWindowViewportStateStore
     private let physicsModuleSettingsStore: MainWindowPhysicsModuleSettingsStore
+    private let demoPresetStore: MainWindowDemoPresetStore
     private let moduleCatalogStore: MainWindowModuleCatalogStore
     private let runtimeConfigCoordinator: SimulationRuntimeConfigCoordinator
     private let diagnosticsStore: MainWindowDiagnosticsStore
@@ -220,6 +224,7 @@ struct ContentView: View {
         self.editorSettingsStore = dependencies.editorSettingsStore
         self.viewportStateStore = dependencies.viewportStateStore
         self.physicsModuleSettingsStore = dependencies.physicsModuleSettingsStore
+        self.demoPresetStore = dependencies.demoPresetStore
         self.moduleCatalogStore = dependencies.moduleCatalogStore
         self.runtimeConfigCoordinator = dependencies.runtimeConfigCoordinator
         self.diagnosticsStore = dependencies.diagnosticsStore
@@ -745,6 +750,8 @@ struct ContentView: View {
         case .moduleSlots:
             ModuleSlotsPanel(
                 editorSettingsStore: editorSettingsStore,
+                physicsModuleSettingsStore: physicsModuleSettingsStore,
+                demoPresetStore: demoPresetStore,
                 moduleCatalogStore: moduleCatalogStore,
                 chromeStateStore: chromeStateStore,
                 importerTargetKind: $importerTargetKind,
@@ -1359,6 +1366,7 @@ private struct PlaybackTimelineBar: View {
 
     @State private var currentSeconds: Double = 0
     @State private var isScrubbing = false
+    @State private var pendingScrubEndWorkItem: DispatchWorkItem?
 
     private var durationSeconds: Double {
         max(0.001, runtimeConfigCoordinator.playbackTimelineSnapshot.durationSeconds)
@@ -1383,18 +1391,17 @@ private struct PlaybackTimelineBar: View {
                         get: { currentSeconds },
                         set: {
                             let nextSeconds = min(max(0, $0), durationSeconds)
+                            logTimeline("slider_set from=\(formatSeconds(currentSeconds)) to=\(formatSeconds(nextSeconds)) scrubbing=\(isScrubbing)")
                             currentSeconds = nextSeconds
                             runtimeConfigCoordinator.setPlaybackTime(nextSeconds)
                         }
                     ),
                     in: 0...durationSeconds,
                     onEditingChanged: { editing in
-                        isScrubbing = editing
                         if editing {
-                            runtimeConfigCoordinator.beginPlaybackScrub()
+                            beginScrub()
                         } else {
-                            runtimeConfigCoordinator.endPlaybackScrub()
-                            syncTimelineFromRuntime()
+                            scheduleScrubEnd()
                         }
                     }
                 )
@@ -1427,7 +1434,38 @@ private struct PlaybackTimelineBar: View {
     private func syncTimelineFromRuntime() {
         guard !isScrubbing else { return }
         let snapshot = runtimeConfigCoordinator.playbackTimelineSnapshot
-        currentSeconds = min(max(0, snapshot.currentSeconds), max(0, snapshot.durationSeconds))
+        let nextSeconds = min(max(0, snapshot.currentSeconds), max(0, snapshot.durationSeconds))
+        if abs(nextSeconds - currentSeconds) > 0.01 {
+            logTimeline(
+                "sync_from_runtime from=\(formatSeconds(currentSeconds)) to=\(formatSeconds(nextSeconds)) snapshot=\(formatSeconds(snapshot.currentSeconds))"
+            )
+        }
+        currentSeconds = nextSeconds
+    }
+
+    private func beginScrub() {
+        pendingScrubEndWorkItem?.cancel()
+        pendingScrubEndWorkItem = nil
+        guard !isScrubbing else { return }
+        isScrubbing = true
+        logTimeline("begin_scrub current=\(formatSeconds(currentSeconds))")
+        runtimeConfigCoordinator.beginPlaybackScrub()
+    }
+
+    private func scheduleScrubEnd() {
+        pendingScrubEndWorkItem?.cancel()
+        let finalSeconds = currentSeconds
+        logTimeline("schedule_end_scrub current=\(formatSeconds(finalSeconds))")
+        let workItem = DispatchWorkItem {
+            logTimeline("end_scrub_commit current=\(formatSeconds(currentSeconds)) captured=\(formatSeconds(finalSeconds))")
+            runtimeConfigCoordinator.endPlaybackScrub(finalSeconds: currentSeconds)
+            isScrubbing = false
+            pendingScrubEndWorkItem = nil
+            syncTimelineFromRuntime()
+        }
+        pendingScrubEndWorkItem = workItem
+        DispatchQueue.main.async(execute: workItem)
+        currentSeconds = finalSeconds
     }
 
     private func formatTime(_ seconds: Double) -> String {
@@ -1435,6 +1473,15 @@ private struct PlaybackTimelineBar: View {
         let wholeSeconds = Int(bounded)
         let milliseconds = Int((bounded - Double(wholeSeconds)) * 1000)
         return String(format: "%02d:%02d.%03d", wholeSeconds / 60, wholeSeconds % 60, milliseconds)
+    }
+
+    private func formatSeconds(_ seconds: Double) -> String {
+        String(format: "%.4f", seconds)
+    }
+
+    private func logTimeline(_ message: String) {
+        // TODO: Remove or gate this playback timeline debug logging once the scrub handoff bug is resolved.
+        RuntimeEventLogger.log("playback_debug ui \(message)")
     }
 }
 
@@ -1462,6 +1509,8 @@ private struct SimulationViewportSurface: View {
 
 private struct ModuleSlotsPanel: View {
     @ObservedObject var editorSettingsStore: MainWindowEditorSettingsStore
+    @ObservedObject var physicsModuleSettingsStore: MainWindowPhysicsModuleSettingsStore
+    @ObservedObject var demoPresetStore: MainWindowDemoPresetStore
     @ObservedObject var moduleCatalogStore: MainWindowModuleCatalogStore
     @ObservedObject var chromeStateStore: MainWindowChromeStateStore
     @Binding var importerTargetKind: ModuleKind
@@ -1500,8 +1549,14 @@ private struct ModuleSlotsPanel: View {
         ).isPlaybackModuleFamily
     }
 
+    private var activeDemoPreset: DemoPlaybackPreset {
+        demoPresetStore.activePreset
+    }
+
     var body: some View {
         VStack(spacing: 8) {
+            demoPresetSelector
+
             if canAssignMLPlaybackFamily {
                 Button(isMLPlaybackFamilyActive ? "ML Playback Trio Active" : "Assign ML Playback Trio") {
                     assignMLPlaybackFamily()
@@ -1575,6 +1630,54 @@ private struct ModuleSlotsPanel: View {
                 }
             }
         }
+        .onAppear {
+            refreshDemoPresets()
+        }
+        .onReceive(editorSettingsStore.$editorState) { _ in
+            refreshDemoPresets()
+        }
+        .onReceive(physicsModuleSettingsStore.$snapshot) { _ in
+            refreshDemoPresets()
+        }
+        .onReceive(moduleCatalogStore.$availableFiles) { _ in
+            refreshDemoPresets()
+        }
+    }
+
+    private var demoPresetSelector: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Demo Presets")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            ForEach(DemoPlaybackPreset.allCases) { preset in
+                Button {
+                    selectDemoPreset(preset)
+                } label: {
+                    HStack {
+                        Text(preset.title)
+                            .multilineTextAlignment(.leading)
+                        Spacer()
+                        if preset == activeDemoPreset {
+                            Text("Active")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .font(.caption.weight(.semibold))
+                .buttonStyle(
+                    AppFramedButtonStyle(
+                        preset == activeDemoPreset ? .prominent : .standard
+                    )
+                )
+                .disabled(preset == .custom)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(8)
+        .background(.quaternary.opacity(0.14), in: RoundedRectangle(cornerRadius: 8))
     }
 
     private func assignMLPlaybackFamily() {
@@ -1582,6 +1685,26 @@ private struct ModuleSlotsPanel: View {
             guard let file = mlPlaybackFamilyFiles[kind] else { continue }
             editorSettingsStore.setAssignedModulePath(file.url.path, for: kind)
         }
+    }
+
+    private func selectDemoPreset(_ preset: DemoPlaybackPreset) {
+        demoPresetStore.applyPreset(
+            preset,
+            editorSettingsStore: editorSettingsStore,
+            physicsModuleSettingsStore: physicsModuleSettingsStore
+        )
+    }
+
+    private func refreshDemoPresets() {
+        demoPresetStore.ensureSeeded(
+            availableFiles: availableFiles,
+            fallbackEditorState: editorSettingsStore.editorState,
+            fallbackPhysicsSettings: physicsModuleSettingsStore.snapshot
+        )
+        demoPresetStore.syncFromLiveState(
+            editorState: editorSettingsStore.editorState,
+            physicsModuleSettings: physicsModuleSettingsStore.snapshot
+        )
     }
 
     private func resolvedAssignedFile(for kind: ModuleKind, assigned: URL?) -> ModuleFile? {
@@ -1965,6 +2088,18 @@ private struct MLPlaybackRecipeSettingsPanel: View {
             .disabled(!playbackControlsEnabled || !store.editorState.visualState.playbackFrontLayerVisible)
 
             EventuallyAppliedSlider(
+                title: "Front Horizontal",
+                appliedValue: Binding(
+                    get: { store.editorState.visualState.playbackFrontLayerHorizontalOffset },
+                    set: { runtimeConfigCoordinator.setPlaybackLayerHorizontalOffset(layer: .front, value: $0) }
+                ),
+                range: -1.5...1.5,
+                step: 0.02,
+                valueText: { String(format: "%.2f", $0) }
+            )
+            .disabled(!playbackControlsEnabled || !store.editorState.visualState.playbackFrontLayerVisible)
+
+            EventuallyAppliedSlider(
                 title: "Front Height",
                 appliedValue: Binding(
                     get: { store.editorState.visualState.playbackFrontLayerOffset },
@@ -1996,6 +2131,18 @@ private struct MLPlaybackRecipeSettingsPanel: View {
             .disabled(!playbackControlsEnabled || !store.editorState.visualState.playbackMiddleLayerVisible)
 
             EventuallyAppliedSlider(
+                title: "Middle Horizontal",
+                appliedValue: Binding(
+                    get: { store.editorState.visualState.playbackMiddleLayerHorizontalOffset },
+                    set: { runtimeConfigCoordinator.setPlaybackLayerHorizontalOffset(layer: .middle, value: $0) }
+                ),
+                range: -1.5...1.5,
+                step: 0.02,
+                valueText: { String(format: "%.2f", $0) }
+            )
+            .disabled(!playbackControlsEnabled || !store.editorState.visualState.playbackMiddleLayerVisible)
+
+            EventuallyAppliedSlider(
                 title: "Middle Height",
                 appliedValue: Binding(
                     get: { store.editorState.visualState.playbackMiddleLayerOffset },
@@ -2023,6 +2170,18 @@ private struct MLPlaybackRecipeSettingsPanel: View {
                     set: { runtimeConfigCoordinator.setPlaybackLayerSlot(layer: .final, slot: $0) }
                 ),
                 range: 0...4
+            )
+            .disabled(!playbackControlsEnabled || !store.editorState.visualState.playbackFinalLayerVisible)
+
+            EventuallyAppliedSlider(
+                title: "Final Horizontal",
+                appliedValue: Binding(
+                    get: { store.editorState.visualState.playbackFinalLayerHorizontalOffset },
+                    set: { runtimeConfigCoordinator.setPlaybackLayerHorizontalOffset(layer: .final, value: $0) }
+                ),
+                range: -1.5...1.5,
+                step: 0.02,
+                valueText: { String(format: "%.2f", $0) }
             )
             .disabled(!playbackControlsEnabled || !store.editorState.visualState.playbackFinalLayerVisible)
 
