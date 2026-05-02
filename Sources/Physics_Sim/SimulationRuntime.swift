@@ -144,6 +144,7 @@ final class SimulationRuntime: @unchecked Sendable {
     }
 
     private let device: MTLDevice
+    private let library: MTLLibrary
     private let commandQueue: MTLCommandQueue
     private let defaultPhysicsAccumulatePipeline: MTLComputePipelineState
     private let defaultPhysicsApplyPipeline: MTLComputePipelineState
@@ -185,6 +186,9 @@ final class SimulationRuntime: @unchecked Sendable {
     private var typeMatrixInteractionBuffer: MTLBuffer?
     private var typeMatrixSidecarFrontBuffer: MTLBuffer?
     private var typeMatrixSidecarBackBuffer: MTLBuffer?
+    private var customStandardPhysicsModuleID: String?
+    private var customStandardPhysicsAccumulatePipeline: MTLComputePipelineState?
+    private var customStandardPhysicsApplyPipeline: MTLComputePipelineState?
     private var debugLineBuffer: MTLBuffer?
     private var debugLineSegmentBuffer: MTLBuffer?
     private var activeParticleCount = 0
@@ -343,6 +347,7 @@ final class SimulationRuntime: @unchecked Sendable {
         }
 
         self.device = device
+        self.library = library
         guard let commandQueue = device.makeCommandQueue() else {
             throw SimulationRuntimeError.missingCommandQueue
         }
@@ -390,7 +395,11 @@ final class SimulationRuntime: @unchecked Sendable {
                 throw SimulationRuntimeError.incompatibleModules(nextModules, reason)
             }
             let previousOptimization = activeModules.optimization
+            let customPhysicsPipelines = try makeCustomStandardPhysicsPipelinesIfNeeded(for: nextModules.physics)
             activeModules = nextModules
+            customStandardPhysicsModuleID = customPhysicsPipelines?.moduleID
+            customStandardPhysicsAccumulatePipeline = customPhysicsPipelines?.accumulatePipeline
+            customStandardPhysicsApplyPipeline = customPhysicsPipelines?.applyPipeline
             if previousOptimization != nextModules.optimization {
                 needsInteractionPlanRefresh = true
                 cachedDefaultInteractionParticleCount = nil
@@ -851,6 +860,36 @@ final class SimulationRuntime: @unchecked Sendable {
             return
         }
 
+        if isCustomStandardPhysicsActive,
+           let accumulatePipeline = customStandardPhysicsAccumulatePipeline {
+            physicsEncoder.setComputePipelineState(accumulatePipeline)
+            physicsEncoder.setBuffer(sourceParticleBuffer, offset: 0, index: 0)
+            physicsEncoder.setBuffer(destinationParticleBuffer, offset: 0, index: 1)
+            physicsEncoder.setBuffer(interactionGroupIndicesBuffer, offset: 0, index: 2)
+            physicsEncoder.setBuffer(interactionRangeOffsetsBuffer, offset: 0, index: 3)
+            physicsEncoder.setBuffer(interactionRangeTargetsBuffer, offset: 0, index: 4)
+            physicsEncoder.setBuffer(interactionRangesBuffer, offset: 0, index: 5)
+            physicsEncoder.setBuffer(interactionIndicesBuffer, offset: 0, index: 6)
+            physicsEncoder.setBuffer(interactionScratchParticlesBuffer ?? sourceParticleBuffer, offset: 0, index: 7)
+            physicsEncoder.setBuffer(interactionScratchToCanonicalBuffer ?? interactionIndicesBuffer, offset: 0, index: 8)
+            var params = TemplatePhysicsAccumulateParams(
+                particleCount: UInt32(activeParticleCount),
+                interactionRadius: 0.18,
+                impulseScale: 0.004,
+                neighborReadMode: activeNeighborReadModeRawValue
+            )
+            physicsEncoder.setBytes(&params, length: MemoryLayout<TemplatePhysicsAccumulateParams>.stride, index: 9)
+            let threadsPerGroup = MTLSize(
+                width: min(accumulatePipeline.maxTotalThreadsPerThreadgroup, physicsThreadsPerGroup),
+                height: 1,
+                depth: 1
+            )
+            let threadCount = MTLSize(width: activeParticleCount, height: 1, depth: 1)
+            physicsEncoder.dispatchThreads(threadCount, threadsPerThreadgroup: threadsPerGroup)
+            physicsEncoder.endEncoding()
+            return
+        }
+
         physicsEncoder.setComputePipelineState(defaultPhysicsAccumulatePipeline)
         physicsEncoder.setBuffer(sourceParticleBuffer, offset: 0, index: 0)
         physicsEncoder.setBuffer(destinationParticleBuffer, offset: 0, index: 1)
@@ -926,6 +965,25 @@ final class SimulationRuntime: @unchecked Sendable {
             physicsEncoder.setBytes(&params, length: MemoryLayout<TemplatePhysicsApplyParams>.stride, index: 2)
             let threadsPerGroup = MTLSize(
                 width: min(templatePhysicsApplyPipeline.maxTotalThreadsPerThreadgroup, physicsThreadsPerGroup),
+                height: 1,
+                depth: 1
+            )
+            let threadCount = MTLSize(width: activeParticleCount, height: 1, depth: 1)
+            physicsEncoder.dispatchThreads(threadCount, threadsPerThreadgroup: threadsPerGroup)
+            physicsEncoder.endEncoding()
+        } else if isCustomStandardPhysicsActive,
+                  let applyPipeline = customStandardPhysicsApplyPipeline {
+            physicsEncoder.setComputePipelineState(applyPipeline)
+            physicsEncoder.setBuffer(sourceParticleBuffer, offset: 0, index: 0)
+            physicsEncoder.setBuffer(destinationParticleBuffer, offset: 0, index: 1)
+            var params = TemplatePhysicsApplyParams(
+                particleCount: UInt32(activeParticleCount),
+                deltaTime: fixedTimeStep * currentSimulationState.timeScale,
+                velocityDamping: 0.985
+            )
+            physicsEncoder.setBytes(&params, length: MemoryLayout<TemplatePhysicsApplyParams>.stride, index: 2)
+            let threadsPerGroup = MTLSize(
+                width: min(applyPipeline.maxTotalThreadsPerThreadgroup, physicsThreadsPerGroup),
                 height: 1,
                 depth: 1
             )
@@ -1411,6 +1469,47 @@ final class SimulationRuntime: @unchecked Sendable {
         debugHistory.rebuildRenderSegments(into: debugLineSegmentBuffer)
     }
 
+    private func makeCustomStandardPhysicsPipelinesIfNeeded(
+        for descriptor: ModuleDescriptor
+    ) throws -> (moduleID: String, accumulatePipeline: MTLComputePipelineState, applyPipeline: MTLComputePipelineState)? {
+        guard descriptor.executionModel == .realtime,
+              descriptor.pipelineStage == .processor,
+              descriptor.kind == ModuleKind.physics.rawValue,
+              !descriptor.isDefaultFallback,
+              ModuleCatalog.knownModulesByName[descriptor.name] == nil else {
+            return nil
+        }
+
+        guard let accumulateEntryPoint = descriptor.entryPoints.update.first else {
+            throw SimulationRuntimeError.incompatibleModules(
+                ActiveModuleSet(physics: descriptor, visual: activeModules.visual, optimization: activeModules.optimization),
+                "Physics module \(descriptor.name) must declare an update entry point."
+            )
+        }
+        guard let applyEntryPoint = descriptor.entryPoints.postUpdate.first else {
+            throw SimulationRuntimeError.incompatibleModules(
+                ActiveModuleSet(physics: descriptor, visual: activeModules.visual, optimization: activeModules.optimization),
+                "Physics module \(descriptor.name) must declare a postUpdate entry point."
+            )
+        }
+        guard let accumulateFunction = library.makeFunction(name: accumulateEntryPoint) else {
+            throw SimulationRuntimeError.missingFunction(accumulateEntryPoint)
+        }
+        guard let applyFunction = library.makeFunction(name: applyEntryPoint) else {
+            throw SimulationRuntimeError.missingFunction(applyEntryPoint)
+        }
+
+        do {
+            return (
+                descriptor.moduleID,
+                try device.makeComputePipelineState(function: accumulateFunction),
+                try device.makeComputePipelineState(function: applyFunction)
+            )
+        } catch {
+            throw SimulationRuntimeError.computePipelineCreationFailed("\(accumulateEntryPoint) / \(applyEntryPoint)")
+        }
+    }
+
     private func zeroParticleImpulseChannel() {
         guard let particleBackBuffer, activeParticleCount > 0 else { return }
         let particles = particleBackBuffer.contents().bindMemory(to: ParticleState.self, capacity: activeParticleCount)
@@ -1435,6 +1534,10 @@ final class SimulationRuntime: @unchecked Sendable {
 
     private var isTemplatePhysicsActive: Bool {
         activeModules.physics.name == PhysicsModuleTemplateRuntime.moduleName
+    }
+
+    private var isCustomStandardPhysicsActive: Bool {
+        customStandardPhysicsModuleID == activeModules.physics.moduleID
     }
 
     private var isFixedGridOptimizationActive: Bool {

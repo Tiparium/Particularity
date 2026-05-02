@@ -41,13 +41,52 @@ struct ModuleCompatibilityTests {
     func keepsOptimizationDebugValidation() {
         let modules = ActiveModuleSet(
             physics: ModuleCatalog.defaultPhysics,
-            visual: descriptor(kind: .visual, name: "No Debug Visual", executionModel: .realtime, pipelineStage: .presenter),
+            visual: ModuleCatalog.knownModulesByName["DefaultGreySpheres"]!,
             optimization: ModuleCatalog.defaultOptimization
         )
         var state = viewportState()
         state.showOptimizationInfo = true
 
         #expect(ModuleCompatibility.incompatibilityReason(for: modules, state: state)?.contains("does not accept optimization debug data") == true)
+    }
+
+    @Test("accepts custom realtime physics processors with standard entry points")
+    func acceptsCustomRealtimePhysicsProcessorWithStandardEntryPoints() {
+        let modules = ActiveModuleSet(
+            physics: descriptor(
+                kind: .physics,
+                name: "Custom Processor",
+                executionModel: .realtime,
+                pipelineStage: .processor,
+                entryPoints: ModuleEntryPoints(update: ["custom_accumulate"], postUpdate: ["custom_apply"])
+            ),
+            visual: ModuleCatalog.defaultVisual,
+            optimization: ModuleCatalog.defaultOptimization
+        )
+
+        #expect(ModuleCompatibility.incompatibilityReason(for: modules, state: viewportState()) == nil)
+    }
+
+    @Test("rejects custom physics processors without standard entry points")
+    func rejectsCustomPhysicsProcessorWithoutStandardEntryPoints() {
+        let modules = ActiveModuleSet(
+            physics: descriptor(kind: .physics, name: "Missing Entry Points", executionModel: .realtime, pipelineStage: .processor),
+            visual: ModuleCatalog.defaultVisual,
+            optimization: ModuleCatalog.defaultOptimization
+        )
+
+        #expect(ModuleCompatibility.incompatibilityReason(for: modules, state: viewportState())?.contains("must declare update and postUpdate") == true)
+    }
+
+    @Test("rejects manifest driven presenters until presenter execution is supported")
+    func rejectsManifestDrivenPresenterExecution() {
+        let modules = ActiveModuleSet(
+            physics: ModuleCatalog.defaultPhysics,
+            visual: descriptor(kind: .visual, name: "Custom Presenter", executionModel: .realtime, pipelineStage: .presenter),
+            optimization: ModuleCatalog.defaultOptimization
+        )
+
+        #expect(ModuleCompatibility.incompatibilityReason(for: modules, state: viewportState())?.contains("does not yet support manifest-driven visual execution") == true)
     }
 
     @Test("decodes required module manifest IDs and entry point arrays")
@@ -92,11 +131,53 @@ struct ModuleCompatibilityTests {
         }
     }
 
+    @Test("persists fixed grid optimization settings in the main editor snapshot")
+    func persistsFixedGridOptimizationSettings() throws {
+        var editorState = SimulationEditorState()
+        editorState.optimizationState = OptimizationModuleState(
+            showLeaderCommunicationLog: true,
+            fixedGridSubdivisions: 9,
+            fixedGridSubspaceCap: 4,
+            fixedGridNeighborReadMode: .raw
+        )
+
+        let encoded = try JSONEncoder().encode(MainWindowSimulationStateSnapshot.from(editorState: editorState))
+        let decoded = try JSONDecoder().decode(MainWindowSimulationStateSnapshot.self, from: encoded)
+
+        #expect(decoded.editorState.optimizationState.showLeaderCommunicationLog == true)
+        #expect(decoded.editorState.optimizationState.fixedGridSubdivisions == 9)
+        #expect(decoded.editorState.optimizationState.fixedGridSubspaceCap == 4)
+        #expect(decoded.editorState.optimizationState.fixedGridNeighborReadMode == .raw)
+    }
+
+    @Test("resolved configuration validates against the selected optimization module")
+    func resolvedConfigurationUsesSelectedOptimizationForValidation() {
+        var editorState = SimulationEditorState()
+        editorState.physicsState.particleCount = DefaultOptimizationModuleRuntime.particleCountCap + 1
+        editorState.assignedModuleIDs[ModuleKind.optimization.rawValue] = "particularity.realtime.producer.fixed_grid"
+
+        let configuration = SimulationConfigurationDerivation.resolvedRuntimeConfiguration(
+            editorState: editorState,
+            transportState: .stopped,
+            availableBundles: [
+                moduleBundle(
+                    id: "particularity.realtime.producer.fixed_grid",
+                    kind: .optimization,
+                    descriptor: ModuleCatalog.knownModulesByName[FixedGridOptimizationModuleRuntime.moduleName]!
+                )
+            ]
+        )
+
+        #expect(configuration.activeModules.optimization.name == FixedGridOptimizationModuleRuntime.moduleName)
+        #expect(configuration.validationReport.issue(for: .particleCount) == nil)
+    }
+
     private func descriptor(
         kind: ModuleKind,
         name: String,
         executionModel: ModuleExecutionModel,
-        pipelineStage: ModulePipelineStage
+        pipelineStage: ModulePipelineStage,
+        entryPoints: ModuleEntryPoints = ModuleEntryPoints()
     ) -> ModuleDescriptor {
         ModuleDescriptor(
             kind: kind.rawValue,
@@ -107,7 +188,24 @@ struct ModuleCompatibilityTests {
             providesOptimizationDebugInfo: false,
             supportsLeaderCommunicationLog: false,
             executionModel: executionModel,
-            pipelineStage: pipelineStage
+            pipelineStage: pipelineStage,
+            entryPoints: entryPoints
+        )
+    }
+
+    private func moduleBundle(
+        id: String,
+        kind: ModuleKind,
+        descriptor: ModuleDescriptor
+    ) -> ModuleBundle {
+        let url = URL(fileURLWithPath: "/tmp/\(id)/module.json")
+        return ModuleBundle(
+            id: id,
+            kind: kind,
+            manifestURL: url,
+            bundleURL: url.deletingLastPathComponent(),
+            descriptor: descriptor,
+            manifest: nil
         )
     }
 

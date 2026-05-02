@@ -1076,63 +1076,6 @@ private enum EditorViewSupport {
         })
     }
 
-    static func resolvedModule(
-        for kind: ModuleKind,
-        store: MainWindowEditorSettingsStore,
-        availableBundles: [ModuleBundle]
-    ) -> ModuleDescriptor {
-        SimulationConfigurationDerivation.resolveModule(
-            for: kind,
-            editorState: store.editorState,
-            availableBundles: availableBundles
-        )
-    }
-
-    static func resolvedVisualSupportsOptimizationDebug(
-        store: MainWindowEditorSettingsStore,
-        availableBundles: [ModuleBundle]
-    ) -> Bool {
-        SimulationConfigurationDerivation.visualSupportsOptimizationDebug(
-            editorState: store.editorState,
-            availableBundles: availableBundles
-        )
-    }
-
-    static func currentViewportState(
-        store: MainWindowEditorSettingsStore,
-        availableBundles: [ModuleBundle]
-    ) -> SimulationViewportState {
-        SimulationConfigurationDerivation.simulationState(
-            transportState: .stopped,
-            editorState: store.editorState,
-            availableBundles: availableBundles
-        )
-    }
-
-    static func activeModuleSet(
-        store: MainWindowEditorSettingsStore,
-        availableBundles: [ModuleBundle]
-    ) -> ActiveModuleSet {
-        SimulationConfigurationDerivation.activeModules(
-            editorState: store.editorState,
-            availableBundles: availableBundles
-        )
-    }
-
-    static func projectedMemoryBytes(editorState: SimulationEditorState) -> UInt64 {
-        SimulationConfigurationDerivation.projectedMemoryBytes(editorState: editorState)
-    }
-
-    static func validationReport(
-        store: MainWindowEditorSettingsStore,
-        availableBundles: [ModuleBundle]
-    ) -> RuntimeValidationReport {
-        SimulationConfigurationDerivation.validationReport(
-            editorState: store.editorState,
-            transportState: .stopped,
-            availableBundles: availableBundles
-        )
-    }
 }
 
 private struct SimulationCenterPane: View {
@@ -1659,6 +1602,7 @@ struct ModuleSlotsPanel: View {
     @ObservedObject var editorSettingsStore: MainWindowEditorSettingsStore
     @ObservedObject var moduleCatalogStore: MainWindowModuleCatalogStore
     @ObservedObject var chromeStateStore: MainWindowChromeStateStore
+    @ObservedObject var runtimeConfigCoordinator: SimulationRuntimeConfigCoordinator
     @Binding var importerTargetKind: ModuleKind
     @Binding var isImporterPresented: Bool
     @Environment(\.runtimeValidationReport) private var validationReport
@@ -1674,7 +1618,7 @@ struct ModuleSlotsPanel: View {
         VStack(spacing: 8) {
             ForEach(ModuleKind.allCases) { kind in
                 let assignedModuleID = EditorViewSupport.assignedModules(from: editorSettingsStore)[kind]
-                let resolved = EditorViewSupport.resolvedModule(for: kind, store: editorSettingsStore, availableBundles: availableBundles)
+                let resolved = resolvedModule(for: kind)
                 let issue = validationReport.issue(for: .assignedModule(kind))
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
@@ -1754,6 +1698,17 @@ struct ModuleSlotsPanel: View {
                     }
                 )
             }
+        }
+    }
+
+    private func resolvedModule(for kind: ModuleKind) -> ModuleDescriptor {
+        switch kind {
+        case .physics:
+            return runtimeConfigCoordinator.activeModules.physics
+        case .visual:
+            return runtimeConfigCoordinator.activeModules.visual
+        case .optimization:
+            return runtimeConfigCoordinator.activeModules.optimization
         }
     }
 }
@@ -1861,7 +1816,14 @@ struct ModuleSettingsPanelView: View {
     }
 
     private var resolved: ModuleDescriptor {
-        EditorViewSupport.resolvedModule(for: kind, store: editorSettingsStore, availableBundles: availableBundles)
+        switch kind {
+        case .physics:
+            return runtimeConfigCoordinator.activeModules.physics
+        case .visual:
+            return runtimeConfigCoordinator.activeModules.visual
+        case .optimization:
+            return runtimeConfigCoordinator.activeModules.optimization
+        }
     }
 
     var body: some View {
@@ -1903,7 +1865,11 @@ struct ModuleSettingsPanelView: View {
                     }
                 case .visual:
                     if resolved.name == ModuleCatalog.defaultVisual.name {
-                        VisualSettingsPanel(store: editorSettingsStore, optimizationDebugSupported: EditorViewSupport.resolvedVisualSupportsOptimizationDebug(store: editorSettingsStore, availableBundles: availableBundles))
+                        VisualSettingsPanel(
+                            store: editorSettingsStore,
+                            optimizationDebugSupported: runtimeConfigCoordinator.activeModules.visual.acceptsOptimizationDebugInfo
+                                && runtimeConfigCoordinator.activeModules.optimization.providesOptimizationDebugInfo
+                        )
                     } else {
                         unavailable
                     }

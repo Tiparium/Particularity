@@ -3,6 +3,7 @@ import Foundation
 
 @MainActor
 final class SimulationRuntimeConfigCoordinator: ObservableObject {
+    @Published private(set) var resolvedConfiguration: ResolvedRuntimeConfiguration
     @Published private(set) var transportState: SimulationTransportState
     @Published private(set) var simulationState: SimulationViewportState
     @Published private(set) var activeModules: ActiveModuleSet
@@ -25,23 +26,16 @@ final class SimulationRuntimeConfigCoordinator: ObservableObject {
         self.physicsModuleSettingsStore = physicsModuleSettingsStore
         self.moduleCatalogStore = moduleCatalogStore
 
-        let initialSimulationState = SimulationConfigurationDerivation.simulationState(
+        let initialConfiguration = SimulationConfigurationDerivation.resolvedRuntimeConfiguration(
+            editorState: editorSettingsStore.editorState,
             transportState: .stopped,
-            editorState: editorSettingsStore.editorState,
             availableBundles: moduleCatalogStore.availableBundles
         )
-        let initialActiveModules = SimulationConfigurationDerivation.activeModules(
-            editorState: editorSettingsStore.editorState,
-            availableBundles: moduleCatalogStore.availableBundles
-        )
+        self.resolvedConfiguration = initialConfiguration
         self.transportState = .stopped
-        self.simulationState = initialSimulationState
-        self.activeModules = initialActiveModules
-        self.validationReport = SimulationConfigurationDerivation.validationReport(
-            editorState: editorSettingsStore.editorState,
-            transportState: .stopped,
-            availableBundles: moduleCatalogStore.availableBundles
-        )
+        self.simulationState = initialConfiguration.simulationState
+        self.activeModules = initialConfiguration.activeModules
+        self.validationReport = initialConfiguration.validationReport
 
         editorSettingsStore.$editorState
             .sink { [weak self] editorState in
@@ -142,37 +136,29 @@ final class SimulationRuntimeConfigCoordinator: ObservableObject {
         editorState: SimulationEditorState,
         availableBundles: [ModuleBundle]
     ) {
-        let nextSimulationState = SimulationConfigurationDerivation.simulationState(
-            transportState: transportState,
-            editorState: editorState,
-            availableBundles: availableBundles
-        )
-        let nextActiveModules = SimulationConfigurationDerivation.activeModules(
-            editorState: editorState,
-            availableBundles: availableBundles
-        )
-        let nextValidationReport = SimulationConfigurationDerivation.validationReport(
+        let nextConfiguration = SimulationConfigurationDerivation.resolvedRuntimeConfiguration(
             editorState: editorState,
             transportState: transportState,
             availableBundles: availableBundles
         )
 
-        simulationState = nextSimulationState
-        activeModules = nextActiveModules
-        validationReport = nextValidationReport
+        resolvedConfiguration = nextConfiguration
+        simulationState = nextConfiguration.simulationState
+        activeModules = nextConfiguration.activeModules
+        validationReport = nextConfiguration.validationReport
         InteractionSnapshotRecorder.shared.record(
             event: "coordinator.recompute_and_apply",
             details: [
                 "transport": transportState.rawValue,
-                "simulationState": InteractionSnapshotFormat.viewport(nextSimulationState),
-                "activeModules": InteractionSnapshotFormat.activeModules(nextActiveModules),
-                "validationIssue": nextValidationReport.issue ?? "<nil>",
+                "simulationState": InteractionSnapshotFormat.viewport(nextConfiguration.simulationState),
+                "activeModules": InteractionSnapshotFormat.activeModules(nextConfiguration.activeModules),
+                "validationIssue": nextConfiguration.validationReport.issue ?? "<nil>",
             ]
         )
-        guard nextValidationReport.canStart else { return }
+        guard nextConfiguration.validationReport.canStart else { return }
         applyToSession(
-            simulationState: nextSimulationState,
-            activeModules: nextActiveModules
+            simulationState: nextConfiguration.simulationState,
+            activeModules: nextConfiguration.activeModules
         )
     }
 

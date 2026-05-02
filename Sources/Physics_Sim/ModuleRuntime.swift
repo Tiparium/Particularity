@@ -59,7 +59,7 @@ struct OptimizationModuleState {
     var fixedGridNeighborReadMode: FixedGridNeighborReadMode = .scratch
 }
 
-enum FixedGridNeighborReadMode: String, CaseIterable, Equatable, Sendable {
+enum FixedGridNeighborReadMode: String, Codable, CaseIterable, Equatable, Sendable {
     case raw
     case scratch
 
@@ -199,6 +199,7 @@ struct ModuleDescriptor: Identifiable, Equatable {
     let moduleFamilyID: String?
     let executionModel: ModuleExecutionModel
     let pipelineStage: ModulePipelineStage
+    let entryPoints: ModuleEntryPoints
 
     init(
         moduleID: String? = nil,
@@ -212,7 +213,8 @@ struct ModuleDescriptor: Identifiable, Equatable {
         supportsLeaderCommunicationLog: Bool,
         moduleFamilyID: String? = nil,
         executionModel: ModuleExecutionModel? = nil,
-        pipelineStage: ModulePipelineStage? = nil
+        pipelineStage: ModulePipelineStage? = nil,
+        entryPoints: ModuleEntryPoints = ModuleEntryPoints()
     ) {
         self.moduleID = moduleID ?? "internal.\(kind).\(name)"
         self.kind = kind
@@ -226,6 +228,7 @@ struct ModuleDescriptor: Identifiable, Equatable {
         self.moduleFamilyID = moduleFamilyID
         self.executionModel = executionModel ?? ModuleRoleMapping.defaultExecutionModel(for: kind)
         self.pipelineStage = pipelineStage ?? ModuleRoleMapping.defaultPipelineStage(for: kind)
+        self.entryPoints = entryPoints
     }
 
     var id: String {
@@ -240,7 +243,8 @@ struct ModuleDescriptor: Identifiable, Equatable {
         moduleID: String? = nil,
         version: Int? = nil,
         executionModel: ModuleExecutionModel?,
-        pipelineStage: ModulePipelineStage?
+        pipelineStage: ModulePipelineStage?,
+        entryPoints: ModuleEntryPoints? = nil
     ) -> ModuleDescriptor {
         ModuleDescriptor(
             moduleID: moduleID ?? self.moduleID,
@@ -254,7 +258,8 @@ struct ModuleDescriptor: Identifiable, Equatable {
             supportsLeaderCommunicationLog: supportsLeaderCommunicationLog,
             moduleFamilyID: moduleFamilyID,
             executionModel: executionModel ?? self.executionModel,
-            pipelineStage: pipelineStage ?? self.pipelineStage
+            pipelineStage: pipelineStage ?? self.pipelineStage,
+            entryPoints: entryPoints ?? self.entryPoints
         )
     }
 }
@@ -510,9 +515,19 @@ struct ActiveModuleSet: Equatable {
     }
 }
 
+struct ResolvedRuntimeConfiguration {
+    let simulationState: SimulationViewportState
+    let activeModules: ActiveModuleSet
+    let validationReport: RuntimeValidationReport
+}
+
 enum ModuleCompatibility {
     static func incompatibilityReason(for modules: ActiveModuleSet, state: SimulationViewportState) -> String? {
         if let issue = pipelineRoleIncompatibilityReason(for: modules) {
+            return issue
+        }
+
+        if let issue = runtimeSupportIncompatibilityReason(for: modules) {
             return issue
         }
 
@@ -529,6 +544,23 @@ enum ModuleCompatibility {
         }
 
         return nil
+    }
+
+    static func runtimeSupportIncompatibilityReason(for descriptor: ModuleDescriptor) -> String? {
+        if descriptor.isDefaultFallback || ModuleCatalog.knownModulesByName[descriptor.name] != nil {
+            return nil
+        }
+
+        if descriptor.executionModel == .realtime,
+           descriptor.pipelineStage == .processor,
+           descriptor.kind == ModuleKind.physics.rawValue {
+            if descriptor.entryPoints.update.isEmpty || descriptor.entryPoints.postUpdate.isEmpty {
+                return "Physics module \(descriptor.name) uses the standard realtime processor runtime, but it must declare update and postUpdate entry points."
+            }
+            return nil
+        }
+
+        return "\(descriptor.roleDisplayName) module \(descriptor.name) is discoverable, but this build does not yet support manifest-driven \(descriptor.roleDisplayName.lowercased()) execution."
     }
 
     private static func pipelineRoleIncompatibilityReason(for modules: ActiveModuleSet) -> String? {
@@ -561,6 +593,15 @@ enum ModuleCompatibility {
             }
         }
 
+        return nil
+    }
+
+    private static func runtimeSupportIncompatibilityReason(for modules: ActiveModuleSet) -> String? {
+        for descriptor in modules.descriptors {
+            if let issue = runtimeSupportIncompatibilityReason(for: descriptor) {
+                return issue
+            }
+        }
         return nil
     }
 }

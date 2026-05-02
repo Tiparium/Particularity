@@ -18,6 +18,9 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
     var spectrumOffset: Double
     var showOptimizationInfo: Bool
     var showLeaderCommunicationLog: Bool
+    var fixedGridSubdivisions: Int
+    var fixedGridSubspaceCap: Int
+    var fixedGridNeighborReadMode: FixedGridNeighborReadMode
     var protectLeaderFromUnload: Bool
     var assignedPhysicsModuleID: String?
     var assignedVisualModuleID: String?
@@ -36,6 +39,9 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
         case spectrumOffset
         case showOptimizationInfo
         case showLeaderCommunicationLog
+        case fixedGridSubdivisions
+        case fixedGridSubspaceCap
+        case fixedGridNeighborReadMode
         case protectLeaderFromUnload
         case assignedPhysicsModuleID
         case assignedVisualModuleID
@@ -58,6 +64,9 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
         spectrumOffset: 0.0,
         showOptimizationInfo: false,
         showLeaderCommunicationLog: false,
+        fixedGridSubdivisions: FixedGridOptimizationModuleRuntime.defaultSubdivisions,
+        fixedGridSubspaceCap: 2,
+        fixedGridNeighborReadMode: .scratch,
         protectLeaderFromUnload: true,
         assignedPhysicsModuleID: nil,
         assignedVisualModuleID: nil,
@@ -95,7 +104,10 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
 
     var optimizationState: OptimizationModuleState {
         OptimizationModuleState(
-            showLeaderCommunicationLog: showLeaderCommunicationLog
+            showLeaderCommunicationLog: showLeaderCommunicationLog,
+            fixedGridSubdivisions: fixedGridSubdivisions,
+            fixedGridSubspaceCap: fixedGridSubspaceCap,
+            fixedGridNeighborReadMode: fixedGridNeighborReadMode
         )
     }
 
@@ -131,6 +143,9 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
             spectrumOffset: visualState.spectrumOffset,
             showOptimizationInfo: visualState.showOptimizationInfo,
             showLeaderCommunicationLog: optimizationState.showLeaderCommunicationLog,
+            fixedGridSubdivisions: optimizationState.fixedGridSubdivisions,
+            fixedGridSubspaceCap: optimizationState.fixedGridSubspaceCap,
+            fixedGridNeighborReadMode: optimizationState.fixedGridNeighborReadMode,
             protectLeaderFromUnload: debugSettings.protectLeaderFromUnload,
             assignedPhysicsModuleID: assignedModuleIDs[Self.physicsModuleKey],
             assignedVisualModuleID: assignedModuleIDs[Self.visualModuleKey],
@@ -161,6 +176,9 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
         spectrumOffset: Double,
         showOptimizationInfo: Bool,
         showLeaderCommunicationLog: Bool,
+        fixedGridSubdivisions: Int,
+        fixedGridSubspaceCap: Int,
+        fixedGridNeighborReadMode: FixedGridNeighborReadMode,
         protectLeaderFromUnload: Bool,
         assignedPhysicsModuleID: String?,
         assignedVisualModuleID: String?,
@@ -178,6 +196,9 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
         self.spectrumOffset = spectrumOffset
         self.showOptimizationInfo = showOptimizationInfo
         self.showLeaderCommunicationLog = showLeaderCommunicationLog
+        self.fixedGridSubdivisions = fixedGridSubdivisions
+        self.fixedGridSubspaceCap = fixedGridSubspaceCap
+        self.fixedGridNeighborReadMode = fixedGridNeighborReadMode
         self.protectLeaderFromUnload = protectLeaderFromUnload
         self.assignedPhysicsModuleID = assignedPhysicsModuleID
         self.assignedVisualModuleID = assignedVisualModuleID
@@ -199,6 +220,9 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
         spectrumOffset = try container.decodeIfPresent(Double.self, forKey: .spectrumOffset) ?? fallback.spectrumOffset
         showOptimizationInfo = try container.decodeIfPresent(Bool.self, forKey: .showOptimizationInfo) ?? fallback.showOptimizationInfo
         showLeaderCommunicationLog = try container.decodeIfPresent(Bool.self, forKey: .showLeaderCommunicationLog) ?? fallback.showLeaderCommunicationLog
+        fixedGridSubdivisions = try container.decodeIfPresent(Int.self, forKey: .fixedGridSubdivisions) ?? fallback.fixedGridSubdivisions
+        fixedGridSubspaceCap = try container.decodeIfPresent(Int.self, forKey: .fixedGridSubspaceCap) ?? fallback.fixedGridSubspaceCap
+        fixedGridNeighborReadMode = try container.decodeIfPresent(FixedGridNeighborReadMode.self, forKey: .fixedGridNeighborReadMode) ?? fallback.fixedGridNeighborReadMode
         protectLeaderFromUnload = try container.decodeIfPresent(Bool.self, forKey: .protectLeaderFromUnload) ?? fallback.protectLeaderFromUnload
         assignedPhysicsModuleID = try container.decodeIfPresent(String.self, forKey: .assignedPhysicsModuleID)
             ?? container.decodeIfPresent(String.self, forKey: .assignedPhysicsModulePath)
@@ -222,6 +246,9 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
         try container.encode(spectrumOffset, forKey: .spectrumOffset)
         try container.encode(showOptimizationInfo, forKey: .showOptimizationInfo)
         try container.encode(showLeaderCommunicationLog, forKey: .showLeaderCommunicationLog)
+        try container.encode(fixedGridSubdivisions, forKey: .fixedGridSubdivisions)
+        try container.encode(fixedGridSubspaceCap, forKey: .fixedGridSubspaceCap)
+        try container.encode(fixedGridNeighborReadMode, forKey: .fixedGridNeighborReadMode)
         try container.encode(protectLeaderFromUnload, forKey: .protectLeaderFromUnload)
         try container.encodeIfPresent(assignedPhysicsModuleID, forKey: .assignedPhysicsModuleID)
         try container.encodeIfPresent(assignedVisualModuleID, forKey: .assignedVisualModuleID)

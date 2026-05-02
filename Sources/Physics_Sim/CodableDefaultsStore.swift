@@ -20,10 +20,9 @@ final class CodableDefaultsStore<Snapshot: Codable & Sendable> {
     }
 
     func save(_ snapshot: Snapshot) {
-        let defaultsKey = self.defaultsKey
-        queue.async {
+        queue.sync {
             guard let data = try? JSONEncoder().encode(snapshot) else { return }
-            UserDefaults.standard.set(data, forKey: defaultsKey)
+            UserDefaults.standard.set(data, forKey: self.defaultsKey)
         }
     }
 }

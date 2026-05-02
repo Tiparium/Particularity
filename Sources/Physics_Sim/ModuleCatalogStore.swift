@@ -77,7 +77,8 @@ final class MainWindowModuleCatalogStore: ObservableObject {
                 moduleID: manifest.id,
                 version: manifest.version,
                 executionModel: manifest.executionModel,
-                pipelineStage: manifest.pipelineStage
+                pipelineStage: manifest.pipelineStage,
+                entryPoints: manifest.entryPoints
             )
         }
 
@@ -92,7 +93,8 @@ final class MainWindowModuleCatalogStore: ObservableObject {
             providesOptimizationDebugInfo: false,
             supportsLeaderCommunicationLog: false,
             executionModel: manifest.executionModel,
-            pipelineStage: manifest.pipelineStage
+            pipelineStage: manifest.pipelineStage,
+            entryPoints: manifest.entryPoints
         )
     }
 

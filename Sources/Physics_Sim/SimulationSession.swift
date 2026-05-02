@@ -65,21 +65,19 @@ final class SimulationSession {
         metricsSink: @escaping @MainActor (SimulationPerformanceMetrics) -> Void = { _ in },
         leaderCommunicationLogSink: @escaping @MainActor ([LeaderCommunicationLogEntry]) -> Void = { _ in },
         editorSettingsStore: MainWindowEditorSettingsStore = .shared,
+        availableBundles: [ModuleBundle] = [],
         viewportStateStore: MainWindowViewportStateStore = .shared
     ) throws {
         self.metricsSink = metricsSink
         self.leaderCommunicationLogSink = leaderCommunicationLogSink
         self.viewportStateStore = viewportStateStore
-        self.currentSimulationState = SimulationConfigurationDerivation.simulationState(
-            transportState: .stopped,
+        let resolvedConfiguration = SimulationConfigurationDerivation.resolvedRuntimeConfiguration(
             editorState: editorSettingsStore.editorState,
-            availableBundles: []
+            transportState: .stopped,
+            availableBundles: availableBundles
         )
-        self.activeModules = ActiveModuleSet(
-            physics: ModuleCatalog.defaultPhysics,
-            visual: ModuleCatalog.defaultVisual,
-            optimization: ModuleCatalog.defaultOptimization
-        )
+        self.currentSimulationState = resolvedConfiguration.simulationState
+        self.activeModules = resolvedConfiguration.activeModules
 
         self.device = preparedBootstrap.device
         self.library = preparedBootstrap.library
@@ -96,6 +94,7 @@ final class SimulationSession {
         metricsSink: @escaping @MainActor (SimulationPerformanceMetrics) -> Void = { _ in },
         leaderCommunicationLogSink: @escaping @MainActor ([LeaderCommunicationLogEntry]) -> Void = { _ in },
         editorSettingsStore: MainWindowEditorSettingsStore = .shared,
+        availableBundles: [ModuleBundle] = [],
         viewportStateStore: MainWindowViewportStateStore = .shared
     ) async throws -> SimulationSession {
         let preparedBootstrap = try await Self.prepareBootstrap()
@@ -104,6 +103,7 @@ final class SimulationSession {
             metricsSink: metricsSink,
             leaderCommunicationLogSink: leaderCommunicationLogSink,
             editorSettingsStore: editorSettingsStore,
+            availableBundles: availableBundles,
             viewportStateStore: viewportStateStore
         )
     }
@@ -380,6 +380,7 @@ final class WindowSimulationSessionStore {
                 diagnosticsStore?.updateLeaderCommunicationLogEntries(entries)
             },
             editorSettingsStore: mainEditorSettingsStore,
+            availableBundles: mainModuleCatalogStore.availableBundles,
             viewportStateStore: mainViewportStateStore
         )
         session.updateTypeMatrixLocalSettings(mainPhysicsModuleSettingsStore.typeMatrixLocalSettings())

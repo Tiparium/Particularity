@@ -4,6 +4,39 @@ import simd
 enum SimulationConfigurationDerivation {
     private static let fixedGridProjectedMemorySafetyLimitBytes: UInt64 = 256 * 1024 * 1024
 
+    static func resolvedRuntimeConfiguration(
+        editorState: SimulationEditorState,
+        transportState: SimulationTransportState,
+        availableBundles: [ModuleBundle]
+    ) -> ResolvedRuntimeConfiguration {
+        let simulationState = simulationState(
+            transportState: transportState,
+            editorState: editorState,
+            availableBundles: availableBundles
+        )
+        let activeModules = activeModules(
+            editorState: editorState,
+            availableBundles: availableBundles
+        )
+        let projectedBytes = projectedMemoryBytes(
+            editorState: editorState,
+            activeModules: activeModules
+        )
+        let validationReport = validationReport(
+            editorState: editorState,
+            simulationState: simulationState,
+            activeModules: activeModules,
+            projectedBytes: projectedBytes,
+            availableBundles: availableBundles
+        )
+
+        return ResolvedRuntimeConfiguration(
+            simulationState: simulationState,
+            activeModules: activeModules,
+            validationReport: validationReport
+        )
+    }
+
     static func simulationState(
         transportState: SimulationTransportState,
         editorState: SimulationEditorState,
@@ -56,17 +89,20 @@ enum SimulationConfigurationDerivation {
         transportState: SimulationTransportState,
         availableBundles: [ModuleBundle]
     ) -> RuntimeValidationReport {
-        let simulationState = simulationState(
+        resolvedRuntimeConfiguration(
+            editorState: editorState,
             transportState: transportState,
-            editorState: editorState,
             availableBundles: availableBundles
-        )
-        let activeModules = activeModules(
-            editorState: editorState,
-            availableBundles: availableBundles
-        )
-        let projectedBytes = projectedMemoryBytes(editorState: editorState)
+        ).validationReport
+    }
 
+    private static func validationReport(
+        editorState: SimulationEditorState,
+        simulationState: SimulationViewportState,
+        activeModules: ActiveModuleSet,
+        projectedBytes: UInt64,
+        availableBundles: [ModuleBundle]
+    ) -> RuntimeValidationReport {
         var issues: [RuntimeValidationIssue] = []
 
         issues.append(contentsOf: moduleAssignmentIssues(editorState: editorState, availableBundles: availableBundles))
@@ -148,17 +184,30 @@ enum SimulationConfigurationDerivation {
                     message: "\(kind.displayName) assignment could not be read: \(bundle.manifestURL.lastPathComponent)."
                 )
             }
-            guard ModuleCatalog.knownModulesByName[descriptor.name] != nil else {
+            if let issue = ModuleCompatibility.runtimeSupportIncompatibilityReason(for: descriptor) {
                 return RuntimeValidationIssue(
                     field: .assignedModule(kind),
-                    message: "\(kind.displayName) assignment is not supported by this build: \(descriptor.name)."
+                    message: issue
                 )
             }
             return nil
         }
     }
 
-    static func projectedMemoryBytes(editorState: SimulationEditorState) -> UInt64 {
+    static func projectedMemoryBytes(
+        editorState: SimulationEditorState,
+        availableBundles: [ModuleBundle]
+    ) -> UInt64 {
+        projectedMemoryBytes(
+            editorState: editorState,
+            activeModules: activeModules(editorState: editorState, availableBundles: availableBundles)
+        )
+    }
+
+    static func projectedMemoryBytes(
+        editorState: SimulationEditorState,
+        activeModules modules: ActiveModuleSet
+    ) -> UInt64 {
         let particleCount = max(1, editorState.physicsState.particleCount)
         let baseParticleStride = 40
         let visualStride = 16
@@ -166,7 +215,6 @@ enum SimulationConfigurationDerivation {
         let typeBudget = 32 * 32
         let debugBudget = editorState.optimizationState.showLeaderCommunicationLog ? 8 * 1024 * 1024 : 0
         var reserved = UInt64(particleCount * (baseParticleStride + visualStride + optimizationStride) + typeBudget + debugBudget)
-        let modules = activeModules(editorState: editorState, availableBundles: [])
         if modules.optimization.name == FixedGridOptimizationModuleRuntime.moduleName {
             reserved += FixedGridOptimizationModuleRuntime.projectedTopologyBytes(
                 settings: FixedGridOptimizationSettings(

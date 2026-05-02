@@ -88,6 +88,7 @@ enum DockPanelRegistry {
                     editorSettingsStore: context.editorSettingsStore,
                     moduleCatalogStore: context.moduleCatalogStore,
                     chromeStateStore: context.chromeStateStore,
+                    runtimeConfigCoordinator: context.runtimeConfigCoordinator,
                     importerTargetKind: context.importerTargetKind,
                     isImporterPresented: context.isImporterPresented
                 )
