@@ -1,0 +1,9 @@
+{
+  "id": "particularity.realtime.presenter.default_grey_spheres",
+  "name": "DefaultGreySpheres",
+  "kind": "visual",
+  "executionModel": "realtime",
+  "pipelineStage": "presenter",
+  "version": 1,
+  "entryPoints": {}
+}

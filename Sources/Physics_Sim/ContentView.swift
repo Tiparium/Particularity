@@ -329,7 +329,7 @@ struct ContentView: View {
         .onAppear {
             moduleCatalogStore.refresh()
             CrashReportImporter.importRecentReports(diagnosticsStore: diagnosticsStore)
-            chromeStateStore.ensureSelectedFileID(availableFiles: moduleCatalogStore.availableFiles)
+            chromeStateStore.ensureSelectedModuleID(availableBundles: moduleCatalogStore.availableBundles)
             PerformanceReviewLogger.shared.configure(
                 runtimeConfigCoordinator: runtimeConfigCoordinator,
                 snapshotProvider: makePerformanceReviewSample
@@ -360,22 +360,13 @@ struct ContentView: View {
             viewportGeneration &+= 1
             diagnosticsStore.resetViewportDiagnostics()
         }
-        .onReceive(moduleCatalogStore.$availableFiles) { availableFiles in
-            chromeStateStore.ensureSelectedFileID(availableFiles: availableFiles)
+        .onReceive(moduleCatalogStore.$availableBundles) { availableBundles in
+            chromeStateStore.ensureSelectedModuleID(availableBundles: availableBundles)
         }
         .onExitCommand {
             cancelMenuInsertionMode()
             if panelDragSession != nil {
                 resetDragState()
-            }
-        }
-        .fileImporter(
-            isPresented: $isImporterPresented,
-            allowedContentTypes: [.json, .data, .text],
-            allowsMultipleSelection: false
-        ) { result in
-            if case .success(let urls) = result, let url = urls.first {
-                editorSettingsStore.setAssignedModulePath(url.path, for: importerTargetKind)
             }
         }
     }
@@ -769,9 +760,9 @@ struct ContentView: View {
         }
     }
 
-    private var selectedFile: ModuleFile? {
-        guard let selectedFileID = chromeStateStore.selectedFileID else { return nil }
-        return moduleCatalogStore.availableFiles.first(where: { $0.id == selectedFileID })
+    private var selectedBundle: ModuleBundle? {
+        guard let selectedModuleID = chromeStateStore.selectedModuleID else { return nil }
+        return moduleCatalogStore.availableBundles.first(where: { $0.id == selectedModuleID })
     }
 
     private var debugMetricsAreVisible: Bool {
@@ -849,7 +840,7 @@ struct ContentView: View {
         .shadow(color: .black.opacity(0.15), radius: 10, x: 0, y: 4)
     }
 
-    private func refreshModuleFiles() {
+    private func refreshModuleBundles() {
         moduleCatalogStore.refresh()
     }
 
@@ -906,7 +897,7 @@ struct ContentView: View {
             validationIssue: runtimeConfigCoordinator.validationReport.issue,
             projectedBytes: runtimeConfigCoordinator.validationReport.projectedBytes,
             viewportRuntimeError: diagnosticsStore.viewportRuntimeError,
-            selectedFile: selectedFile?.url.path,
+            selectedBundle: selectedBundle?.id,
             debugMetricsVisible: debugMetricsAreVisible,
             panels: panelStates,
             performanceMetrics: InteractionSnapshotFormat.performanceMetrics(diagnosticsStore.performanceMetrics)
@@ -1078,53 +1069,53 @@ struct ContentView: View {
 private enum EditorViewSupport {
     static func assignedModules(
         from store: MainWindowEditorSettingsStore
-    ) -> [ModuleKind: URL] {
+    ) -> [ModuleKind: String] {
         Dictionary(uniqueKeysWithValues: ModuleKind.allCases.compactMap { kind in
-            guard let path = store.assignedModulePath(for: kind) else { return nil }
-            return (kind, URL(fileURLWithPath: path))
+            guard let moduleID = store.assignedModuleID(for: kind) else { return nil }
+            return (kind, moduleID)
         })
     }
 
     static func resolvedModule(
         for kind: ModuleKind,
         store: MainWindowEditorSettingsStore,
-        availableFiles: [ModuleFile]
+        availableBundles: [ModuleBundle]
     ) -> ModuleDescriptor {
         SimulationConfigurationDerivation.resolveModule(
             for: kind,
             editorState: store.editorState,
-            availableFiles: availableFiles
+            availableBundles: availableBundles
         )
     }
 
     static func resolvedVisualSupportsOptimizationDebug(
         store: MainWindowEditorSettingsStore,
-        availableFiles: [ModuleFile]
+        availableBundles: [ModuleBundle]
     ) -> Bool {
         SimulationConfigurationDerivation.visualSupportsOptimizationDebug(
             editorState: store.editorState,
-            availableFiles: availableFiles
+            availableBundles: availableBundles
         )
     }
 
     static func currentViewportState(
         store: MainWindowEditorSettingsStore,
-        availableFiles: [ModuleFile]
+        availableBundles: [ModuleBundle]
     ) -> SimulationViewportState {
         SimulationConfigurationDerivation.simulationState(
             transportState: .stopped,
             editorState: store.editorState,
-            availableFiles: availableFiles
+            availableBundles: availableBundles
         )
     }
 
     static func activeModuleSet(
         store: MainWindowEditorSettingsStore,
-        availableFiles: [ModuleFile]
+        availableBundles: [ModuleBundle]
     ) -> ActiveModuleSet {
         SimulationConfigurationDerivation.activeModules(
             editorState: store.editorState,
-            availableFiles: availableFiles
+            availableBundles: availableBundles
         )
     }
 
@@ -1134,12 +1125,12 @@ private enum EditorViewSupport {
 
     static func validationReport(
         store: MainWindowEditorSettingsStore,
-        availableFiles: [ModuleFile]
+        availableBundles: [ModuleBundle]
     ) -> RuntimeValidationReport {
         SimulationConfigurationDerivation.validationReport(
             editorState: store.editorState,
             transportState: .stopped,
-            availableFiles: availableFiles
+            availableBundles: availableBundles
         )
     }
 }
@@ -1672,21 +1663,18 @@ struct ModuleSlotsPanel: View {
     @Binding var isImporterPresented: Bool
     @Environment(\.runtimeValidationReport) private var validationReport
     @Environment(\.highlightedValidationField) private var highlightedValidationField
+    @State private var pickerKind: ModuleKind?
+    @State private var pickerSearchText = ""
 
-    private var availableFiles: [ModuleFile] {
-        moduleCatalogStore.availableFiles
-    }
-
-    private var selectedFile: ModuleFile? {
-        guard let selectedFileID = chromeStateStore.selectedFileID else { return nil }
-        return availableFiles.first(where: { $0.id == selectedFileID })
+    private var availableBundles: [ModuleBundle] {
+        moduleCatalogStore.availableBundles
     }
 
     var body: some View {
         VStack(spacing: 8) {
             ForEach(ModuleKind.allCases) { kind in
-                let assigned = EditorViewSupport.assignedModules(from: editorSettingsStore)[kind]
-                let resolved = EditorViewSupport.resolvedModule(for: kind, store: editorSettingsStore, availableFiles: availableFiles)
+                let assignedModuleID = EditorViewSupport.assignedModules(from: editorSettingsStore)[kind]
+                let resolved = EditorViewSupport.resolvedModule(for: kind, store: editorSettingsStore, availableBundles: availableBundles)
                 let issue = validationReport.issue(for: .assignedModule(kind))
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
@@ -1701,30 +1689,31 @@ struct ModuleSlotsPanel: View {
                     }
 
                     HStack(spacing: 8) {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(assigned?.lastPathComponent ?? "Unassigned")
-                                .font(.caption2)
-                                .foregroundStyle(assigned == nil ? .secondary : .primary)
-                                .lineLimit(1)
-                            Text(assigned == nil ? "No file assigned. Runtime falls back to the built-in default module." : "Using assigned module file.")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        VStack(alignment: .trailing, spacing: 6) {
-                            if assigned != nil {
-                                Button("Clear") {
-                                    editorSettingsStore.setAssignedModulePath(nil, for: kind)
-                                }
-                                .font(.caption)
-                                .buttonStyle(AppFramedButtonStyle(.destructive))
+                        Button {
+                            pickerKind = kind
+                            pickerSearchText = ""
+                        } label: {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(resolved.name)
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(assignedModuleID == nil ? .secondary : .primary)
+                                    .lineLimit(1)
+                                Text(assignedModuleID == nil ? "Internal fallback" : assignedModuleID ?? "")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
                             }
-                            Button("Choose File") {
-                                importerTargetKind = kind
-                                isImporterPresented = true
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .buttonStyle(AppFramedButtonStyle())
+
+                        Spacer()
+                        if assignedModuleID != nil {
+                            Button("Clear") {
+                                editorSettingsStore.setAssignedModuleID(nil, for: kind)
                             }
                             .font(.caption)
-                            .buttonStyle(AppFramedButtonStyle())
+                            .buttonStyle(AppFramedButtonStyle(.destructive))
                         }
                     }
                 }
@@ -1732,14 +1721,9 @@ struct ModuleSlotsPanel: View {
                 .padding(8)
                 .background(.quaternary.opacity(0.18), in: RoundedRectangle(cornerRadius: 8))
                 .contextMenu {
-                    if let selectedFile, selectedFile.kind == kind {
-                        Button("Assign Selected File") {
-                            editorSettingsStore.setAssignedModulePath(selectedFile.url.path, for: kind)
-                        }
-                    }
-                    if assigned != nil {
+                    if assignedModuleID != nil {
                         Button("Clear Assignment", role: .destructive) {
-                            editorSettingsStore.setAssignedModulePath(nil, for: kind)
+                            editorSettingsStore.setAssignedModuleID(nil, for: kind)
                         }
                     }
                 }
@@ -1749,6 +1733,113 @@ struct ModuleSlotsPanel: View {
                 )
             }
         }
+        .popover(isPresented: Binding(
+            get: { pickerKind != nil },
+            set: { if !$0 { pickerKind = nil } }
+        )) {
+            if let pickerKind {
+                ModulePickerPopover(
+                    kind: pickerKind,
+                    searchText: $pickerSearchText,
+                    availableBundles: availableBundles,
+                    selectedModuleID: editorSettingsStore.assignedModuleID(for: pickerKind),
+                    onSelect: { bundle in
+                        editorSettingsStore.setAssignedModuleID(bundle.id, for: pickerKind)
+                        chromeStateStore.setSelectedModuleID(bundle.id)
+                        self.pickerKind = nil
+                    },
+                    onClear: {
+                        editorSettingsStore.setAssignedModuleID(nil, for: pickerKind)
+                        self.pickerKind = nil
+                    }
+                )
+            }
+        }
+    }
+}
+
+private struct ModulePickerPopover: View {
+    let kind: ModuleKind
+    @Binding var searchText: String
+    let availableBundles: [ModuleBundle]
+    let selectedModuleID: String?
+    let onSelect: (ModuleBundle) -> Void
+    let onClear: () -> Void
+
+    private var filteredBundles: [ModuleBundle] {
+        let stage = ModuleRoleMapping.expectedPipelineStage(for: kind)
+        let candidates = availableBundles.filter {
+            $0.kind == kind && $0.descriptor?.pipelineStage == stage
+        }
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return candidates }
+        return candidates.filter { bundle in
+            let descriptor = bundle.descriptor
+            return bundle.id.lowercased().contains(query)
+                || (descriptor?.name.lowercased().contains(query) ?? false)
+                || bundle.bundleURL.lastPathComponent.lowercased().contains(query)
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(kind.displayName)
+                        .font(.caption.weight(.semibold))
+                    Text(ModuleRoleMapping.expectedPipelineStage(for: kind).title)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Clear", action: onClear)
+                    .font(.caption)
+                    .buttonStyle(AppFramedButtonStyle(.destructive))
+            }
+
+            TextField("Search modules", text: $searchText)
+                .textFieldStyle(.roundedBorder)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 6) {
+                    if filteredBundles.isEmpty {
+                        Text("No matching modules")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.vertical, 8)
+                    } else {
+                        ForEach(filteredBundles) { bundle in
+                            Button {
+                                onSelect(bundle)
+                            } label: {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(bundle.descriptor?.name ?? bundle.id)
+                                            .font(.caption.weight(.semibold))
+                                            .lineLimit(1)
+                                        Text(bundle.id)
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                    }
+                                    Spacer()
+                                    if selectedModuleID == bundle.id {
+                                        Text("Active")
+                                            .font(.caption2.weight(.semibold))
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .buttonStyle(AppFramedButtonStyle(selectedModuleID == bundle.id ? .prominent : .standard))
+                        }
+                    }
+                }
+            }
+            .frame(width: 340, height: 260)
+        }
+        .padding(12)
     }
 }
 
@@ -1761,8 +1852,8 @@ struct ModuleSettingsPanelView: View {
     let particleCountUICap: Int
     let particleCountEngineCap: Int
 
-    private var availableFiles: [ModuleFile] {
-        moduleCatalogStore.availableFiles
+    private var availableBundles: [ModuleBundle] {
+        moduleCatalogStore.availableBundles
     }
 
     private var transportState: SimulationTransportState {
@@ -1770,7 +1861,7 @@ struct ModuleSettingsPanelView: View {
     }
 
     private var resolved: ModuleDescriptor {
-        EditorViewSupport.resolvedModule(for: kind, store: editorSettingsStore, availableFiles: availableFiles)
+        EditorViewSupport.resolvedModule(for: kind, store: editorSettingsStore, availableBundles: availableBundles)
     }
 
     var body: some View {
@@ -1812,7 +1903,7 @@ struct ModuleSettingsPanelView: View {
                     }
                 case .visual:
                     if resolved.name == ModuleCatalog.defaultVisual.name {
-                        VisualSettingsPanel(store: editorSettingsStore, optimizationDebugSupported: EditorViewSupport.resolvedVisualSupportsOptimizationDebug(store: editorSettingsStore, availableFiles: availableFiles))
+                        VisualSettingsPanel(store: editorSettingsStore, optimizationDebugSupported: EditorViewSupport.resolvedVisualSupportsOptimizationDebug(store: editorSettingsStore, availableBundles: availableBundles))
                     } else {
                         unavailable
                     }
@@ -2111,18 +2202,18 @@ struct LeaderCommunicationLogPanel: View {
     }
 }
 
-struct FileViewPanel: View {
+struct ModuleCatalogPanel: View {
     @ObservedObject var editorSettingsStore: MainWindowEditorSettingsStore
     @ObservedObject var moduleCatalogStore: MainWindowModuleCatalogStore
     @ObservedObject var chromeStateStore: MainWindowChromeStateStore
 
-    private var availableFiles: [ModuleFile] {
-        moduleCatalogStore.availableFiles
+    private var availableBundles: [ModuleBundle] {
+        moduleCatalogStore.availableBundles
     }
 
-    private var selectedFile: ModuleFile? {
-        guard let selectedFileID = chromeStateStore.selectedFileID else { return nil }
-        return availableFiles.first(where: { $0.id == selectedFileID })
+    private var selectedBundle: ModuleBundle? {
+        guard let selectedModuleID = chromeStateStore.selectedModuleID else { return nil }
+        return availableBundles.first(where: { $0.id == selectedModuleID })
     }
 
     var body: some View {
@@ -2144,30 +2235,36 @@ struct FileViewPanel: View {
                             Text(kind.displayName)
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.secondary)
-                            let files = availableFiles.filter { $0.kind == kind }
-                            if files.isEmpty {
-                                Text("No files")
+                            let bundles = availableBundles.filter { $0.kind == kind }
+                            if bundles.isEmpty {
+                                Text("No modules")
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
                             } else {
-                                ForEach(files) { file in
+                                ForEach(bundles) { bundle in
                                     Button {
-                                        chromeStateStore.setSelectedFileID(file.id)
+                                        chromeStateStore.setSelectedModuleID(bundle.id)
                                     } label: {
-                                        Text(file.url.lastPathComponent)
-                                            .font(.caption)
-                                            .lineLimit(1)
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                            .padding(.horizontal, 8)
-                                            .padding(.vertical, 5)
-                                            .background(
-                                                RoundedRectangle(cornerRadius: 6)
-                                                    .fill(
-                                                        chromeStateStore.selectedFileID == file.id
-                                                            ? AppControlPalette.accent.opacity(0.18)
-                                                            : Color(nsColor: .quaternaryLabelColor).opacity(0.09)
-                                                    )
-                                            )
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(bundle.descriptor?.name ?? bundle.id)
+                                                .font(.caption.weight(.semibold))
+                                                .lineLimit(1)
+                                            Text(bundle.id)
+                                                .font(.caption2)
+                                                .foregroundStyle(.secondary)
+                                                .lineLimit(1)
+                                        }
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 5)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 6)
+                                                .fill(
+                                                    chromeStateStore.selectedModuleID == bundle.id
+                                                        ? AppControlPalette.accent.opacity(0.18)
+                                                        : Color(nsColor: .quaternaryLabelColor).opacity(0.09)
+                                                )
+                                        )
                                     }
                                     .buttonStyle(.plain)
                                 }
@@ -2179,20 +2276,20 @@ struct FileViewPanel: View {
             .frame(minHeight: 180)
             .scrollIndicators(.visible)
 
-            if let selectedFile {
+            if let selectedBundle {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Selected: \(selectedFile.url.lastPathComponent)")
+                    Text("Selected: \(selectedBundle.descriptor?.name ?? selectedBundle.id)")
                         .font(.caption)
                         .lineLimit(1)
                     HStack(spacing: 8) {
-                        Button("Assign to \(selectedFile.kind.displayName)") {
-                            editorSettingsStore.setAssignedModulePath(selectedFile.url.path, for: selectedFile.kind)
+                        Button("Assign to \(selectedBundle.kind.displayName)") {
+                            editorSettingsStore.setAssignedModuleID(selectedBundle.id, for: selectedBundle.kind)
                         }
                         .font(.caption)
                         .buttonStyle(AppFramedButtonStyle())
-                        if editorSettingsStore.assignedModulePath(for: selectedFile.kind) != nil {
-                            Button("Clear \(selectedFile.kind.displayName)") {
-                                editorSettingsStore.setAssignedModulePath(nil, for: selectedFile.kind)
+                        if editorSettingsStore.assignedModuleID(for: selectedBundle.kind) != nil {
+                            Button("Clear \(selectedBundle.kind.displayName)") {
+                                editorSettingsStore.setAssignedModuleID(nil, for: selectedBundle.kind)
                             }
                             .font(.caption)
                             .buttonStyle(AppFramedButtonStyle(.destructive))

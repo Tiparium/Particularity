@@ -20,7 +20,7 @@ struct InteractionSnapshotState: Encodable {
     let validationIssue: String?
     let projectedBytes: UInt64
     let viewportRuntimeError: String?
-    let selectedFile: String?
+    let selectedBundle: String?
     let debugMetricsVisible: Bool
     let panels: [InteractionSnapshotPanelState]
     let performanceMetrics: String
@@ -75,8 +75,8 @@ enum InteractionSnapshotFormat {
         "memoryUsedBytes=\(metrics.memoryUsedBytes) averageFPS=\(format(metrics.averageFPS)) averageUPS=\(format(metrics.averageUPS)) leaderInteractionsPerSecond=\(format(metrics.leaderInteractionsPerSecond)) sampleWindowSeconds=\(format(metrics.sampleWindowSeconds))"
     }
 
-    static func assignedModulePath(_ path: String?) -> String {
-        path ?? "<nil>"
+    static func assignedModuleID(_ moduleID: String?) -> String {
+        moduleID ?? "<nil>"
     }
 
     private static func format(_ value: Double) -> String {

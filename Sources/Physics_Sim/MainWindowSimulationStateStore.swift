@@ -19,9 +19,31 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
     var showOptimizationInfo: Bool
     var showLeaderCommunicationLog: Bool
     var protectLeaderFromUnload: Bool
-    var assignedPhysicsModulePath: String?
-    var assignedVisualModulePath: String?
-    var assignedOptimizationModulePath: String?
+    var assignedPhysicsModuleID: String?
+    var assignedVisualModuleID: String?
+    var assignedOptimizationModuleID: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case particleCount
+        case randomDistribution
+        case particleTypes
+        case allParticlesIntercommunicate
+        case movementDirectionX
+        case movementDirectionY
+        case movementDirectionZ
+        case timeScale
+        case sphereSize
+        case spectrumOffset
+        case showOptimizationInfo
+        case showLeaderCommunicationLog
+        case protectLeaderFromUnload
+        case assignedPhysicsModuleID
+        case assignedVisualModuleID
+        case assignedOptimizationModuleID
+        case assignedPhysicsModulePath
+        case assignedVisualModulePath
+        case assignedOptimizationModulePath
+    }
 
     static let `default` = MainWindowSimulationStateSnapshot(
         particleCount: 20_000,
@@ -37,9 +59,9 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
         showOptimizationInfo: false,
         showLeaderCommunicationLog: false,
         protectLeaderFromUnload: true,
-        assignedPhysicsModulePath: nil,
-        assignedVisualModulePath: nil,
-        assignedOptimizationModulePath: nil
+        assignedPhysicsModuleID: nil,
+        assignedVisualModuleID: nil,
+        assignedOptimizationModuleID: nil
     )
 
     var editorState: SimulationEditorState {
@@ -48,7 +70,7 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
             visualState: visualState,
             optimizationState: optimizationState,
             debugSettings: debugSettings,
-            assignedModulePaths: assignedModules
+            assignedModuleIDs: assignedModules
         )
     }
 
@@ -83,9 +105,9 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
 
     var assignedModules: [String: String] {
         var result: [String: String] = [:]
-        if let assignedPhysicsModulePath { result[Self.physicsModuleKey] = assignedPhysicsModulePath }
-        if let assignedVisualModulePath { result[Self.visualModuleKey] = assignedVisualModulePath }
-        if let assignedOptimizationModulePath { result[Self.optimizationModuleKey] = assignedOptimizationModulePath }
+        if let assignedPhysicsModuleID { result[Self.physicsModuleKey] = assignedPhysicsModuleID }
+        if let assignedVisualModuleID { result[Self.visualModuleKey] = assignedVisualModuleID }
+        if let assignedOptimizationModuleID { result[Self.optimizationModuleKey] = assignedOptimizationModuleID }
         return result
     }
 
@@ -94,7 +116,7 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
         visualState: VisualModuleState,
         optimizationState: OptimizationModuleState,
         debugSettings: DebugSettingsState,
-        assignedModulePaths: [String: String]
+        assignedModuleIDs: [String: String]
     ) -> MainWindowSimulationStateSnapshot {
         MainWindowSimulationStateSnapshot(
             particleCount: physicsState.particleCount,
@@ -110,9 +132,9 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
             showOptimizationInfo: visualState.showOptimizationInfo,
             showLeaderCommunicationLog: optimizationState.showLeaderCommunicationLog,
             protectLeaderFromUnload: debugSettings.protectLeaderFromUnload,
-            assignedPhysicsModulePath: assignedModulePaths[Self.physicsModuleKey],
-            assignedVisualModulePath: assignedModulePaths[Self.visualModuleKey],
-            assignedOptimizationModulePath: assignedModulePaths[Self.optimizationModuleKey]
+            assignedPhysicsModuleID: assignedModuleIDs[Self.physicsModuleKey],
+            assignedVisualModuleID: assignedModuleIDs[Self.visualModuleKey],
+            assignedOptimizationModuleID: assignedModuleIDs[Self.optimizationModuleKey]
         )
     }
 
@@ -122,8 +144,88 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
             visualState: editorState.visualState,
             optimizationState: editorState.optimizationState,
             debugSettings: editorState.debugSettings,
-            assignedModulePaths: editorState.assignedModulePaths
+            assignedModuleIDs: editorState.assignedModuleIDs
         )
+    }
+
+    init(
+        particleCount: Int,
+        randomDistribution: Bool,
+        particleTypes: Int,
+        allParticlesIntercommunicate: Bool,
+        movementDirectionX: Double,
+        movementDirectionY: Double,
+        movementDirectionZ: Double,
+        timeScale: Double,
+        sphereSize: Double,
+        spectrumOffset: Double,
+        showOptimizationInfo: Bool,
+        showLeaderCommunicationLog: Bool,
+        protectLeaderFromUnload: Bool,
+        assignedPhysicsModuleID: String?,
+        assignedVisualModuleID: String?,
+        assignedOptimizationModuleID: String?
+    ) {
+        self.particleCount = particleCount
+        self.randomDistribution = randomDistribution
+        self.particleTypes = particleTypes
+        self.allParticlesIntercommunicate = allParticlesIntercommunicate
+        self.movementDirectionX = movementDirectionX
+        self.movementDirectionY = movementDirectionY
+        self.movementDirectionZ = movementDirectionZ
+        self.timeScale = timeScale
+        self.sphereSize = sphereSize
+        self.spectrumOffset = spectrumOffset
+        self.showOptimizationInfo = showOptimizationInfo
+        self.showLeaderCommunicationLog = showLeaderCommunicationLog
+        self.protectLeaderFromUnload = protectLeaderFromUnload
+        self.assignedPhysicsModuleID = assignedPhysicsModuleID
+        self.assignedVisualModuleID = assignedVisualModuleID
+        self.assignedOptimizationModuleID = assignedOptimizationModuleID
+    }
+
+    init(from decoder: Decoder) throws {
+        let fallback = Self.default
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        particleCount = try container.decodeIfPresent(Int.self, forKey: .particleCount) ?? fallback.particleCount
+        randomDistribution = try container.decodeIfPresent(Bool.self, forKey: .randomDistribution) ?? fallback.randomDistribution
+        particleTypes = try container.decodeIfPresent(Int.self, forKey: .particleTypes) ?? fallback.particleTypes
+        allParticlesIntercommunicate = try container.decodeIfPresent(Bool.self, forKey: .allParticlesIntercommunicate) ?? fallback.allParticlesIntercommunicate
+        movementDirectionX = try container.decodeIfPresent(Double.self, forKey: .movementDirectionX) ?? fallback.movementDirectionX
+        movementDirectionY = try container.decodeIfPresent(Double.self, forKey: .movementDirectionY) ?? fallback.movementDirectionY
+        movementDirectionZ = try container.decodeIfPresent(Double.self, forKey: .movementDirectionZ) ?? fallback.movementDirectionZ
+        timeScale = try container.decodeIfPresent(Double.self, forKey: .timeScale) ?? fallback.timeScale
+        sphereSize = try container.decodeIfPresent(Double.self, forKey: .sphereSize) ?? fallback.sphereSize
+        spectrumOffset = try container.decodeIfPresent(Double.self, forKey: .spectrumOffset) ?? fallback.spectrumOffset
+        showOptimizationInfo = try container.decodeIfPresent(Bool.self, forKey: .showOptimizationInfo) ?? fallback.showOptimizationInfo
+        showLeaderCommunicationLog = try container.decodeIfPresent(Bool.self, forKey: .showLeaderCommunicationLog) ?? fallback.showLeaderCommunicationLog
+        protectLeaderFromUnload = try container.decodeIfPresent(Bool.self, forKey: .protectLeaderFromUnload) ?? fallback.protectLeaderFromUnload
+        assignedPhysicsModuleID = try container.decodeIfPresent(String.self, forKey: .assignedPhysicsModuleID)
+            ?? container.decodeIfPresent(String.self, forKey: .assignedPhysicsModulePath)
+        assignedVisualModuleID = try container.decodeIfPresent(String.self, forKey: .assignedVisualModuleID)
+            ?? container.decodeIfPresent(String.self, forKey: .assignedVisualModulePath)
+        assignedOptimizationModuleID = try container.decodeIfPresent(String.self, forKey: .assignedOptimizationModuleID)
+            ?? container.decodeIfPresent(String.self, forKey: .assignedOptimizationModulePath)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(particleCount, forKey: .particleCount)
+        try container.encode(randomDistribution, forKey: .randomDistribution)
+        try container.encode(particleTypes, forKey: .particleTypes)
+        try container.encode(allParticlesIntercommunicate, forKey: .allParticlesIntercommunicate)
+        try container.encode(movementDirectionX, forKey: .movementDirectionX)
+        try container.encode(movementDirectionY, forKey: .movementDirectionY)
+        try container.encode(movementDirectionZ, forKey: .movementDirectionZ)
+        try container.encode(timeScale, forKey: .timeScale)
+        try container.encode(sphereSize, forKey: .sphereSize)
+        try container.encode(spectrumOffset, forKey: .spectrumOffset)
+        try container.encode(showOptimizationInfo, forKey: .showOptimizationInfo)
+        try container.encode(showLeaderCommunicationLog, forKey: .showLeaderCommunicationLog)
+        try container.encode(protectLeaderFromUnload, forKey: .protectLeaderFromUnload)
+        try container.encodeIfPresent(assignedPhysicsModuleID, forKey: .assignedPhysicsModuleID)
+        try container.encodeIfPresent(assignedVisualModuleID, forKey: .assignedVisualModuleID)
+        try container.encodeIfPresent(assignedOptimizationModuleID, forKey: .assignedOptimizationModuleID)
     }
 }
 
@@ -211,53 +313,52 @@ final class MainWindowEditorSettingsStore: ObservableObject {
         )
     }
 
-    func setAssignedModulePath(_ path: String?, for kind: ModuleKind) {
-        let previous = editorState.assignedModulePaths[kind.rawValue]
+    func setAssignedModuleID(_ moduleID: String?, for kind: ModuleKind) {
+        let previous = editorState.assignedModuleIDs[kind.rawValue]
         updateEditorState {
-            if let path {
-                $0.assignedModulePaths[kind.rawValue] = path
+            if let moduleID {
+                $0.assignedModuleIDs[kind.rawValue] = moduleID
             } else {
-                $0.assignedModulePaths.removeValue(forKey: kind.rawValue)
+                $0.assignedModuleIDs.removeValue(forKey: kind.rawValue)
             }
         }
         InteractionSnapshotRecorder.shared.record(
-            event: "ui.set_assigned_module_path",
+            event: "ui.set_assigned_module_id",
             details: [
                 "kind": kind.rawValue,
-                "from": InteractionSnapshotFormat.assignedModulePath(previous),
-                "to": InteractionSnapshotFormat.assignedModulePath(path),
+                "from": InteractionSnapshotFormat.assignedModuleID(previous),
+                "to": InteractionSnapshotFormat.assignedModuleID(moduleID),
             ]
         )
     }
 
-    func assignedModulePath(for kind: ModuleKind) -> String? {
-        editorState.assignedModulePaths[kind.rawValue]
+    func assignedModuleID(for kind: ModuleKind) -> String? {
+        editorState.assignedModuleIDs[kind.rawValue]
     }
 
-    func normalizeAssignedModulePaths(availableFiles: [ModuleFile]) {
-        var nextAssignments = editorState.assignedModulePaths
+    func normalizeAssignedModuleIDs(availableBundles: [ModuleBundle]) {
+        var nextAssignments = editorState.assignedModuleIDs
         var didChange = false
 
         for kind in ModuleKind.allCases {
-            guard let storedPath = nextAssignments[kind.rawValue],
-                  let resolvedFile = SimulationConfigurationDerivation.resolvedAssignedModuleFile(
+            guard let storedID = nextAssignments[kind.rawValue],
+                  let resolvedBundle = SimulationConfigurationDerivation.resolvedAssignedModuleBundle(
                     for: kind,
-                    assignedPath: storedPath,
-                    availableFiles: availableFiles
+                    assignedModuleID: storedID,
+                    availableBundles: availableBundles
                   ) else {
                 continue
             }
 
-            let resolvedPath = resolvedFile.url.path
-            if resolvedPath != storedPath {
-                nextAssignments[kind.rawValue] = resolvedPath
+            if resolvedBundle.id != storedID {
+                nextAssignments[kind.rawValue] = resolvedBundle.id
                 didChange = true
             }
         }
 
         guard didChange else { return }
         updateEditorState {
-            $0.assignedModulePaths = nextAssignments
+            $0.assignedModuleIDs = nextAssignments
         }
     }
 

@@ -109,51 +109,254 @@ enum ModuleKind: String, CaseIterable, Identifiable, Hashable {
     }
 }
 
+enum ModuleExecutionModel: String, Codable, CaseIterable, Equatable, Sendable {
+    case realtime
+    case playback
+
+    var title: String {
+        switch self {
+        case .realtime: return "Realtime"
+        case .playback: return "Playback"
+        }
+    }
+}
+
+enum ModulePipelineStage: String, Codable, CaseIterable, Equatable, Sendable {
+    case producer
+    case processor
+    case presenter
+
+    var title: String {
+        switch self {
+        case .producer: return "Producer"
+        case .processor: return "Processor"
+        case .presenter: return "Presenter"
+        }
+    }
+}
+
+enum ModuleRoleMapping {
+    static func defaultExecutionModel(for kind: String) -> ModuleExecutionModel {
+        .realtime
+    }
+
+    static func defaultPipelineStage(for kind: String) -> ModulePipelineStage {
+        switch kind {
+        case ModuleKind.optimization.rawValue:
+            return .producer
+        case ModuleKind.physics.rawValue:
+            return .processor
+        case ModuleKind.visual.rawValue:
+            return .presenter
+        default:
+            return .processor
+        }
+    }
+
+    static func expectedPipelineStage(for kind: ModuleKind) -> ModulePipelineStage {
+        defaultPipelineStage(for: kind.rawValue)
+    }
+
+    static func stageName(
+        executionModel: ModuleExecutionModel,
+        pipelineStage: ModulePipelineStage
+    ) -> String {
+        switch executionModel {
+        case .realtime:
+            switch pipelineStage {
+            case .producer: return "Optimization"
+            case .processor: return "Physics"
+            case .presenter: return "Visual"
+            }
+        case .playback:
+            switch pipelineStage {
+            case .producer: return "Reader"
+            case .processor: return "Processor"
+            case .presenter: return "Visual"
+            }
+        }
+    }
+}
+
 struct SimulationEditorState {
     var physicsState = PhysicsModuleState()
     var visualState = VisualModuleState()
     var optimizationState = OptimizationModuleState()
     var debugSettings = DebugSettingsState()
-    var assignedModulePaths: [String: String] = [:]
+    var assignedModuleIDs: [String: String] = [:]
 }
 
 struct ModuleDescriptor: Identifiable, Equatable {
+    let moduleID: String
     let kind: String
     let name: String
+    let version: Int
     let visibility: BuildVisibility
     let isDefaultFallback: Bool
     let acceptsOptimizationDebugInfo: Bool
     let providesOptimizationDebugInfo: Bool
     let supportsLeaderCommunicationLog: Bool
     let moduleFamilyID: String?
+    let executionModel: ModuleExecutionModel
+    let pipelineStage: ModulePipelineStage
 
     init(
+        moduleID: String? = nil,
         kind: String,
         name: String,
+        version: Int = 1,
         visibility: BuildVisibility,
         isDefaultFallback: Bool,
         acceptsOptimizationDebugInfo: Bool,
         providesOptimizationDebugInfo: Bool,
         supportsLeaderCommunicationLog: Bool,
-        moduleFamilyID: String? = nil
+        moduleFamilyID: String? = nil,
+        executionModel: ModuleExecutionModel? = nil,
+        pipelineStage: ModulePipelineStage? = nil
     ) {
+        self.moduleID = moduleID ?? "internal.\(kind).\(name)"
         self.kind = kind
         self.name = name
+        self.version = version
         self.visibility = visibility
         self.isDefaultFallback = isDefaultFallback
         self.acceptsOptimizationDebugInfo = acceptsOptimizationDebugInfo
         self.providesOptimizationDebugInfo = providesOptimizationDebugInfo
         self.supportsLeaderCommunicationLog = supportsLeaderCommunicationLog
         self.moduleFamilyID = moduleFamilyID
+        self.executionModel = executionModel ?? ModuleRoleMapping.defaultExecutionModel(for: kind)
+        self.pipelineStage = pipelineStage ?? ModuleRoleMapping.defaultPipelineStage(for: kind)
     }
 
     var id: String {
-        "\(kind)|\(name)"
+        moduleID
+    }
+
+    var roleDisplayName: String {
+        ModuleRoleMapping.stageName(executionModel: executionModel, pipelineStage: pipelineStage)
+    }
+
+    func withPipelineMetadata(
+        moduleID: String? = nil,
+        version: Int? = nil,
+        executionModel: ModuleExecutionModel?,
+        pipelineStage: ModulePipelineStage?
+    ) -> ModuleDescriptor {
+        ModuleDescriptor(
+            moduleID: moduleID ?? self.moduleID,
+            kind: kind,
+            name: name,
+            version: version ?? self.version,
+            visibility: visibility,
+            isDefaultFallback: isDefaultFallback,
+            acceptsOptimizationDebugInfo: acceptsOptimizationDebugInfo,
+            providesOptimizationDebugInfo: providesOptimizationDebugInfo,
+            supportsLeaderCommunicationLog: supportsLeaderCommunicationLog,
+            moduleFamilyID: moduleFamilyID,
+            executionModel: executionModel ?? self.executionModel,
+            pipelineStage: pipelineStage ?? self.pipelineStage
+        )
+    }
+}
+
+struct ModuleEntryPoints: Decodable, Equatable {
+    var initialize: [String]
+    var preUpdate: [String]
+    var update: [String]
+    var postUpdate: [String]
+    var teardown: [String]
+    var vertex: [String]
+    var fragment: [String]
+
+    init(
+        initialize: [String] = [],
+        preUpdate: [String] = [],
+        update: [String] = [],
+        postUpdate: [String] = [],
+        teardown: [String] = [],
+        vertex: [String] = [],
+        fragment: [String] = []
+    ) {
+        self.initialize = initialize
+        self.preUpdate = preUpdate
+        self.update = update
+        self.postUpdate = postUpdate
+        self.teardown = teardown
+        self.vertex = vertex
+        self.fragment = fragment
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case initialize
+        case preUpdate
+        case update
+        case postUpdate
+        case teardown
+        case vertex
+        case fragment
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        initialize = try container.decodeEntryPointListIfPresent(forKey: .initialize)
+        preUpdate = try container.decodeEntryPointListIfPresent(forKey: .preUpdate)
+        update = try container.decodeEntryPointListIfPresent(forKey: .update)
+        postUpdate = try container.decodeEntryPointListIfPresent(forKey: .postUpdate)
+        teardown = try container.decodeEntryPointListIfPresent(forKey: .teardown)
+        vertex = try container.decodeEntryPointListIfPresent(forKey: .vertex)
+        fragment = try container.decodeEntryPointListIfPresent(forKey: .fragment)
+    }
+}
+
+private extension KeyedDecodingContainer {
+    func decodeEntryPointListIfPresent(forKey key: Key) throws -> [String] {
+        if let list = try? decodeIfPresent([String].self, forKey: key) {
+            return list
+        }
+        if let single = try decodeIfPresent(String.self, forKey: key) {
+            return [single]
+        }
+        return []
+    }
+}
+
+struct ModuleManifest: Decodable, Equatable {
+    let id: String
+    let name: String
+    let kind: String
+    let version: Int
+    let executionModel: ModuleExecutionModel
+    let pipelineStage: ModulePipelineStage
+    let shaderSource: String?
+    let entryPoints: ModuleEntryPoints
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case kind
+        case version
+        case executionModel
+        case pipelineStage
+        case shaderSource
+        case entryPoints
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        kind = try container.decode(String.self, forKey: .kind)
+        version = try container.decode(Int.self, forKey: .version)
+        executionModel = try container.decode(ModuleExecutionModel.self, forKey: .executionModel)
+        pipelineStage = try container.decode(ModulePipelineStage.self, forKey: .pipelineStage)
+        shaderSource = try container.decodeIfPresent(String.self, forKey: .shaderSource)
+        entryPoints = try container.decodeIfPresent(ModuleEntryPoints.self, forKey: .entryPoints) ?? ModuleEntryPoints()
     }
 }
 
 enum ModuleCatalog {
     static let defaultPhysics = ModuleDescriptor(
+        moduleID: "internal.realtime.processor.default_physics_slide_loop",
         kind: "physics",
         name: "DefaultPhysicsSlideLoop",
         visibility: .production,
@@ -164,6 +367,7 @@ enum ModuleCatalog {
     )
 
     static let defaultVisual = ModuleDescriptor(
+        moduleID: "internal.realtime.presenter.default_rainbow_unlit_spheres",
         kind: "visual",
         name: "DefaultRainbowUnlitSpheres",
         visibility: .production,
@@ -174,6 +378,7 @@ enum ModuleCatalog {
     )
 
     static let defaultOptimization = ModuleDescriptor(
+        moduleID: "internal.realtime.producer.default_optimization_all_pairs",
         kind: "optimization",
         name: "DefaultOptimizationAllPairs",
         visibility: .production,
@@ -185,6 +390,7 @@ enum ModuleCatalog {
 
     static let knownModulesByName: [String: ModuleDescriptor] = [
         PhysicsModuleTemplateRuntime.moduleName: ModuleDescriptor(
+            moduleID: "particularity.realtime.processor.physics_module_template",
             kind: "physics",
             name: PhysicsModuleTemplateRuntime.moduleName,
             visibility: .production,
@@ -194,6 +400,7 @@ enum ModuleCatalog {
             supportsLeaderCommunicationLog: false
         ),
         "TypeMatrixLocalAttractionRepulsion": ModuleDescriptor(
+            moduleID: "particularity.realtime.processor.type_matrix_local",
             kind: "physics",
             name: "TypeMatrixLocalAttractionRepulsion",
             visibility: .production,
@@ -203,6 +410,7 @@ enum ModuleCatalog {
             supportsLeaderCommunicationLog: false
         ),
         "DefaultGreySpheres": ModuleDescriptor(
+            moduleID: "particularity.realtime.presenter.default_grey_spheres",
             kind: "visual",
             name: "DefaultGreySpheres",
             visibility: .production,
@@ -212,6 +420,7 @@ enum ModuleCatalog {
             supportsLeaderCommunicationLog: false
         ),
         FixedGridOptimizationModuleRuntime.moduleName: ModuleDescriptor(
+            moduleID: "particularity.realtime.producer.fixed_grid",
             kind: "optimization",
             name: FixedGridOptimizationModuleRuntime.moduleName,
             visibility: .production,
@@ -295,10 +504,18 @@ struct ActiveModuleSet: Equatable {
             .compactMap { $0 }
         return !familyIDs.isEmpty && completeModuleFamilyID == nil
     }
+
+    var descriptors: [ModuleDescriptor] {
+        [optimization, physics, visual]
+    }
 }
 
 enum ModuleCompatibility {
     static func incompatibilityReason(for modules: ActiveModuleSet, state: SimulationViewportState) -> String? {
+        if let issue = pipelineRoleIncompatibilityReason(for: modules) {
+            return issue
+        }
+
         if modules.hasPartialModuleFamilySelection {
             return "Playback module families must be selected as a compatible physics, visual, and optimization trio."
         }
@@ -309,6 +526,39 @@ enum ModuleCompatibility {
 
         if state.showOptimizationInfo && !modules.optimization.providesOptimizationDebugInfo {
             return "Optimization module \(modules.optimization.name) does not provide optimization debug data."
+        }
+
+        return nil
+    }
+
+    private static func pipelineRoleIncompatibilityReason(for modules: ActiveModuleSet) -> String? {
+        let descriptorsByKind: [(ModuleKind, ModuleDescriptor)] = [
+            (.optimization, modules.optimization),
+            (.physics, modules.physics),
+            (.visual, modules.visual),
+        ]
+
+        for (kind, descriptor) in descriptorsByKind {
+            let expectedStage = ModuleRoleMapping.expectedPipelineStage(for: kind)
+            guard descriptor.pipelineStage == expectedStage else {
+                return "\(kind.displayName) \(descriptor.name) declares pipeline stage \(descriptor.pipelineStage.title), but this slot requires \(expectedStage.title)."
+            }
+        }
+
+        let executionModels = Set(modules.descriptors.map(\.executionModel))
+        guard executionModels.count == 1 else {
+            let modelList = modules.descriptors
+                .map { "\($0.name): \($0.executionModel.title)" }
+                .joined(separator: ", ")
+            return "Active modules must share one execution model. Current selection: \(modelList)."
+        }
+
+        let stages = modules.descriptors.map(\.pipelineStage)
+        for requiredStage in ModulePipelineStage.allCases {
+            let count = stages.filter { $0 == requiredStage }.count
+            guard count == 1 else {
+                return "Active modules must include exactly one \(requiredStage.title.lowercased()) stage."
+            }
         }
 
         return nil

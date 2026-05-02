@@ -25,7 +25,7 @@ struct DockPanelType: RawRepresentable, Codable, Hashable, Sendable, Identifiabl
     static let physicsSettings: Self = "physicsSettings"
     static let visualSettings: Self = "visualSettings"
     static let optimizationSettings: Self = "optimizationSettings"
-    static let fileView: Self = "fileView"
+    static let moduleCatalog: Self = "moduleCatalog"
     static let inspector: Self = "inspector"
     static let leaderCommunicationLog: Self = "leaderCommunicationLog"
     static let debugSettings: Self = "debugSettings"
@@ -148,13 +148,13 @@ enum DockPanelRegistry {
             )
         },
         DockPanelDefinition(
-            type: .fileView,
-            title: "File View",
+            type: .moduleCatalog,
+            title: "Module Catalog",
             subtype: .core,
             defaultZone: nil
         ) { context in
             AnyView(
-                FileViewPanel(
+                ModuleCatalogPanel(
                     editorSettingsStore: context.editorSettingsStore,
                     moduleCatalogStore: context.moduleCatalogStore,
                     chromeStateStore: context.chromeStateStore

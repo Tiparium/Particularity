@@ -1,0 +1,18 @@
+{
+  "id": "particularity.realtime.producer.fixed_grid",
+  "name": "Fixed Grid Optimization Module",
+  "kind": "optimization",
+  "executionModel": "realtime",
+  "pipelineStage": "producer",
+  "version": 1,
+  "entryPoints": {
+    "preUpdate": "fixed_grid_clear_cell_counts",
+    "update": [
+      "fixed_grid_assign_particles_to_groups",
+      "fixed_grid_build_group_ranges",
+      "fixed_grid_scan_group_ranges",
+      "fixed_grid_finalize_group_ranges",
+      "fixed_grid_scatter_particle_indices"
+    ]
+  }
+}

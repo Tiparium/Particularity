@@ -23,5 +23,9 @@ let package = Package(
                 .linkedFramework("QuartzCore"),
             ]
         ),
+        .testTarget(
+            name: "ParticularityTests",
+            dependencies: ["Particularity"]
+        ),
     ]
 )

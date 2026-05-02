@@ -7,7 +7,7 @@ enum SimulationConfigurationDerivation {
     static func simulationState(
         transportState: SimulationTransportState,
         editorState: SimulationEditorState,
-        availableFiles: [ModuleFile]
+        availableBundles: [ModuleBundle]
     ) -> SimulationViewportState {
         SimulationViewportState(
             transportState: transportState,
@@ -25,7 +25,7 @@ enum SimulationConfigurationDerivation {
             spectrumOffset: Float(editorState.visualState.spectrumOffset),
             showOptimizationInfo: visualSupportsOptimizationDebug(
                 editorState: editorState,
-                availableFiles: availableFiles
+                availableBundles: availableBundles
             ) && editorState.visualState.showOptimizationInfo,
             showLeaderCommunicationLog: editorState.optimizationState.showLeaderCommunicationLog,
             fixedGridSubdivisions: max(1, editorState.optimizationState.fixedGridSubdivisions),
@@ -42,34 +42,34 @@ enum SimulationConfigurationDerivation {
 
     static func activeModules(
         editorState: SimulationEditorState,
-        availableFiles: [ModuleFile]
+        availableBundles: [ModuleBundle]
     ) -> ActiveModuleSet {
         ActiveModuleSet(
-            physics: resolveModule(for: .physics, editorState: editorState, availableFiles: availableFiles),
-            visual: resolveModule(for: .visual, editorState: editorState, availableFiles: availableFiles),
-            optimization: resolveModule(for: .optimization, editorState: editorState, availableFiles: availableFiles)
+            physics: resolveModule(for: .physics, editorState: editorState, availableBundles: availableBundles),
+            visual: resolveModule(for: .visual, editorState: editorState, availableBundles: availableBundles),
+            optimization: resolveModule(for: .optimization, editorState: editorState, availableBundles: availableBundles)
         )
     }
 
     static func validationReport(
         editorState: SimulationEditorState,
         transportState: SimulationTransportState,
-        availableFiles: [ModuleFile]
+        availableBundles: [ModuleBundle]
     ) -> RuntimeValidationReport {
         let simulationState = simulationState(
             transportState: transportState,
             editorState: editorState,
-            availableFiles: availableFiles
+            availableBundles: availableBundles
         )
         let activeModules = activeModules(
             editorState: editorState,
-            availableFiles: availableFiles
+            availableBundles: availableBundles
         )
         let projectedBytes = projectedMemoryBytes(editorState: editorState)
 
         var issues: [RuntimeValidationIssue] = []
 
-        issues.append(contentsOf: moduleAssignmentIssues(editorState: editorState, availableFiles: availableFiles))
+        issues.append(contentsOf: moduleAssignmentIssues(editorState: editorState, availableBundles: availableBundles))
 
         if editorState.physicsState.particleCount < 1 {
             issues.append(
@@ -132,20 +132,20 @@ enum SimulationConfigurationDerivation {
 
     private static func moduleAssignmentIssues(
         editorState: SimulationEditorState,
-        availableFiles: [ModuleFile]
+        availableBundles: [ModuleBundle]
     ) -> [RuntimeValidationIssue] {
         ModuleKind.allCases.compactMap { kind in
-            guard let assignedPath = editorState.assignedModulePaths[kind.rawValue] else { return nil }
-            guard let file = resolvedAssignedModuleFile(for: kind, assignedPath: assignedPath, availableFiles: availableFiles) else {
+            guard let assignedModuleID = editorState.assignedModuleIDs[kind.rawValue] else { return nil }
+            guard let bundle = resolvedAssignedModuleBundle(for: kind, assignedModuleID: assignedModuleID, availableBundles: availableBundles) else {
                 return RuntimeValidationIssue(
                     field: .assignedModule(kind),
-                    message: "\(kind.displayName) assignment is missing in this checkout: \(URL(fileURLWithPath: assignedPath).lastPathComponent)."
+                    message: "\(kind.displayName) assignment is missing in this checkout: \(assignedModuleID)."
                 )
             }
-            guard let descriptor = file.descriptor else {
+            guard let descriptor = bundle.descriptor else {
                 return RuntimeValidationIssue(
                     field: .assignedModule(kind),
-                    message: "\(kind.displayName) assignment could not be read: \(file.url.lastPathComponent)."
+                    message: "\(kind.displayName) assignment could not be read: \(bundle.manifestURL.lastPathComponent)."
                 )
             }
             guard ModuleCatalog.knownModulesByName[descriptor.name] != nil else {
@@ -166,7 +166,7 @@ enum SimulationConfigurationDerivation {
         let typeBudget = 32 * 32
         let debugBudget = editorState.optimizationState.showLeaderCommunicationLog ? 8 * 1024 * 1024 : 0
         var reserved = UInt64(particleCount * (baseParticleStride + visualStride + optimizationStride) + typeBudget + debugBudget)
-        let modules = activeModules(editorState: editorState, availableFiles: [])
+        let modules = activeModules(editorState: editorState, availableBundles: [])
         if modules.optimization.name == FixedGridOptimizationModuleRuntime.moduleName {
             reserved += FixedGridOptimizationModuleRuntime.projectedTopologyBytes(
                 settings: FixedGridOptimizationSettings(
@@ -183,23 +183,23 @@ enum SimulationConfigurationDerivation {
 
     static func visualSupportsOptimizationDebug(
         editorState: SimulationEditorState,
-        availableFiles: [ModuleFile]
+        availableBundles: [ModuleBundle]
     ) -> Bool {
-        resolveModule(for: .visual, editorState: editorState, availableFiles: availableFiles).acceptsOptimizationDebugInfo
-            && resolveModule(for: .optimization, editorState: editorState, availableFiles: availableFiles).providesOptimizationDebugInfo
+        resolveModule(for: .visual, editorState: editorState, availableBundles: availableBundles).acceptsOptimizationDebugInfo
+            && resolveModule(for: .optimization, editorState: editorState, availableBundles: availableBundles).providesOptimizationDebugInfo
     }
 
     static func resolveModule(
         for kind: ModuleKind,
         editorState: SimulationEditorState,
-        availableFiles: [ModuleFile]
+        availableBundles: [ModuleBundle]
     ) -> ModuleDescriptor {
-        guard let path = editorState.assignedModulePaths[kind.rawValue] else {
+        guard let moduleID = editorState.assignedModuleIDs[kind.rawValue] else {
             return ModuleCatalog.fallback(for: kind.rawValue)
         }
 
-        guard let file = resolvedAssignedModuleFile(for: kind, assignedPath: path, availableFiles: availableFiles),
-              let descriptor = file.descriptor,
+        guard let bundle = resolvedAssignedModuleBundle(for: kind, assignedModuleID: moduleID, availableBundles: availableBundles),
+              let descriptor = bundle.descriptor,
               descriptor.kind == kind.rawValue else {
             return ModuleCatalog.fallback(for: kind.rawValue)
         }
@@ -207,25 +207,28 @@ enum SimulationConfigurationDerivation {
         return descriptor
     }
 
-    static func resolvedAssignedModuleFile(
+    static func resolvedAssignedModuleBundle(
         for kind: ModuleKind,
-        assignedPath: String,
-        availableFiles: [ModuleFile]
-    ) -> ModuleFile? {
-        let assignedURL = URL(fileURLWithPath: assignedPath)
-        if let exact = availableFiles.first(where: { $0.kind == kind && $0.url == assignedURL && $0.descriptor?.kind == kind.rawValue }) {
+        assignedModuleID: String,
+        availableBundles: [ModuleBundle]
+    ) -> ModuleBundle? {
+        if let exact = availableBundles.first(where: { $0.kind == kind && $0.id == assignedModuleID && $0.descriptor?.kind == kind.rawValue }) {
             return exact
         }
 
-        // Support module-folder migrations by matching the manifest filename when the
-        // stored absolute path is stale but the module package kept the same manifest name.
-        let manifestName = assignedURL.lastPathComponent
-        if let filenameMatch = availableFiles.first(where: { $0.kind == kind && $0.url.lastPathComponent == manifestName && $0.descriptor?.kind == kind.rawValue }) {
+        let legacyURL = URL(fileURLWithPath: assignedModuleID)
+        if legacyURL.isFileURL,
+           let pathMatch = availableBundles.first(where: { $0.kind == kind && $0.manifestURL == legacyURL && $0.descriptor?.kind == kind.rawValue }) {
+            return pathMatch
+        }
+
+        let legacyManifestName = legacyURL.lastPathComponent
+        if let filenameMatch = availableBundles.first(where: { $0.kind == kind && $0.manifestURL.lastPathComponent == legacyManifestName && $0.descriptor?.kind == kind.rawValue }) {
             return filenameMatch
         }
 
-        if kind == .optimization, manifestName == "uniform_grid.module.json" {
-            return availableFiles.first {
+        if kind == .optimization, legacyManifestName == "uniform_grid.module.json" {
+            return availableBundles.first {
                 $0.kind == kind && $0.descriptor?.name == FixedGridOptimizationModuleRuntime.moduleName
             }
         }

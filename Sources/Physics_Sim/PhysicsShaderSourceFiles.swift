@@ -1,23 +1,16 @@
 import Foundation
 
 enum PhysicsShaderSourceFiles {
-    private struct PhysicsModuleManifest: Decodable {
-        let name: String
-        let kind: String
-        let version: Int
-        let shaderSource: String?
-    }
-
     static func defaultPhysicsSource() throws -> String {
         try loadShaderSource(named: "DefaultPhysicsModule")
     }
 
     static func packagedPhysicsSources() throws -> [String] {
         let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-            .appendingPathComponent("Modules/Physics", isDirectory: true)
+            .appendingPathComponent("Modules", isDirectory: true)
         let fileManager = FileManager.default
 
-        guard let entries = try? fileManager.contentsOfDirectory(
+        guard let enumerator = fileManager.enumerator(
             at: root,
             includingPropertiesForKeys: nil,
             options: [.skipsHiddenFiles]
@@ -25,25 +18,21 @@ enum PhysicsShaderSourceFiles {
             return []
         }
 
-        return try entries
-            .filter(\.hasDirectoryPath)
-            .sorted { $0.lastPathComponent < $1.lastPathComponent }
-            .compactMap { directoryURL in
-                guard let manifestURL = try fileManager.contentsOfDirectory(
-                    at: directoryURL,
-                    includingPropertiesForKeys: nil,
-                    options: [.skipsHiddenFiles]
-                ).first(where: { $0.pathExtension == "json" && $0.lastPathComponent.hasSuffix(".module.json") }) else {
-                    return nil
-                }
+        let manifestURLs = enumerator.compactMap { item -> URL? in
+            guard let url = item as? URL, url.lastPathComponent == "module.json" else { return nil }
+            return url
+        }
 
+        return try manifestURLs
+            .sorted { $0.path < $1.path }
+            .compactMap { manifestURL in
                 let manifestData = try Data(contentsOf: manifestURL)
-                let manifest = try JSONDecoder().decode(PhysicsModuleManifest.self, from: manifestData)
-                guard manifest.kind == "physics", let shaderSource = manifest.shaderSource else {
+                let manifest = try JSONDecoder().decode(ModuleManifest.self, from: manifestData)
+                guard manifest.kind == ModuleKind.physics.rawValue, let shaderSource = manifest.shaderSource else {
                     return nil
                 }
 
-                let shaderURL = directoryURL.appendingPathComponent(shaderSource)
+                let shaderURL = manifestURL.deletingLastPathComponent().appendingPathComponent(shaderSource)
                 do {
                     return try String(contentsOf: shaderURL, encoding: .utf8)
                 } catch {

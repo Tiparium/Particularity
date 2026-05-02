@@ -1,0 +1,13 @@
+{
+  "id": "particularity.realtime.processor.physics_module_template",
+  "name": "PhysicsModuleTemplate",
+  "kind": "physics",
+  "executionModel": "realtime",
+  "pipelineStage": "processor",
+  "version": 1,
+  "shaderSource": "module/PhysicsModuleTemplate.metal",
+  "entryPoints": {
+    "update": "template_physics_accumulate_impulse",
+    "postUpdate": "template_physics_apply_impulse"
+  }
+}

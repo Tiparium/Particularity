@@ -25,7 +25,7 @@ struct DockPanel: Identifiable, Codable, Equatable {
 struct MainWindowChromeStateSnapshot: Codable, Equatable, Sendable {
     var panels: [DockPanel]
     var collapsedPanelIDs: [UUID]
-    var selectedFileID: String?
+    var selectedModuleID: String?
     var leftPanelVisible: Bool
     var rightPanelVisible: Bool
     var bottomPanelVisible: Bool
@@ -36,6 +36,7 @@ struct MainWindowChromeStateSnapshot: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case panels
         case collapsedPanelIDs
+        case selectedModuleID
         case selectedFileID
         case sidePanelsVisible
         case leftPanelVisible
@@ -51,7 +52,7 @@ struct MainWindowChromeStateSnapshot: Codable, Equatable, Sendable {
     static let `default` = MainWindowChromeStateSnapshot(
         panels: currentDefaultPanels,
         collapsedPanelIDs: [],
-        selectedFileID: nil,
+        selectedModuleID: nil,
         leftPanelVisible: true,
         rightPanelVisible: true,
         bottomPanelVisible: true,
@@ -99,7 +100,7 @@ struct MainWindowChromeStateSnapshot: Codable, Equatable, Sendable {
     init(
         panels: [DockPanel],
         collapsedPanelIDs: [UUID],
-        selectedFileID: String?,
+        selectedModuleID: String?,
         leftPanelVisible: Bool,
         rightPanelVisible: Bool,
         bottomPanelVisible: Bool,
@@ -109,7 +110,7 @@ struct MainWindowChromeStateSnapshot: Codable, Equatable, Sendable {
     ) {
         self.panels = panels
         self.collapsedPanelIDs = collapsedPanelIDs
-        self.selectedFileID = selectedFileID
+        self.selectedModuleID = selectedModuleID
         self.leftPanelVisible = leftPanelVisible
         self.rightPanelVisible = rightPanelVisible
         self.bottomPanelVisible = bottomPanelVisible
@@ -122,7 +123,8 @@ struct MainWindowChromeStateSnapshot: Codable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         panels = try container.decode([DockPanel].self, forKey: .panels)
         collapsedPanelIDs = try container.decodeIfPresent([UUID].self, forKey: .collapsedPanelIDs) ?? []
-        selectedFileID = try container.decodeIfPresent(String.self, forKey: .selectedFileID)
+        selectedModuleID = try container.decodeIfPresent(String.self, forKey: .selectedModuleID)
+            ?? container.decodeIfPresent(String.self, forKey: .selectedFileID)
 
         let legacySidePanelsVisible = try container.decodeIfPresent(Bool.self, forKey: .sidePanelsVisible)
         leftPanelVisible = try container.decodeIfPresent(Bool.self, forKey: .leftPanelVisible) ?? legacySidePanelsVisible ?? true
@@ -138,7 +140,7 @@ struct MainWindowChromeStateSnapshot: Codable, Equatable, Sendable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(panels, forKey: .panels)
         try container.encode(collapsedPanelIDs, forKey: .collapsedPanelIDs)
-        try container.encodeIfPresent(selectedFileID, forKey: .selectedFileID)
+        try container.encodeIfPresent(selectedModuleID, forKey: .selectedModuleID)
         try container.encode(leftPanelVisible, forKey: .leftPanelVisible)
         try container.encode(rightPanelVisible, forKey: .rightPanelVisible)
         try container.encode(bottomPanelVisible, forKey: .bottomPanelVisible)
@@ -154,7 +156,7 @@ final class MainWindowChromeStateStore: ObservableObject {
 
     @Published private(set) var panels: [DockPanel]
     @Published private(set) var collapsedPanelIDs: Set<UUID>
-    @Published private(set) var selectedFileID: String?
+    @Published private(set) var selectedModuleID: String?
     @Published private(set) var leftPanelVisible: Bool
     @Published private(set) var rightPanelVisible: Bool
     @Published private(set) var bottomPanelVisible: Bool
@@ -174,7 +176,7 @@ final class MainWindowChromeStateStore: ObservableObject {
         let snapshot = store.load(fallback: .default).normalized()
         self.panels = snapshot.panels
         self.collapsedPanelIDs = Set(snapshot.collapsedPanelIDs)
-        self.selectedFileID = snapshot.selectedFileID
+        self.selectedModuleID = snapshot.selectedModuleID
         self.leftPanelVisible = snapshot.leftPanelVisible
         self.rightPanelVisible = snapshot.rightPanelVisible
         self.bottomPanelVisible = snapshot.bottomPanelVisible
@@ -225,9 +227,9 @@ final class MainWindowChromeStateStore: ObservableObject {
         schedulePersistence()
     }
 
-    func setSelectedFileID(_ nextID: String?) {
-        guard selectedFileID != nextID else { return }
-        selectedFileID = nextID
+    func setSelectedModuleID(_ nextID: String?) {
+        guard selectedModuleID != nextID else { return }
+        selectedModuleID = nextID
         schedulePersistence()
     }
 
@@ -258,15 +260,15 @@ final class MainWindowChromeStateStore: ObservableObject {
         schedulePersistence()
     }
 
-    func ensureSelectedFileID(availableFiles: [ModuleFile]) {
-        let availableIDs = Set(availableFiles.map(\.id))
+    func ensureSelectedModuleID(availableBundles: [ModuleBundle]) {
+        let availableIDs = Set(availableBundles.map(\.id))
         let nextID: String?
-        if let selectedFileID, availableIDs.contains(selectedFileID) {
-            nextID = selectedFileID
+        if let selectedModuleID, availableIDs.contains(selectedModuleID) {
+            nextID = selectedModuleID
         } else {
-            nextID = availableFiles.first?.id
+            nextID = availableBundles.first?.id
         }
-        setSelectedFileID(nextID)
+        setSelectedModuleID(nextID)
     }
 
     func savedLeftDockWidth(fallback: CGFloat) -> CGFloat {
@@ -309,7 +311,7 @@ final class MainWindowChromeStateStore: ObservableObject {
             MainWindowChromeStateSnapshot(
                 panels: panels,
                 collapsedPanelIDs: Array(collapsedPanelIDs),
-                selectedFileID: selectedFileID,
+                selectedModuleID: selectedModuleID,
                 leftPanelVisible: leftPanelVisible,
                 rightPanelVisible: rightPanelVisible,
                 bottomPanelVisible: bottomPanelVisible,

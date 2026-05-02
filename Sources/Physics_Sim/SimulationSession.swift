@@ -73,7 +73,7 @@ final class SimulationSession {
         self.currentSimulationState = SimulationConfigurationDerivation.simulationState(
             transportState: .stopped,
             editorState: editorSettingsStore.editorState,
-            availableFiles: []
+            availableBundles: []
         )
         self.activeModules = ActiveModuleSet(
             physics: ModuleCatalog.defaultPhysics,

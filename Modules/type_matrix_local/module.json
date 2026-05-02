@@ -1,0 +1,13 @@
+{
+  "id": "particularity.realtime.processor.type_matrix_local",
+  "name": "TypeMatrixLocalAttractionRepulsion",
+  "kind": "physics",
+  "executionModel": "realtime",
+  "pipelineStage": "processor",
+  "version": 1,
+  "shaderSource": "module/TypeMatrixLocalPhysicsModule.metal",
+  "entryPoints": {
+    "update": "type_matrix_accumulate_impulse",
+    "postUpdate": "type_matrix_apply_impulse"
+  }
+}

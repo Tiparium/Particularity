@@ -28,11 +28,11 @@ final class SimulationRuntimeConfigCoordinator: ObservableObject {
         let initialSimulationState = SimulationConfigurationDerivation.simulationState(
             transportState: .stopped,
             editorState: editorSettingsStore.editorState,
-            availableFiles: moduleCatalogStore.availableFiles
+            availableBundles: moduleCatalogStore.availableBundles
         )
         let initialActiveModules = SimulationConfigurationDerivation.activeModules(
             editorState: editorSettingsStore.editorState,
-            availableFiles: moduleCatalogStore.availableFiles
+            availableBundles: moduleCatalogStore.availableBundles
         )
         self.transportState = .stopped
         self.simulationState = initialSimulationState
@@ -40,25 +40,25 @@ final class SimulationRuntimeConfigCoordinator: ObservableObject {
         self.validationReport = SimulationConfigurationDerivation.validationReport(
             editorState: editorSettingsStore.editorState,
             transportState: .stopped,
-            availableFiles: moduleCatalogStore.availableFiles
+            availableBundles: moduleCatalogStore.availableBundles
         )
 
         editorSettingsStore.$editorState
             .sink { [weak self] editorState in
                 self?.recomputeAndApply(
                     editorState: editorState,
-                    availableFiles: self?.moduleCatalogStore.availableFiles ?? []
+                    availableBundles: self?.moduleCatalogStore.availableBundles ?? []
                 )
             }
             .store(in: &cancellables)
 
-        moduleCatalogStore.$availableFiles
-            .sink { [weak self] availableFiles in
+        moduleCatalogStore.$availableBundles
+            .sink { [weak self] availableBundles in
                 guard let self else { return }
-                self.editorSettingsStore.normalizeAssignedModulePaths(availableFiles: availableFiles)
+                self.editorSettingsStore.normalizeAssignedModuleIDs(availableBundles: availableBundles)
                 self.recomputeAndApply(
                     editorState: self.editorSettingsStore.editorState,
-                    availableFiles: availableFiles
+                    availableBundles: availableBundles
                 )
             }
             .store(in: &cancellables)
@@ -72,10 +72,10 @@ final class SimulationRuntimeConfigCoordinator: ObservableObject {
             }
             .store(in: &cancellables)
 
-        editorSettingsStore.normalizeAssignedModulePaths(availableFiles: moduleCatalogStore.availableFiles)
+        editorSettingsStore.normalizeAssignedModuleIDs(availableBundles: moduleCatalogStore.availableBundles)
         recomputeAndApply(
             editorState: editorSettingsStore.editorState,
-            availableFiles: moduleCatalogStore.availableFiles
+            availableBundles: moduleCatalogStore.availableBundles
         )
         session.updateTypeMatrixLocalSettings(physicsModuleSettingsStore.typeMatrixLocalSettings())
     }
@@ -87,7 +87,7 @@ final class SimulationRuntimeConfigCoordinator: ObservableObject {
     func refreshDerivedState() {
         recomputeAndApply(
             editorState: editorSettingsStore.editorState,
-            availableFiles: moduleCatalogStore.availableFiles
+            availableBundles: moduleCatalogStore.availableBundles
         )
     }
 
@@ -97,7 +97,7 @@ final class SimulationRuntimeConfigCoordinator: ObservableObject {
         transportState = .running
         recomputeAndApply(
             editorState: editorSettingsStore.editorState,
-            availableFiles: moduleCatalogStore.availableFiles
+            availableBundles: moduleCatalogStore.availableBundles
         )
     }
 
@@ -121,7 +121,7 @@ final class SimulationRuntimeConfigCoordinator: ObservableObject {
         )
         recomputeAndApply(
             editorState: editorSettingsStore.editorState,
-            availableFiles: moduleCatalogStore.availableFiles
+            availableBundles: moduleCatalogStore.availableBundles
         )
     }
 
@@ -134,27 +134,27 @@ final class SimulationRuntimeConfigCoordinator: ObservableObject {
         transportState = .stopped
         recomputeAndApply(
             editorState: editorSettingsStore.editorState,
-            availableFiles: moduleCatalogStore.availableFiles
+            availableBundles: moduleCatalogStore.availableBundles
         )
     }
 
     private func recomputeAndApply(
         editorState: SimulationEditorState,
-        availableFiles: [ModuleFile]
+        availableBundles: [ModuleBundle]
     ) {
         let nextSimulationState = SimulationConfigurationDerivation.simulationState(
             transportState: transportState,
             editorState: editorState,
-            availableFiles: availableFiles
+            availableBundles: availableBundles
         )
         let nextActiveModules = SimulationConfigurationDerivation.activeModules(
             editorState: editorState,
-            availableFiles: availableFiles
+            availableBundles: availableBundles
         )
         let nextValidationReport = SimulationConfigurationDerivation.validationReport(
             editorState: editorState,
             transportState: transportState,
-            availableFiles: availableFiles
+            availableBundles: availableBundles
         )
 
         simulationState = nextSimulationState
