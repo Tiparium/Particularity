@@ -96,7 +96,7 @@ enum DockPanelRegistry {
         },
         DockPanelDefinition(
             type: .physicsSettings,
-            title: "Physics Settings",
+            title: "Processor Settings",
             subtype: .core,
             defaultZone: .right
         ) { context in
@@ -114,7 +114,7 @@ enum DockPanelRegistry {
         },
         DockPanelDefinition(
             type: .visualSettings,
-            title: "Visual Settings",
+            title: "Presenter Settings",
             subtype: .core,
             defaultZone: .right
         ) { context in
@@ -132,7 +132,7 @@ enum DockPanelRegistry {
         },
         DockPanelDefinition(
             type: .optimizationSettings,
-            title: "Optimization Settings",
+            title: "Producer Settings",
             subtype: .core,
             defaultZone: .right
         ) { context in

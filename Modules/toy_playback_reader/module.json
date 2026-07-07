@@ -1,0 +1,13 @@
+{
+  "id": "particularity.playback.producer.toy_reader",
+  "name": "ToyPlaybackReader",
+  "kind": "optimization",
+  "executionModel": "playback",
+  "pipelineStage": "producer",
+  "moduleFamilyID": "particularity.playback.family.toy_v1",
+  "version": 1,
+  "producesContracts": [
+    "particularity.playback.toy_source.v1"
+  ],
+  "entryPoints": {}
+}

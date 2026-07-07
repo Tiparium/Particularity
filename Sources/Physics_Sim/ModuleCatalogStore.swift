@@ -76,6 +76,9 @@ final class MainWindowModuleCatalogStore: ObservableObject {
             return known.withPipelineMetadata(
                 moduleID: manifest.id,
                 version: manifest.version,
+                moduleFamilyID: manifest.moduleFamilyID,
+                consumesContracts: manifest.consumesContracts,
+                producesContracts: manifest.producesContracts,
                 executionModel: manifest.executionModel,
                 pipelineStage: manifest.pipelineStage,
                 entryPoints: manifest.entryPoints
@@ -92,6 +95,9 @@ final class MainWindowModuleCatalogStore: ObservableObject {
             acceptsOptimizationDebugInfo: false,
             providesOptimizationDebugInfo: false,
             supportsLeaderCommunicationLog: false,
+            moduleFamilyID: manifest.moduleFamilyID,
+            consumesContracts: manifest.consumesContracts,
+            producesContracts: manifest.producesContracts,
             executionModel: manifest.executionModel,
             pipelineStage: manifest.pipelineStage,
             entryPoints: manifest.entryPoints

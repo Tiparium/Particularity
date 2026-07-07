@@ -130,6 +130,10 @@ final class SimulationSession {
         )
     }
 
+    var playbackTimelineState: PlaybackTimelineState {
+        runtime?.playbackTimelineState ?? PlaybackTimelineState()
+    }
+
     func updateSimulationState(_ nextState: SimulationViewportState) {
         let previousTransportState = currentSimulationState.transportState
         currentSimulationState = nextState
@@ -174,6 +178,10 @@ final class SimulationSession {
             ]
         )
         runtime?.updateTypeMatrixLocalSettings(nextSettings)
+    }
+
+    func seekPlayback(to seconds: Double) {
+        runtime?.seekPlayback(to: seconds)
     }
 
     func publishFrameMetrics(averageFPS: Double, at now: TimeInterval) {

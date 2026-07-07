@@ -77,6 +77,11 @@ struct DebugSettingsState {
     var protectLeaderFromUnload = true
 }
 
+struct PlaybackModuleState {
+    var playbackRate: Double = 1.0
+    var looping = true
+}
+
 enum ModuleKind: String, CaseIterable, Identifiable, Hashable {
     case physics
     case visual
@@ -182,6 +187,7 @@ struct SimulationEditorState {
     var physicsState = PhysicsModuleState()
     var visualState = VisualModuleState()
     var optimizationState = OptimizationModuleState()
+    var playbackState = PlaybackModuleState()
     var debugSettings = DebugSettingsState()
     var assignedModuleIDs: [String: String] = [:]
 }
@@ -197,6 +203,8 @@ struct ModuleDescriptor: Identifiable, Equatable {
     let providesOptimizationDebugInfo: Bool
     let supportsLeaderCommunicationLog: Bool
     let moduleFamilyID: String?
+    let consumesContracts: [String]
+    let producesContracts: [String]
     let executionModel: ModuleExecutionModel
     let pipelineStage: ModulePipelineStage
     let entryPoints: ModuleEntryPoints
@@ -212,6 +220,8 @@ struct ModuleDescriptor: Identifiable, Equatable {
         providesOptimizationDebugInfo: Bool,
         supportsLeaderCommunicationLog: Bool,
         moduleFamilyID: String? = nil,
+        consumesContracts: [String] = [],
+        producesContracts: [String] = [],
         executionModel: ModuleExecutionModel? = nil,
         pipelineStage: ModulePipelineStage? = nil,
         entryPoints: ModuleEntryPoints = ModuleEntryPoints()
@@ -226,6 +236,8 @@ struct ModuleDescriptor: Identifiable, Equatable {
         self.providesOptimizationDebugInfo = providesOptimizationDebugInfo
         self.supportsLeaderCommunicationLog = supportsLeaderCommunicationLog
         self.moduleFamilyID = moduleFamilyID
+        self.consumesContracts = consumesContracts
+        self.producesContracts = producesContracts
         self.executionModel = executionModel ?? ModuleRoleMapping.defaultExecutionModel(for: kind)
         self.pipelineStage = pipelineStage ?? ModuleRoleMapping.defaultPipelineStage(for: kind)
         self.entryPoints = entryPoints
@@ -242,6 +254,9 @@ struct ModuleDescriptor: Identifiable, Equatable {
     func withPipelineMetadata(
         moduleID: String? = nil,
         version: Int? = nil,
+        moduleFamilyID: String? = nil,
+        consumesContracts: [String]? = nil,
+        producesContracts: [String]? = nil,
         executionModel: ModuleExecutionModel?,
         pipelineStage: ModulePipelineStage?,
         entryPoints: ModuleEntryPoints? = nil
@@ -256,7 +271,9 @@ struct ModuleDescriptor: Identifiable, Equatable {
             acceptsOptimizationDebugInfo: acceptsOptimizationDebugInfo,
             providesOptimizationDebugInfo: providesOptimizationDebugInfo,
             supportsLeaderCommunicationLog: supportsLeaderCommunicationLog,
-            moduleFamilyID: moduleFamilyID,
+            moduleFamilyID: moduleFamilyID ?? self.moduleFamilyID,
+            consumesContracts: consumesContracts ?? self.consumesContracts,
+            producesContracts: producesContracts ?? self.producesContracts,
             executionModel: executionModel ?? self.executionModel,
             pipelineStage: pipelineStage ?? self.pipelineStage,
             entryPoints: entryPoints ?? self.entryPoints
@@ -330,6 +347,9 @@ struct ModuleManifest: Decodable, Equatable {
     let name: String
     let kind: String
     let version: Int
+    let moduleFamilyID: String?
+    let consumesContracts: [String]
+    let producesContracts: [String]
     let executionModel: ModuleExecutionModel
     let pipelineStage: ModulePipelineStage
     let shaderSource: String?
@@ -340,6 +360,9 @@ struct ModuleManifest: Decodable, Equatable {
         case name
         case kind
         case version
+        case moduleFamilyID
+        case consumesContracts
+        case producesContracts
         case executionModel
         case pipelineStage
         case shaderSource
@@ -352,6 +375,9 @@ struct ModuleManifest: Decodable, Equatable {
         name = try container.decode(String.self, forKey: .name)
         kind = try container.decode(String.self, forKey: .kind)
         version = try container.decode(Int.self, forKey: .version)
+        moduleFamilyID = try container.decodeIfPresent(String.self, forKey: .moduleFamilyID)
+        consumesContracts = try container.decodeIfPresent([String].self, forKey: .consumesContracts) ?? []
+        producesContracts = try container.decodeIfPresent([String].self, forKey: .producesContracts) ?? []
         executionModel = try container.decode(ModuleExecutionModel.self, forKey: .executionModel)
         pipelineStage = try container.decode(ModulePipelineStage.self, forKey: .pipelineStage)
         shaderSource = try container.decodeIfPresent(String.self, forKey: .shaderSource)
@@ -360,6 +386,10 @@ struct ModuleManifest: Decodable, Equatable {
 }
 
 enum ModuleCatalog {
+    static let toyPlaybackFamilyID = "particularity.playback.family.toy_v1"
+    static let toyPlaybackSourceContract = "particularity.playback.toy_source.v1"
+    static let toyPlaybackParticleSurfaceContract = "particularity.presentation.toy_particle_surface.v1"
+
     static let defaultPhysics = ModuleDescriptor(
         moduleID: "internal.realtime.processor.default_physics_slide_loop",
         kind: "physics",
@@ -433,6 +463,49 @@ enum ModuleCatalog {
             acceptsOptimizationDebugInfo: false,
             providesOptimizationDebugInfo: true,
             supportsLeaderCommunicationLog: true
+        ),
+        "ToyPlaybackReader": ModuleDescriptor(
+            moduleID: "particularity.playback.producer.toy_reader",
+            kind: "optimization",
+            name: "ToyPlaybackReader",
+            visibility: .production,
+            isDefaultFallback: false,
+            acceptsOptimizationDebugInfo: false,
+            providesOptimizationDebugInfo: false,
+            supportsLeaderCommunicationLog: false,
+            moduleFamilyID: toyPlaybackFamilyID,
+            producesContracts: [toyPlaybackSourceContract],
+            executionModel: .playback,
+            pipelineStage: .producer
+        ),
+        "ToyPlaybackProcessor": ModuleDescriptor(
+            moduleID: "particularity.playback.processor.toy_processor",
+            kind: "physics",
+            name: "ToyPlaybackProcessor",
+            visibility: .production,
+            isDefaultFallback: false,
+            acceptsOptimizationDebugInfo: false,
+            providesOptimizationDebugInfo: false,
+            supportsLeaderCommunicationLog: false,
+            moduleFamilyID: toyPlaybackFamilyID,
+            consumesContracts: [toyPlaybackSourceContract],
+            producesContracts: [toyPlaybackParticleSurfaceContract],
+            executionModel: .playback,
+            pipelineStage: .processor
+        ),
+        "ToyPlaybackPresenter": ModuleDescriptor(
+            moduleID: "particularity.playback.presenter.toy_presenter",
+            kind: "visual",
+            name: "ToyPlaybackPresenter",
+            visibility: .production,
+            isDefaultFallback: false,
+            acceptsOptimizationDebugInfo: false,
+            providesOptimizationDebugInfo: false,
+            supportsLeaderCommunicationLog: false,
+            moduleFamilyID: toyPlaybackFamilyID,
+            consumesContracts: [toyPlaybackParticleSurfaceContract],
+            executionModel: .playback,
+            pipelineStage: .presenter
         ),
     ]
 
@@ -513,6 +586,15 @@ struct ActiveModuleSet: Equatable {
     var descriptors: [ModuleDescriptor] {
         [optimization, physics, visual]
     }
+
+    var executionModel: ModuleExecutionModel? {
+        let models = Set(descriptors.map(\.executionModel))
+        return models.count == 1 ? models.first : nil
+    }
+
+    var isPlayback: Bool {
+        descriptors.allSatisfy { $0.executionModel == .playback }
+    }
 }
 
 struct ResolvedRuntimeConfiguration {
@@ -533,6 +615,10 @@ enum ModuleCompatibility {
 
         if modules.hasPartialModuleFamilySelection {
             return "Playback module families must be selected as a compatible physics, visual, and optimization trio."
+        }
+
+        if let issue = contractIncompatibilityReason(for: modules) {
+            return issue
         }
 
         if state.showOptimizationInfo && !modules.visual.acceptsOptimizationDebugInfo {
@@ -561,6 +647,24 @@ enum ModuleCompatibility {
         }
 
         return "\(descriptor.roleDisplayName) module \(descriptor.name) is discoverable, but this build does not yet support manifest-driven \(descriptor.roleDisplayName.lowercased()) execution."
+    }
+
+    private static func contractIncompatibilityReason(for modules: ActiveModuleSet) -> String? {
+        guard modules.isPlayback else { return nil }
+
+        let producerContracts = Set(modules.optimization.producesContracts)
+        let processorInputContracts = Set(modules.physics.consumesContracts)
+        guard !producerContracts.isDisjoint(with: processorInputContracts) else {
+            return "Playback processor \(modules.physics.name) does not consume any contract produced by reader \(modules.optimization.name)."
+        }
+
+        let processorOutputContracts = Set(modules.physics.producesContracts)
+        let presenterInputContracts = Set(modules.visual.consumesContracts)
+        guard !processorOutputContracts.isDisjoint(with: presenterInputContracts) else {
+            return "Playback visual \(modules.visual.name) does not consume any contract produced by processor \(modules.physics.name)."
+        }
+
+        return nil
     }
 
     private static func pipelineRoleIncompatibilityReason(for modules: ActiveModuleSet) -> String? {
@@ -618,6 +722,8 @@ struct SimulationViewportState: Equatable {
     var spectrumOffset: Float
     var showOptimizationInfo: Bool
     var showLeaderCommunicationLog: Bool
+    var playbackRate: Float
+    var playbackLooping: Bool
     var fixedGridSubdivisions: Int
     var fixedGridSubspaceCap: Int
     var fixedGridNeighborReadMode: FixedGridNeighborReadMode

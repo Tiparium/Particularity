@@ -1,0 +1,13 @@
+{
+  "id": "particularity.playback.presenter.toy_presenter",
+  "name": "ToyPlaybackPresenter",
+  "kind": "visual",
+  "executionModel": "playback",
+  "pipelineStage": "presenter",
+  "moduleFamilyID": "particularity.playback.family.toy_v1",
+  "version": 1,
+  "consumesContracts": [
+    "particularity.presentation.toy_particle_surface.v1"
+  ],
+  "entryPoints": {}
+}

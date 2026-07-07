@@ -189,6 +189,10 @@ final class SimulationRuntime: @unchecked Sendable {
     private var customStandardPhysicsModuleID: String?
     private var customStandardPhysicsAccumulatePipeline: MTLComputePipelineState?
     private var customStandardPhysicsApplyPipeline: MTLComputePipelineState?
+    private var toyPlaybackRuntime: ToyPlaybackRuntime?
+    private var playbackCurrentSeconds: Double = 0
+    private var playbackLastUptime: TimeInterval?
+    private var playbackCurrentSampleIndex: Int?
     private var debugLineBuffer: MTLBuffer?
     private var debugLineSegmentBuffer: MTLBuffer?
     private var activeParticleCount = 0
@@ -212,6 +216,8 @@ final class SimulationRuntime: @unchecked Sendable {
         spectrumOffset: 0.0,
         showOptimizationInfo: false,
         showLeaderCommunicationLog: false,
+        playbackRate: 1.0,
+        playbackLooping: true,
         fixedGridSubdivisions: FixedGridOptimizationModuleRuntime.defaultSubdivisions,
         fixedGridSubspaceCap: 2,
         fixedGridNeighborReadMode: .scratch
@@ -241,6 +247,8 @@ final class SimulationRuntime: @unchecked Sendable {
         spectrumOffset: 0.0,
         showOptimizationInfo: false,
         showLeaderCommunicationLog: false,
+        playbackRate: 1.0,
+        playbackLooping: true,
         fixedGridSubdivisions: FixedGridOptimizationModuleRuntime.defaultSubdivisions,
         fixedGridSubspaceCap: 2,
         fixedGridNeighborReadMode: .scratch
@@ -375,6 +383,12 @@ final class SimulationRuntime: @unchecked Sendable {
         return simulationStateSnapshot
     }
 
+    var playbackTimelineState: PlaybackTimelineState {
+        simulationQueue.sync {
+            makePlaybackTimelineState()
+        }
+    }
+
     func updateTypeMatrixLocalSettings(_ nextSettings: TypeMatrixLocalPhysicsSettings) {
         simulationQueue.async {
             self.typeMatrixLocalSettings = nextSettings
@@ -394,6 +408,7 @@ final class SimulationRuntime: @unchecked Sendable {
             if let reason = ModuleCompatibility.incompatibilityReason(for: nextModules, state: currentSimulationState) {
                 throw SimulationRuntimeError.incompatibleModules(nextModules, reason)
             }
+            let previousModules = activeModules
             let previousOptimization = activeModules.optimization
             let customPhysicsPipelines = try makeCustomStandardPhysicsPipelinesIfNeeded(for: nextModules.physics)
             activeModules = nextModules
@@ -406,6 +421,13 @@ final class SimulationRuntime: @unchecked Sendable {
                 if nextModules.optimization.name != FixedGridOptimizationModuleRuntime.moduleName {
                     cachedFixedGridTopology = nil
                 }
+            }
+            if previousModules.executionModel != nextModules.executionModel {
+                toyPlaybackRuntime = nil
+                playbackCurrentSeconds = 0
+                playbackLastUptime = nil
+                playbackCurrentSampleIndex = nil
+                abandonEphemeralState()
             }
             if self.currentSimulationState.transportState == .stopped {
                 self.typeMatrixInteractionBuffer = nil
@@ -429,6 +451,22 @@ final class SimulationRuntime: @unchecked Sendable {
             simulationQueue.async {
                 self.applySimulationState(nextState)
             }
+        }
+    }
+
+    func seekPlayback(to seconds: Double) {
+        simulationQueue.async {
+            guard self.isToyPlaybackActive,
+                  self.currentSimulationState.transportState != .stopped else {
+                return
+            }
+            let playbackRuntime = self.ensureToyPlaybackRuntime()
+            self.playbackCurrentSeconds = min(max(0, seconds), playbackRuntime.timeline.durationSeconds)
+            self.playbackLastUptime = nil
+            let frame = playbackRuntime.frame(at: self.playbackCurrentSeconds)
+            self.playbackCurrentSampleIndex = frame.sampleIndex
+            self.uploadPlaybackParticles(frame.particles)
+            self.publishSnapshots()
         }
     }
 
@@ -495,6 +533,18 @@ final class SimulationRuntime: @unchecked Sendable {
                     )
                 } else {
                     uploadTypeMatrixInteractionBuffer(from: typeMatrixLocalSettings.matrixValues)
+                }
+            }
+
+            if isToyPlaybackActive {
+                if previous.transportState == .stopped,
+                   nextState.transportState == .running {
+                    playbackCurrentSeconds = 0
+                    playbackCurrentSampleIndex = nil
+                }
+                if nextState.transportState == .running,
+                   previous.transportState != .running {
+                    playbackLastUptime = nil
                 }
             }
         }
@@ -612,6 +662,10 @@ final class SimulationRuntime: @unchecked Sendable {
         typeMatrixInteractionBuffer = nil
         typeMatrixSidecarFrontBuffer = nil
         typeMatrixSidecarBackBuffer = nil
+        toyPlaybackRuntime = nil
+        playbackCurrentSeconds = 0
+        playbackLastUptime = nil
+        playbackCurrentSampleIndex = nil
         debugLineBuffer = nil
         debugLineSegmentBuffer = nil
         activeParticleCount = 0
@@ -628,6 +682,10 @@ final class SimulationRuntime: @unchecked Sendable {
 
     private func stepSimulation(at now: TimeInterval) {
         guard !simulationWorkInFlight else { return }
+        if isToyPlaybackActive {
+            stepToyPlayback(at: now)
+            return
+        }
         guard ensureParticleStateBuffers() else { return }
 
         guard currentSimulationState.transportState == .running,
@@ -762,6 +820,95 @@ final class SimulationRuntime: @unchecked Sendable {
             }
         }
         commandBuffer.commit()
+    }
+
+    private func stepToyPlayback(at now: TimeInterval) {
+        guard currentSimulationState.transportState == .running else {
+            publishSnapshots()
+            return
+        }
+        simulationWorkInFlight = true
+        defer { simulationWorkInFlight = false }
+
+        let playbackRuntime = ensureToyPlaybackRuntime()
+
+        let previousUptime = playbackLastUptime ?? now
+        playbackLastUptime = now
+        let deltaSeconds = max(0, now - previousUptime) * Double(currentSimulationState.playbackRate)
+        playbackCurrentSeconds = advancedPlaybackTime(
+            from: playbackCurrentSeconds,
+            by: deltaSeconds,
+            duration: playbackRuntime.timeline.durationSeconds,
+            looping: currentSimulationState.playbackLooping
+        )
+
+        let frame = playbackRuntime.frame(at: playbackCurrentSeconds)
+        playbackCurrentSampleIndex = frame.sampleIndex
+        uploadPlaybackParticles(frame.particles)
+        metricsAccumulator.recordPhysicsStep(at: now)
+        publishSnapshots()
+    }
+
+    private func ensureToyPlaybackRuntime() -> ToyPlaybackRuntime {
+        if let toyPlaybackRuntime {
+            return toyPlaybackRuntime
+        }
+
+        let runtime = ToyPlaybackRuntime()
+        toyPlaybackRuntime = runtime
+        RuntimeEventLogger.log(
+            "toy_playback loaded duration=\(String(format: "%.3f", runtime.timeline.durationSeconds)) samples=\(runtime.timeline.sampleCount ?? 0)"
+        )
+        return runtime
+    }
+
+    private func makePlaybackTimelineState() -> PlaybackTimelineState {
+        guard isToyPlaybackActive else { return PlaybackTimelineState() }
+        let base = toyPlaybackRuntime?.timeline ?? ToyPlaybackRuntime().timeline
+        return PlaybackTimelineState(
+            currentSeconds: playbackCurrentSeconds,
+            durationSeconds: base.durationSeconds,
+            playbackRate: Double(currentSimulationState.playbackRate),
+            isLooping: currentSimulationState.playbackLooping,
+            sampleCount: base.sampleCount,
+            currentSampleIndex: playbackCurrentSampleIndex
+        )
+    }
+
+    private func advancedPlaybackTime(
+        from currentSeconds: Double,
+        by deltaSeconds: Double,
+        duration: Double,
+        looping: Bool
+    ) -> Double {
+        guard duration > 0 else { return 0 }
+        let nextSeconds = currentSeconds + deltaSeconds
+        if nextSeconds < duration {
+            return max(0, nextSeconds)
+        }
+        return looping ? nextSeconds.truncatingRemainder(dividingBy: duration) : duration
+    }
+
+    private func uploadPlaybackParticles(_ particles: [ParticleState]) {
+        let particleCount = particles.count
+        let particleLength = max(1, MemoryLayout<ParticleState>.stride * particleCount)
+        if let existing = particleFrontBuffer, existing.length >= particleLength {
+            let pointer = existing.contents().bindMemory(to: ParticleState.self, capacity: particleCount)
+            if !particles.isEmpty {
+                pointer.update(from: particles, count: particleCount)
+            }
+            particleFrontBuffer = existing
+        } else if particles.isEmpty {
+            particleFrontBuffer = device.makeBuffer(length: particleLength)
+        } else {
+            particleFrontBuffer = device.makeBuffer(bytes: particles, length: particleLength)
+        }
+
+        particleBackBuffer = nil
+        activeParticleCount = particleCount
+        particleCapacity = (particleFrontBuffer?.length ?? 0) / MemoryLayout<ParticleState>.stride
+        debugHistory.reset()
+        clearLeaderCommunicationLog()
     }
 
     private func encodePhysicsAccumulate(
@@ -1530,6 +1677,12 @@ final class SimulationRuntime: @unchecked Sendable {
 
     private var isTypeMatrixPhysicsActive: Bool {
         activeModules.physics.name == TypeMatrixLocalPhysicsSettings.moduleName
+    }
+
+    private var isToyPlaybackActive: Bool {
+        activeModules.optimization.name == "ToyPlaybackReader"
+            && activeModules.physics.name == "ToyPlaybackProcessor"
+            && activeModules.visual.name == "ToyPlaybackPresenter"
     }
 
     private var isTemplatePhysicsActive: Bool {

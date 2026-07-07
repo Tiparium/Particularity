@@ -61,6 +61,8 @@ enum SimulationConfigurationDerivation {
                 availableBundles: availableBundles
             ) && editorState.visualState.showOptimizationInfo,
             showLeaderCommunicationLog: editorState.optimizationState.showLeaderCommunicationLog,
+            playbackRate: Float(max(0, editorState.playbackState.playbackRate)),
+            playbackLooping: editorState.playbackState.looping,
             fixedGridSubdivisions: max(1, editorState.optimizationState.fixedGridSubdivisions),
             fixedGridSubspaceCap: max(
                 1,

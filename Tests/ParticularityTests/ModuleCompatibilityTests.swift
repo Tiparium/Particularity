@@ -89,6 +89,50 @@ struct ModuleCompatibilityTests {
         #expect(ModuleCompatibility.incompatibilityReason(for: modules, state: viewportState())?.contains("does not yet support manifest-driven visual execution") == true)
     }
 
+    @Test("accepts known toy playback trio")
+    func acceptsKnownToyPlaybackTrio() {
+        let modules = ActiveModuleSet(
+            physics: ModuleCatalog.knownModulesByName["ToyPlaybackProcessor"]!,
+            visual: ModuleCatalog.knownModulesByName["ToyPlaybackPresenter"]!,
+            optimization: ModuleCatalog.knownModulesByName["ToyPlaybackReader"]!
+        )
+
+        #expect(ModuleCompatibility.incompatibilityReason(for: modules, state: viewportState()) == nil)
+    }
+
+    @Test("rejects playback trio with incompatible contracts")
+    func rejectsPlaybackTrioWithIncompatibleContracts() {
+        let modules = ActiveModuleSet(
+            physics: descriptor(
+                kind: .physics,
+                name: "ToyPlaybackProcessor",
+                executionModel: .playback,
+                pipelineStage: .processor,
+                moduleFamilyID: "playback-demo",
+                consumesContracts: ["other.input"],
+                producesContracts: ["demo.output"]
+            ),
+            visual: descriptor(
+                kind: .visual,
+                name: "ToyPlaybackPresenter",
+                executionModel: .playback,
+                pipelineStage: .presenter,
+                moduleFamilyID: "playback-demo",
+                consumesContracts: ["demo.output"]
+            ),
+            optimization: descriptor(
+                kind: .optimization,
+                name: "ToyPlaybackReader",
+                executionModel: .playback,
+                pipelineStage: .producer,
+                moduleFamilyID: "playback-demo",
+                producesContracts: ["demo.input"]
+            )
+        )
+
+        #expect(ModuleCompatibility.incompatibilityReason(for: modules, state: viewportState())?.contains("does not consume") == true)
+    }
+
     @Test("decodes required module manifest IDs and entry point arrays")
     func decodesModuleManifestEntryPoints() throws {
         let json = """
@@ -97,6 +141,9 @@ struct ModuleCompatibilityTests {
           "name": "Demo Processor",
           "kind": "physics",
           "version": 1,
+          "moduleFamilyID": "demo.family",
+          "consumesContracts": ["demo.input"],
+          "producesContracts": ["demo.output"],
           "executionModel": "realtime",
           "pipelineStage": "processor",
           "shaderSource": "module/Demo.metal",
@@ -110,6 +157,9 @@ struct ModuleCompatibilityTests {
         let manifest = try JSONDecoder().decode(ModuleManifest.self, from: json)
 
         #expect(manifest.id == "example.realtime.processor.demo")
+        #expect(manifest.moduleFamilyID == "demo.family")
+        #expect(manifest.consumesContracts == ["demo.input"])
+        #expect(manifest.producesContracts == ["demo.output"])
         #expect(manifest.entryPoints.preUpdate == ["demo_clear"])
         #expect(manifest.entryPoints.update == ["demo_accumulate", "demo_apply"])
     }
@@ -177,6 +227,9 @@ struct ModuleCompatibilityTests {
         name: String,
         executionModel: ModuleExecutionModel,
         pipelineStage: ModulePipelineStage,
+        moduleFamilyID: String? = nil,
+        consumesContracts: [String] = [],
+        producesContracts: [String] = [],
         entryPoints: ModuleEntryPoints = ModuleEntryPoints()
     ) -> ModuleDescriptor {
         ModuleDescriptor(
@@ -187,6 +240,9 @@ struct ModuleCompatibilityTests {
             acceptsOptimizationDebugInfo: false,
             providesOptimizationDebugInfo: false,
             supportsLeaderCommunicationLog: false,
+            moduleFamilyID: moduleFamilyID,
+            consumesContracts: consumesContracts,
+            producesContracts: producesContracts,
             executionModel: executionModel,
             pipelineStage: pipelineStage,
             entryPoints: entryPoints
@@ -222,6 +278,8 @@ struct ModuleCompatibilityTests {
             spectrumOffset: 0,
             showOptimizationInfo: false,
             showLeaderCommunicationLog: false,
+            playbackRate: 1,
+            playbackLooping: true,
             fixedGridSubdivisions: 1,
             fixedGridSubspaceCap: 1,
             fixedGridNeighborReadMode: .scratch

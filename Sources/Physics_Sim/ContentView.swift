@@ -1067,6 +1067,12 @@ struct ContentView: View {
 
 @MainActor
 private enum EditorViewSupport {
+    static let moduleSlotOrder: [ModuleKind] = [
+        .optimization,
+        .physics,
+        .visual
+    ]
+
     static func assignedModules(
         from store: MainWindowEditorSettingsStore
     ) -> [ModuleKind: String] {
@@ -1076,6 +1082,33 @@ private enum EditorViewSupport {
         })
     }
 
+    static func roleTitle(for descriptor: ModuleDescriptor) -> String {
+        ModuleRoleMapping.stageName(
+            executionModel: descriptor.executionModel,
+            pipelineStage: descriptor.pipelineStage
+        )
+    }
+
+    static func roleTitle(for kind: ModuleKind, activeModules: ActiveModuleSet) -> String {
+        roleTitle(for: resolvedModule(for: kind, activeModules: activeModules))
+    }
+
+    static func resolvedModule(for kind: ModuleKind, activeModules: ActiveModuleSet) -> ModuleDescriptor {
+        switch kind {
+        case .physics:
+            return activeModules.physics
+        case .visual:
+            return activeModules.visual
+        case .optimization:
+            return activeModules.optimization
+        }
+    }
+
+    static func displayTitle(for kind: ModuleKind, activeModules: ActiveModuleSet) -> String {
+        let stageTitle = ModuleRoleMapping.expectedPipelineStage(for: kind).title
+        let roleTitle = roleTitle(for: kind, activeModules: activeModules)
+        return "\(stageTitle) - \(roleTitle) Module"
+    }
 }
 
 private struct SimulationCenterPane: View {
@@ -1176,31 +1209,19 @@ private struct SimulationCenterPane: View {
                 Divider()
                     .frame(height: 18)
 
-                HStack(spacing: 8) {
-                    Text("Time Scale")
-                        .font(.caption)
-                        .foregroundStyle(validationReport.issue(for: .timeScale) == nil ? Color.secondary : Color.red.opacity(0.95))
-                    Slider(
-                        value: Binding(
-                            get: { Double(runtimeConfigCoordinator.simulationState.timeScale) },
-                            set: {
-                                var next = editorSettingsStore.editorState.physicsState
-                                next.timeScale = min(max(0.1, $0), 4.0)
-                                editorSettingsStore.setPhysicsState(next)
-                            }
-                        ),
-                        in: 0.1...4.0
+                if runtimeConfigCoordinator.activeModules.isPlayback {
+                    PlaybackRateToolbarControl(
+                        editorSettingsStore: editorSettingsStore,
+                        playbackRate: Double(runtimeConfigCoordinator.simulationState.playbackRate)
                     )
-                    .controlSize(.small)
-                    .frame(width: 120)
-                    Text(String(format: "%.2fx", runtimeConfigCoordinator.simulationState.timeScale))
-                        .font(.caption.monospacedDigit())
-                        .frame(width: 52, alignment: .trailing)
+                } else {
+                    RealtimeScaleToolbarControl(
+                        editorSettingsStore: editorSettingsStore,
+                        validationReport: validationReport,
+                        highlightedValidationField: highlightedValidationField,
+                        timeScale: Double(runtimeConfigCoordinator.simulationState.timeScale)
+                    )
                 }
-                .validationDecoration(
-                    issue: validationReport.issue(for: .timeScale),
-                    isHighlighted: highlightedValidationField == .timeScale
-                )
 
                 AppSwitchToggle(
                     "Slow Rotation",
@@ -1263,6 +1284,7 @@ private struct SimulationCenterPane: View {
 
             HStack(spacing: 16) {
                 LabeledContent("Transport", value: transportState.title)
+                LabeledContent("Mode", value: runtimeConfigCoordinator.activeModules.executionModel?.title ?? "Mixed")
                 LabeledContent("Projected", value: ByteCountFormatter.string(fromByteCount: Int64(validationReport.projectedBytes), countStyle: .memory))
                 Spacer()
                 Text(validationReport.canStart ? "Ready" : "Blocked")
@@ -1273,6 +1295,16 @@ private struct SimulationCenterPane: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+
+            if runtimeConfigCoordinator.activeModules.isPlayback {
+                PlaybackStatusBar(
+                    session: session,
+                    activeModules: runtimeConfigCoordinator.activeModules,
+                    transportState: transportState,
+                    playbackRate: Double(runtimeConfigCoordinator.simulationState.playbackRate),
+                    looping: runtimeConfigCoordinator.simulationState.playbackLooping
+                )
+            }
 
             SimulationViewportSurface(
                 session: session,
@@ -1336,6 +1368,137 @@ private struct SimulationCenterPane: View {
         } catch {
             RuntimeEventLogger.log("validation_report_dump_failed error=\(error.localizedDescription)")
         }
+    }
+}
+
+private struct RealtimeScaleToolbarControl: View {
+    @ObservedObject var editorSettingsStore: MainWindowEditorSettingsStore
+    let validationReport: RuntimeValidationReport
+    let highlightedValidationField: RuntimeValidationField?
+    let timeScale: Double
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text("Time Scale")
+                .font(.caption)
+                .foregroundStyle(validationReport.issue(for: .timeScale) == nil ? Color.secondary : Color.red.opacity(0.95))
+            Slider(
+                value: Binding(
+                    get: { timeScale },
+                    set: {
+                        var next = editorSettingsStore.editorState.physicsState
+                        next.timeScale = min(max(0.1, $0), 4.0)
+                        editorSettingsStore.setPhysicsState(next)
+                    }
+                ),
+                in: 0.1...4.0
+            )
+            .controlSize(.small)
+            .frame(width: 120)
+            Text(String(format: "%.2fx", timeScale))
+                .font(.caption.monospacedDigit())
+                .frame(width: 52, alignment: .trailing)
+        }
+        .validationDecoration(
+            issue: validationReport.issue(for: .timeScale),
+            isHighlighted: highlightedValidationField == .timeScale
+        )
+    }
+}
+
+private struct PlaybackRateToolbarControl: View {
+    @ObservedObject var editorSettingsStore: MainWindowEditorSettingsStore
+    let playbackRate: Double
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text("Playback Rate")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Slider(
+                value: Binding(
+                    get: { playbackRate },
+                    set: {
+                        var next = editorSettingsStore.editorState.playbackState
+                        next.playbackRate = min(max(0.05, $0), 4.0)
+                        editorSettingsStore.setPlaybackState(next)
+                    }
+                ),
+                in: 0.05...4.0
+            )
+            .controlSize(.small)
+            .frame(width: 120)
+            Text(String(format: "%.2fx", playbackRate))
+                .font(.caption.monospacedDigit())
+                .frame(width: 52, alignment: .trailing)
+            AppSwitchToggle(
+                "Loop",
+                isOn: Binding(
+                    get: { editorSettingsStore.editorState.playbackState.looping },
+                    set: {
+                        var next = editorSettingsStore.editorState.playbackState
+                        next.looping = $0
+                        editorSettingsStore.setPlaybackState(next)
+                    }
+                ),
+                helpText: editorSettingsStore.editorState.playbackState.looping ? "Loop playback" : "Stop at the end"
+            )
+        }
+    }
+}
+
+private struct PlaybackStatusBar: View {
+    let session: SimulationSession
+    let activeModules: ActiveModuleSet
+    let transportState: SimulationTransportState
+    let playbackRate: Double
+    let looping: Bool
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1.0 / 30.0)) { _ in
+            let timeline = session.playbackTimelineState
+            HStack(spacing: 12) {
+                Text("Playback")
+                    .font(.caption.weight(.semibold))
+                Text(timeText(timeline.currentSeconds))
+                    .font(.caption.monospacedDigit())
+                    .frame(width: 52, alignment: .trailing)
+                Slider(
+                    value: Binding(
+                        get: { timeline.currentSeconds },
+                        set: { session.seekPlayback(to: $0) }
+                    ),
+                    in: 0...max(0.001, timeline.durationSeconds)
+                )
+                .controlSize(.small)
+                .disabled(transportState == .stopped)
+                Text(timeText(timeline.durationSeconds))
+                    .font(.caption.monospacedDigit())
+                    .frame(width: 52, alignment: .leading)
+                Divider()
+                    .frame(height: 16)
+                Text("Reader: \(activeModules.optimization.name)")
+                    .lineLimit(1)
+                Text("Processor: \(activeModules.physics.name)")
+                    .lineLimit(1)
+                Text("Visual: \(activeModules.visual.name)")
+                    .lineLimit(1)
+                Spacer()
+                Text("Rate \(String(format: "%.2fx", playbackRate))")
+                Text(looping ? "Looping" : "No Loop")
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+        }
+    }
+
+    private func timeText(_ seconds: Double) -> String {
+        let minutes = Int(seconds) / 60
+        let wholeSeconds = Int(seconds) % 60
+        return String(format: "%d:%02d", minutes, wholeSeconds)
     }
 }
 
@@ -1616,13 +1779,17 @@ struct ModuleSlotsPanel: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            ForEach(ModuleKind.allCases) { kind in
+            ForEach(EditorViewSupport.moduleSlotOrder) { kind in
                 let assignedModuleID = EditorViewSupport.assignedModules(from: editorSettingsStore)[kind]
                 let resolved = resolvedModule(for: kind)
                 let issue = validationReport.issue(for: .assignedModule(kind))
+                let displayTitle = EditorViewSupport.displayTitle(
+                    for: kind,
+                    activeModules: runtimeConfigCoordinator.activeModules
+                )
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
-                        Text(kind.displayName)
+                        Text(displayTitle)
                             .font(.caption.weight(.semibold))
                         Spacer()
                         if resolved.visibility == .dev {
@@ -1737,12 +1904,13 @@ private struct ModulePickerPopover: View {
     }
 
     var body: some View {
+        let stageTitle = ModuleRoleMapping.expectedPipelineStage(for: kind).title
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(kind.displayName)
+                    Text("\(stageTitle) Module")
                         .font(.caption.weight(.semibold))
-                    Text(ModuleRoleMapping.expectedPipelineStage(for: kind).title)
+                    Text(stageTitle)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -1832,7 +2000,7 @@ struct ModuleSettingsPanelView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(resolved.name)
                         .font(.caption.weight(.semibold))
-                    Text(kind.displayName)
+                    Text("\(EditorViewSupport.roleTitle(for: resolved)) Module")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -2198,7 +2366,7 @@ struct ModuleCatalogPanel: View {
                 VStack(alignment: .leading, spacing: 10) {
                     ForEach(ModuleKind.allCases) { kind in
                         VStack(alignment: .leading, spacing: 6) {
-                            Text(kind.displayName)
+                            Text("\(ModuleRoleMapping.expectedPipelineStage(for: kind).title) Modules")
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.secondary)
                             let bundles = availableBundles.filter { $0.kind == kind }
@@ -2243,18 +2411,20 @@ struct ModuleCatalogPanel: View {
             .scrollIndicators(.visible)
 
             if let selectedBundle {
+                let selectedRoleTitle = selectedBundle.descriptor.map(EditorViewSupport.roleTitle)
+                    ?? ModuleRoleMapping.expectedPipelineStage(for: selectedBundle.kind).title
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Selected: \(selectedBundle.descriptor?.name ?? selectedBundle.id)")
                         .font(.caption)
                         .lineLimit(1)
                     HStack(spacing: 8) {
-                        Button("Assign to \(selectedBundle.kind.displayName)") {
+                        Button("Assign to \(selectedRoleTitle)") {
                             editorSettingsStore.setAssignedModuleID(selectedBundle.id, for: selectedBundle.kind)
                         }
                         .font(.caption)
                         .buttonStyle(AppFramedButtonStyle())
                         if editorSettingsStore.assignedModuleID(for: selectedBundle.kind) != nil {
-                            Button("Clear \(selectedBundle.kind.displayName)") {
+                            Button("Clear \(selectedRoleTitle)") {
                                 editorSettingsStore.setAssignedModuleID(nil, for: selectedBundle.kind)
                             }
                             .font(.caption)

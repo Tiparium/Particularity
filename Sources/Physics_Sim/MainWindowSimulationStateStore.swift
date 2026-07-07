@@ -21,6 +21,8 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
     var fixedGridSubdivisions: Int
     var fixedGridSubspaceCap: Int
     var fixedGridNeighborReadMode: FixedGridNeighborReadMode
+    var playbackRate: Double
+    var playbackLooping: Bool
     var protectLeaderFromUnload: Bool
     var assignedPhysicsModuleID: String?
     var assignedVisualModuleID: String?
@@ -42,6 +44,8 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
         case fixedGridSubdivisions
         case fixedGridSubspaceCap
         case fixedGridNeighborReadMode
+        case playbackRate
+        case playbackLooping
         case protectLeaderFromUnload
         case assignedPhysicsModuleID
         case assignedVisualModuleID
@@ -67,6 +71,8 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
         fixedGridSubdivisions: FixedGridOptimizationModuleRuntime.defaultSubdivisions,
         fixedGridSubspaceCap: 2,
         fixedGridNeighborReadMode: .scratch,
+        playbackRate: 1.0,
+        playbackLooping: true,
         protectLeaderFromUnload: true,
         assignedPhysicsModuleID: nil,
         assignedVisualModuleID: nil,
@@ -78,6 +84,7 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
             physicsState: physicsState,
             visualState: visualState,
             optimizationState: optimizationState,
+            playbackState: playbackState,
             debugSettings: debugSettings,
             assignedModuleIDs: assignedModules
         )
@@ -115,6 +122,13 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
         DebugSettingsState(protectLeaderFromUnload: protectLeaderFromUnload)
     }
 
+    var playbackState: PlaybackModuleState {
+        PlaybackModuleState(
+            playbackRate: playbackRate,
+            looping: playbackLooping
+        )
+    }
+
     var assignedModules: [String: String] {
         var result: [String: String] = [:]
         if let assignedPhysicsModuleID { result[Self.physicsModuleKey] = assignedPhysicsModuleID }
@@ -127,6 +141,7 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
         physicsState: PhysicsModuleState,
         visualState: VisualModuleState,
         optimizationState: OptimizationModuleState,
+        playbackState: PlaybackModuleState,
         debugSettings: DebugSettingsState,
         assignedModuleIDs: [String: String]
     ) -> MainWindowSimulationStateSnapshot {
@@ -146,6 +161,8 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
             fixedGridSubdivisions: optimizationState.fixedGridSubdivisions,
             fixedGridSubspaceCap: optimizationState.fixedGridSubspaceCap,
             fixedGridNeighborReadMode: optimizationState.fixedGridNeighborReadMode,
+            playbackRate: playbackState.playbackRate,
+            playbackLooping: playbackState.looping,
             protectLeaderFromUnload: debugSettings.protectLeaderFromUnload,
             assignedPhysicsModuleID: assignedModuleIDs[Self.physicsModuleKey],
             assignedVisualModuleID: assignedModuleIDs[Self.visualModuleKey],
@@ -158,6 +175,7 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
             physicsState: editorState.physicsState,
             visualState: editorState.visualState,
             optimizationState: editorState.optimizationState,
+            playbackState: editorState.playbackState,
             debugSettings: editorState.debugSettings,
             assignedModuleIDs: editorState.assignedModuleIDs
         )
@@ -179,6 +197,8 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
         fixedGridSubdivisions: Int,
         fixedGridSubspaceCap: Int,
         fixedGridNeighborReadMode: FixedGridNeighborReadMode,
+        playbackRate: Double,
+        playbackLooping: Bool,
         protectLeaderFromUnload: Bool,
         assignedPhysicsModuleID: String?,
         assignedVisualModuleID: String?,
@@ -199,6 +219,8 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
         self.fixedGridSubdivisions = fixedGridSubdivisions
         self.fixedGridSubspaceCap = fixedGridSubspaceCap
         self.fixedGridNeighborReadMode = fixedGridNeighborReadMode
+        self.playbackRate = playbackRate
+        self.playbackLooping = playbackLooping
         self.protectLeaderFromUnload = protectLeaderFromUnload
         self.assignedPhysicsModuleID = assignedPhysicsModuleID
         self.assignedVisualModuleID = assignedVisualModuleID
@@ -223,6 +245,8 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
         fixedGridSubdivisions = try container.decodeIfPresent(Int.self, forKey: .fixedGridSubdivisions) ?? fallback.fixedGridSubdivisions
         fixedGridSubspaceCap = try container.decodeIfPresent(Int.self, forKey: .fixedGridSubspaceCap) ?? fallback.fixedGridSubspaceCap
         fixedGridNeighborReadMode = try container.decodeIfPresent(FixedGridNeighborReadMode.self, forKey: .fixedGridNeighborReadMode) ?? fallback.fixedGridNeighborReadMode
+        playbackRate = try container.decodeIfPresent(Double.self, forKey: .playbackRate) ?? fallback.playbackRate
+        playbackLooping = try container.decodeIfPresent(Bool.self, forKey: .playbackLooping) ?? fallback.playbackLooping
         protectLeaderFromUnload = try container.decodeIfPresent(Bool.self, forKey: .protectLeaderFromUnload) ?? fallback.protectLeaderFromUnload
         assignedPhysicsModuleID = try container.decodeIfPresent(String.self, forKey: .assignedPhysicsModuleID)
             ?? container.decodeIfPresent(String.self, forKey: .assignedPhysicsModulePath)
@@ -249,6 +273,8 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
         try container.encode(fixedGridSubdivisions, forKey: .fixedGridSubdivisions)
         try container.encode(fixedGridSubspaceCap, forKey: .fixedGridSubspaceCap)
         try container.encode(fixedGridNeighborReadMode, forKey: .fixedGridNeighborReadMode)
+        try container.encode(playbackRate, forKey: .playbackRate)
+        try container.encode(playbackLooping, forKey: .playbackLooping)
         try container.encode(protectLeaderFromUnload, forKey: .protectLeaderFromUnload)
         try container.encodeIfPresent(assignedPhysicsModuleID, forKey: .assignedPhysicsModuleID)
         try container.encodeIfPresent(assignedVisualModuleID, forKey: .assignedVisualModuleID)
@@ -322,6 +348,20 @@ final class MainWindowEditorSettingsStore: ObservableObject {
             details: [
                 "from": InteractionSnapshotFormat.optimization(previous),
                 "to": InteractionSnapshotFormat.optimization(nextState),
+            ]
+        )
+    }
+
+    func setPlaybackState(_ nextState: PlaybackModuleState) {
+        let previous = editorState.playbackState
+        updateEditorState {
+            $0.playbackState = nextState
+        }
+        InteractionSnapshotRecorder.shared.record(
+            event: "ui.set_playback_state",
+            details: [
+                "from": "rate=\(previous.playbackRate) looping=\(previous.looping)",
+                "to": "rate=\(nextState.playbackRate) looping=\(nextState.looping)",
             ]
         )
     }

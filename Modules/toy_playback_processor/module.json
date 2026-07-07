@@ -1,0 +1,16 @@
+{
+  "id": "particularity.playback.processor.toy_processor",
+  "name": "ToyPlaybackProcessor",
+  "kind": "physics",
+  "executionModel": "playback",
+  "pipelineStage": "processor",
+  "moduleFamilyID": "particularity.playback.family.toy_v1",
+  "version": 1,
+  "consumesContracts": [
+    "particularity.playback.toy_source.v1"
+  ],
+  "producesContracts": [
+    "particularity.presentation.toy_particle_surface.v1"
+  ],
+  "entryPoints": {}
+}
