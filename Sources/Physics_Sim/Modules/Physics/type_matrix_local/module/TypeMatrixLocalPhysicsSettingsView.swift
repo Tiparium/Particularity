@@ -4,63 +4,32 @@ struct TypeMatrixLocalPhysicsModuleSettingsPanel: View {
     @ObservedObject var store: MainWindowEditorSettingsStore
     @ObservedObject var physicsModuleSettingsStore: MainWindowPhysicsModuleSettingsStore
     let transportState: SimulationTransportState
-    let particleCountUICap: Int
+    let setupProfile: ModuleSimulationSetupProfile
+    let setupModuleID: String
 
     private var settings: TypeMatrixLocalPhysicsSettings {
         physicsModuleSettingsStore.typeMatrixLocalSettings()
     }
 
     private var activeParticleTypeCount: Int {
-        max(1, min(TypeMatrixLocalPhysicsSettings.maxParticleTypes, store.editorState.physicsState.particleTypes))
+        max(
+            1,
+            min(
+                TypeMatrixLocalPhysicsSettings.maxParticleTypes,
+                Int(
+                    store.moduleSetting(
+                        moduleID: setupModuleID,
+                        settingID: ModuleSimulationSetupSettingID.particleTypes,
+                        defaultValue: .number(Double(store.editorState.physicsState.particleTypes))
+                    ).numberValue?.rounded() ?? Double(store.editorState.physicsState.particleTypes)
+                )
+            )
+        )
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            EventuallyAppliedIntSlider(
-                title: "Particle Count",
-                field: .particleCount,
-                appliedValue: Binding(
-                    get: { store.editorState.physicsState.particleCount },
-                    set: {
-                        var next = store.editorState.physicsState
-                        next.particleCount = $0
-                        store.setPhysicsState(next)
-                    }
-                ),
-                range: 1...particleCountUICap,
-                helpText: "Uses the existing simulation particle count path."
-            )
-            EventuallyAppliedToggle(title: "Random Distribution", appliedValue: Binding(
-                get: { store.editorState.physicsState.randomDistribution },
-                set: {
-                    var next = store.editorState.physicsState
-                    next.randomDistribution = $0
-                    store.setPhysicsState(next)
-                }
-            ))
-            EventuallyAppliedToggle(title: "Inter-Particle Communication", appliedValue: Binding(
-                get: { store.editorState.physicsState.allParticlesIntercommunicate },
-                set: {
-                    var next = store.editorState.physicsState
-                    next.allParticlesIntercommunicate = $0
-                    store.setPhysicsState(next)
-                }
-            ))
-            EventuallyAppliedSlider(
-                title: "Particle Types",
-                appliedValue: Binding(
-                    get: { Double(store.editorState.physicsState.particleTypes) },
-                    set: {
-                        var next = store.editorState.physicsState
-                        next.particleTypes = max(1, min(TypeMatrixLocalPhysicsSettings.maxParticleTypes, Int($0.rounded())))
-                        store.setPhysicsState(next)
-                    }
-                ),
-                range: 1...Double(TypeMatrixLocalPhysicsSettings.maxParticleTypes),
-                step: 1,
-                tickBehavior: .visible,
-                valueText: { "\(Int($0.rounded()))" }
-            )
+            SimulationSetupControlsView(store: store, profile: setupProfile, moduleID: setupModuleID)
             EventuallyAppliedSlider(
                 title: "Inner Radius",
                 appliedValue: Binding(
@@ -247,25 +216,6 @@ struct TypeMatrixLocalPhysicsModuleSettingsPanel: View {
             TypeMatrixCorrectiveBehaviorSection(
                 settings: settings,
                 physicsModuleSettingsStore: physicsModuleSettingsStore
-            )
-            EventuallyAppliedSlider(
-                title: "Time Scale",
-                appliedValue: Binding(
-                    get: {
-                        TimeScaleControlMapping.controlValue(
-                            forRuntimeScale: store.editorState.physicsState.timeScale
-                        )
-                    },
-                    set: {
-                        var next = store.editorState.physicsState
-                        next.timeScale = TimeScaleControlMapping.runtimeScale(forControlValue: $0)
-                        store.setPhysicsState(next)
-                    }
-                ),
-                range: TimeScaleControlMapping.sliderRange,
-                textEntryRange: TimeScaleControlMapping.textEntryRange,
-                step: TimeScaleControlMapping.sliderStep,
-                valueText: { String(format: "%.2fx", $0) }
             )
             EventuallyAppliedToggle(
                 title: "Randomize On Simulation Start",

@@ -1,0 +1,55 @@
+{
+  "id": "particularity.playback.processor.ml_training_processor",
+  "name": "MLTrainingPlaybackProcessor",
+  "kind": "physics",
+  "executionModel": "playback",
+  "pipelineStage": "processor",
+  "moduleFamilyID": "particularity.playback.family.ml_training_v1",
+  "version": 1,
+  "timeScale": {
+    "minimum": 0.05,
+    "maximum": 4.0,
+    "defaultValue": 1.0,
+    "step": 0.01
+  },
+  "consumesContracts": [
+    "particularity.playback.ml_training_source.v1"
+  ],
+  "producesContracts": [
+    "particularity.presentation.ml_training_particle_surface.v1"
+  ],
+  "entryPoints": {},
+  "settings": {
+    "sections": [
+      {
+        "id": "sampling",
+        "title": "Sampling",
+        "controls": [
+          {
+            "id": "interpolation",
+            "title": "Interpolation",
+            "type": "toggle",
+            "defaultValue": true,
+            "helpText": "Blend between adjacent fixture frames during playback."
+          },
+          {
+            "id": "surfaceSelectionMode",
+            "title": "Surface Selection",
+            "type": "segmented",
+            "defaultValue": "frontMiddleFinal",
+            "options": [
+              {
+                "value": "frontMiddleFinal",
+                "title": "3 Surfaces"
+              },
+              {
+                "value": "all",
+                "title": "All"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -192,8 +192,6 @@ struct MainWindowContentDependencies {
 }
 
 struct ContentView: View {
-    private let particleCountEngineCap = SimulationParticleLimits.engineCap
-    private let particleCountUICap = SimulationParticleLimits.settingsUICap
     @State private var isImporterPresented = false
     @State private var importerTargetKind: ModuleKind = .physics
     @State private var hoveredGrabPanelID: UUID?
@@ -252,8 +250,6 @@ struct ContentView: View {
             debugSettingsStore: debugSettingsStore,
             interactionSnapshotRecorder: interactionSnapshotRecorder,
             performanceReviewLogger: performanceReviewLogger,
-            particleCountUICap: particleCountUICap,
-            particleCountEngineCap: particleCountEngineCap,
             importerTargetKind: $importerTargetKind,
             isImporterPresented: $isImporterPresented,
             startInteractionSnapshotRecording: startInteractionSnapshotRecording
@@ -266,22 +262,26 @@ struct ContentView: View {
                 Color(nsColor: .windowBackgroundColor)
                     .ignoresSafeArea()
 
-                PersistentThreePaneSplitView(
-                    defaultLeftWidth: 280,
-                    defaultRightWidth: 280,
-                    initialLeftWidth: chromeStateStore.savedLeftDockWidth(fallback: 280),
-                    initialRightWidth: chromeStateStore.savedRightDockWidth(fallback: 280),
-                    leftPanelVisible: chromeStateStore.leftPanelVisible,
-                    rightPanelVisible: chromeStateStore.rightPanelVisible,
-                    minSideWidth: 220,
-                    maxSideWidthRatio: 0.35,
-                    onWidthsChanged: { left, right in
-                        chromeStateStore.setSideDockWidths(left: left, right: right)
-                    },
-                    left: dockColumn(.left),
-                    center: centerColumn(),
-                    right: dockColumn(.right)
-                )
+                VStack(spacing: 10) {
+                    topWindowBand()
+
+                    PersistentThreePaneSplitView(
+                        defaultLeftWidth: 280,
+                        defaultRightWidth: 280,
+                        initialLeftWidth: chromeStateStore.savedLeftDockWidth(fallback: 280),
+                        initialRightWidth: chromeStateStore.savedRightDockWidth(fallback: 280),
+                        leftPanelVisible: chromeStateStore.leftPanelVisible,
+                        rightPanelVisible: chromeStateStore.rightPanelVisible,
+                        minSideWidth: 220,
+                        maxSideWidthRatio: 0.35,
+                        onWidthsChanged: { left, right in
+                            chromeStateStore.setSideDockWidths(left: left, right: right)
+                        },
+                        left: dockColumn(.left),
+                        center: centerColumn(),
+                        right: dockColumn(.right)
+                    )
+                }
                 .padding(12)
 
                 if ProgramSettingsStore.uiPanelDragInputMode == .clickThenDrag,
@@ -371,6 +371,36 @@ struct ContentView: View {
         }
     }
 
+    private func topWindowBand() -> some View {
+        VStack(spacing: 8) {
+            HStack {
+                Text("Simulation")
+                    .font(.headline)
+                Spacer()
+                Text("Editor Runtime")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 4)
+
+            TopRuntimeToolbar(
+                runtimeConfigCoordinator: runtimeConfigCoordinator,
+                editorSettingsStore: editorSettingsStore,
+                viewportStateStore: viewportStateStore,
+                validationReport: runtimeConfigCoordinator.validationReport,
+                highlightedValidationField: highlightedValidationField,
+                anyDockPanelsVisible: chromeStateStore.anyDockPanelsVisible,
+                leftPanelVisible: chromeStateStore.leftPanelVisible,
+                rightPanelVisible: chromeStateStore.rightPanelVisible,
+                bottomPanelVisible: chromeStateStore.bottomPanelVisible,
+                onToggleAllDockPanelsVisibility: { chromeStateStore.toggleAllDockPanelsVisibility() },
+                onToggleLeftPanelVisibility: { chromeStateStore.toggleLeftPanelVisibility() },
+                onToggleRightPanelVisibility: { chromeStateStore.toggleRightPanelVisibility() },
+                onToggleBottomPanelVisibility: { chromeStateStore.toggleBottomPanelVisibility() }
+            )
+        }
+    }
+
     private func centerColumn() -> some View {
         PersistentVerticalSplitView(
             defaultBottomHeight: 240,
@@ -389,15 +419,7 @@ struct ContentView: View {
                 diagnosticsStore: diagnosticsStore,
                 debugSettingsStore: debugSettingsStore,
                 viewportGeneration: viewportGeneration,
-                anyDockPanelsVisible: chromeStateStore.anyDockPanelsVisible,
-                leftPanelVisible: chromeStateStore.leftPanelVisible,
-                rightPanelVisible: chromeStateStore.rightPanelVisible,
-                bottomPanelVisible: chromeStateStore.bottomPanelVisible,
-                highlightedValidationField: $highlightedValidationField,
-                onToggleAllDockPanelsVisibility: { chromeStateStore.toggleAllDockPanelsVisibility() },
-                onToggleLeftPanelVisibility: { chromeStateStore.toggleLeftPanelVisibility() },
-                onToggleRightPanelVisibility: { chromeStateStore.toggleRightPanelVisibility() },
-                onToggleBottomPanelVisibility: { chromeStateStore.toggleBottomPanelVisibility() }
+                highlightedValidationField: $highlightedValidationField
             ),
             bottom: dropZoneSurface(for: .center, panels: panelsInZone(.center))
         )
@@ -857,8 +879,9 @@ struct ContentView: View {
         case .stopSimulation:
             runtimeConfigCoordinator.stopSimulation()
         case .dumpState:
+            let simulationState = runtimeConfigCoordinator.simulationState
             RuntimeEventLogger.log(
-                "testing_api dump_state transport=\(transportState.rawValue) particles=\(physicsState.particleCount) random=\(physicsState.randomDistribution) modules=physics:\(runtimeConfigCoordinator.activeModules.physics.name),visual:\(runtimeConfigCoordinator.activeModules.visual.name),optimization:\(runtimeConfigCoordinator.activeModules.optimization.name) panels=\(panels.count)"
+                "testing_api dump_state transport=\(transportState.rawValue) particles=\(simulationState.particleCount) random=\(simulationState.randomDistribution) modules=physics:\(runtimeConfigCoordinator.activeModules.physics.name),visual:\(runtimeConfigCoordinator.activeModules.visual.name),optimization:\(runtimeConfigCoordinator.activeModules.optimization.name) panels=\(panels.count)"
             )
         case .closeMainWindow:
             WindowCommandCenter.shared.closeMainWindow()
@@ -907,6 +930,7 @@ struct ContentView: View {
     private func makePerformanceReviewSample() -> PerformanceReviewSample? {
         let editorState = editorSettingsStore.editorState
         let activeModules = runtimeConfigCoordinator.activeModules
+        let simulationState = runtimeConfigCoordinator.simulationState
         let transportState = runtimeConfigCoordinator.transportState
         let metrics = diagnosticsStore.performanceMetrics
 
@@ -915,10 +939,10 @@ struct ContentView: View {
             visualModule: activeModules.visual.name,
             optimizationModule: activeModules.optimization.name,
             transportState: transportState.rawValue,
-            particleCount: editorState.physicsState.particleCount,
-            randomDistribution: editorState.physicsState.randomDistribution,
-            particleTypes: editorState.physicsState.particleTypes,
-            allParticlesIntercommunicate: editorState.physicsState.allParticlesIntercommunicate,
+            particleCount: simulationState.particleCount,
+            randomDistribution: simulationState.randomDistribution,
+            particleTypes: simulationState.particleTypes,
+            allParticlesIntercommunicate: simulationState.allParticlesIntercommunicate,
             movementDirectionX: editorState.physicsState.movementDirection.x,
             movementDirectionY: editorState.physicsState.movementDirection.y,
             movementDirectionZ: editorState.physicsState.movementDirection.z,
@@ -1066,7 +1090,7 @@ struct ContentView: View {
 }
 
 @MainActor
-private enum EditorViewSupport {
+enum EditorViewSupport {
     static let moduleSlotOrder: [ModuleKind] = [
         .optimization,
         .physics,
@@ -1119,15 +1143,7 @@ private struct SimulationCenterPane: View {
     @ObservedObject var diagnosticsStore: MainWindowDiagnosticsStore
     @ObservedObject var debugSettingsStore: MainWindowDebugSettingsStore
     let viewportGeneration: Int
-    let anyDockPanelsVisible: Bool
-    let leftPanelVisible: Bool
-    let rightPanelVisible: Bool
-    let bottomPanelVisible: Bool
     @Binding var highlightedValidationField: RuntimeValidationField?
-    let onToggleAllDockPanelsVisibility: () -> Void
-    let onToggleLeftPanelVisibility: () -> Void
-    let onToggleRightPanelVisibility: () -> Void
-    let onToggleBottomPanelVisibility: () -> Void
 
     private var transportState: SimulationTransportState { runtimeConfigCoordinator.transportState }
     private var validationReport: RuntimeValidationReport { runtimeConfigCoordinator.validationReport }
@@ -1142,146 +1158,6 @@ private struct SimulationCenterPane: View {
 
     var body: some View {
         VStack(spacing: 10) {
-            HStack {
-                Text("Simulation")
-                    .font(.headline)
-                Spacer()
-                Text("Editor Runtime")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 4)
-
-            HStack(spacing: 10) {
-                Button("Start") {
-                    runtimeConfigCoordinator.startSimulation()
-                }
-                .buttonStyle(AppFramedButtonStyle(.prominent))
-                .disabled(transportState != .stopped || !validationReport.canStart)
-
-                Button(transportState == .running ? "Pause" : "Play") {
-                    runtimeConfigCoordinator.togglePausePlay()
-                }
-                .frame(minWidth: 64)
-                .buttonStyle(AppFramedButtonStyle())
-                .disabled(transportState == .stopped || (transportState == .paused && !validationReport.canStart))
-
-                Button("Stop") {
-                    runtimeConfigCoordinator.stopSimulation()
-                }
-                .buttonStyle(AppFramedButtonStyle())
-                .disabled(transportState == .stopped)
-
-                Divider()
-                    .frame(height: 18)
-
-                AppIconButton(
-                    iconName: anyDockPanelsVisible ? "rectangle.split.3x1" : "rectangle.split.3x1.fill",
-                    helpText: anyDockPanelsVisible ? "Hide all dock panels" : "Show all dock panels"
-                ) {
-                    onToggleAllDockPanelsVisibility()
-                }
-
-                AppIconButton(
-                    iconName: "sidebar.left",
-                    helpText: leftPanelVisible ? "Hide left panel" : "Show left panel",
-                    isDimmed: leftPanelVisible
-                ) {
-                    onToggleLeftPanelVisibility()
-                }
-
-                AppIconButton(
-                    iconName: "sidebar.right",
-                    helpText: rightPanelVisible ? "Hide right panel" : "Show right panel",
-                    isDimmed: rightPanelVisible
-                ) {
-                    onToggleRightPanelVisibility()
-                }
-
-                AppIconButton(
-                    iconName: bottomPanelVisible ? "rectangle.topthird.inset.filled" : "rectangle.bottomthird.inset.filled",
-                    helpText: bottomPanelVisible ? "Hide bottom panel" : "Show bottom panel",
-                    isDimmed: bottomPanelVisible
-                ) {
-                    onToggleBottomPanelVisibility()
-                }
-
-                Divider()
-                    .frame(height: 18)
-
-                if runtimeConfigCoordinator.activeModules.isPlayback {
-                    PlaybackRateToolbarControl(
-                        editorSettingsStore: editorSettingsStore,
-                        playbackRate: Double(runtimeConfigCoordinator.simulationState.playbackRate)
-                    )
-                } else {
-                    RealtimeScaleToolbarControl(
-                        editorSettingsStore: editorSettingsStore,
-                        validationReport: validationReport,
-                        highlightedValidationField: highlightedValidationField,
-                        timeScale: Double(runtimeConfigCoordinator.simulationState.timeScale)
-                    )
-                }
-
-                AppSwitchToggle(
-                    "Slow Rotation",
-                    isOn: Binding(
-                        get: { viewportStateStore.viewportState.slowRotationEnabled },
-                        set: { viewportStateStore.setSlowRotationEnabled($0) }
-                    ),
-                    helpText: viewportStateStore.viewportState.slowRotationEnabled ? "Disable slow rotation" : "Enable slow rotation"
-                )
-
-                Divider()
-                    .frame(height: 18)
-
-                AppIconButton(
-                    iconName: "arrow.up.left.and.arrow.down.right",
-                    helpText: viewportStateStore.viewportState.camera.mode == .navigation ? "Navigation mode active" : "Switch to navigation mode",
-                    variant: viewportStateStore.viewportState.camera.mode == .navigation ? .active : .neutral,
-                    isDimmed: viewportStateStore.viewportState.camera.mode == .navigation
-                ) {
-                    viewportStateStore.setCameraMode(.navigation)
-                }
-
-                AppIconButton(
-                    iconName: "arrow.triangle.2.circlepath",
-                    helpText: viewportStateStore.viewportState.camera.mode == .orbit ? "Orbit mode active" : "Switch to orbit mode",
-                    variant: viewportStateStore.viewportState.camera.mode == .orbit ? .active : .neutral,
-                    isDimmed: viewportStateStore.viewportState.camera.mode == .orbit
-                ) {
-                    viewportStateStore.setCameraMode(.orbit)
-                }
-
-                HStack(spacing: 8) {
-                    Text("Move Speed")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Slider(
-                        value: Binding(
-                            get: { Double(viewportStateStore.viewportState.camera.movementSpeed) },
-                            set: { viewportStateStore.setCameraMovementSpeed(Float($0)) }
-                        ),
-                        in: Double(CameraMath.movementSpeedRange.lowerBound)...Double(CameraMath.movementSpeedRange.upperBound)
-                    )
-                    .controlSize(.small)
-                    .frame(width: 120)
-                    Text(String(format: "%.2fx", viewportStateStore.viewportState.camera.movementSpeed))
-                        .font(.caption.monospacedDigit())
-                        .frame(width: 52, alignment: .trailing)
-                }
-
-                Spacer()
-
-                Text(validationReport.canStart ? "Ready" : "Blocked")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(validationReport.canStart ? Color.green.opacity(0.9) : Color.red.opacity(0.9))
-            }
-            .frame(height: 38)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
-
             HStack(spacing: 16) {
                 LabeledContent("Transport", value: transportState.title)
                 LabeledContent("Mode", value: runtimeConfigCoordinator.activeModules.executionModel?.title ?? "Mixed")
@@ -1301,7 +1177,6 @@ private struct SimulationCenterPane: View {
                     session: session,
                     activeModules: runtimeConfigCoordinator.activeModules,
                     transportState: transportState,
-                    playbackRate: Double(runtimeConfigCoordinator.simulationState.playbackRate),
                     looping: runtimeConfigCoordinator.simulationState.playbackLooping
                 )
             }
@@ -1371,11 +1246,164 @@ private struct SimulationCenterPane: View {
     }
 }
 
-private struct RealtimeScaleToolbarControl: View {
+private struct TopRuntimeToolbar: View {
+    @ObservedObject var runtimeConfigCoordinator: SimulationRuntimeConfigCoordinator
+    @ObservedObject var editorSettingsStore: MainWindowEditorSettingsStore
+    @ObservedObject var viewportStateStore: MainWindowViewportStateStore
+    let validationReport: RuntimeValidationReport
+    let highlightedValidationField: RuntimeValidationField?
+    let anyDockPanelsVisible: Bool
+    let leftPanelVisible: Bool
+    let rightPanelVisible: Bool
+    let bottomPanelVisible: Bool
+    let onToggleAllDockPanelsVisibility: () -> Void
+    let onToggleLeftPanelVisibility: () -> Void
+    let onToggleRightPanelVisibility: () -> Void
+    let onToggleBottomPanelVisibility: () -> Void
+
+    private var transportState: SimulationTransportState {
+        runtimeConfigCoordinator.transportState
+    }
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 10) {
+                Button("Start") {
+                    runtimeConfigCoordinator.startSimulation()
+                }
+                .buttonStyle(AppFramedButtonStyle(.prominent))
+                .disabled(transportState != .stopped || !validationReport.canStart)
+
+                Button(transportState == .running ? "Pause" : "Play") {
+                    runtimeConfigCoordinator.togglePausePlay()
+                }
+                .frame(minWidth: 64)
+                .buttonStyle(AppFramedButtonStyle())
+                .disabled(transportState == .stopped || (transportState == .paused && !validationReport.canStart))
+
+                Button("Stop") {
+                    runtimeConfigCoordinator.stopSimulation()
+                }
+                .buttonStyle(AppFramedButtonStyle())
+                .disabled(transportState == .stopped)
+
+                Divider()
+                    .frame(height: 18)
+
+                AppIconButton(
+                    iconName: anyDockPanelsVisible ? "rectangle.split.3x1" : "rectangle.split.3x1.fill",
+                    helpText: anyDockPanelsVisible ? "Hide all dock panels" : "Show all dock panels"
+                ) {
+                    onToggleAllDockPanelsVisibility()
+                }
+
+                AppIconButton(
+                    iconName: "sidebar.left",
+                    helpText: leftPanelVisible ? "Hide left panel" : "Show left panel",
+                    isDimmed: leftPanelVisible
+                ) {
+                    onToggleLeftPanelVisibility()
+                }
+
+                AppIconButton(
+                    iconName: "sidebar.right",
+                    helpText: rightPanelVisible ? "Hide right panel" : "Show right panel",
+                    isDimmed: rightPanelVisible
+                ) {
+                    onToggleRightPanelVisibility()
+                }
+
+                AppIconButton(
+                    iconName: bottomPanelVisible ? "rectangle.topthird.inset.filled" : "rectangle.bottomthird.inset.filled",
+                    helpText: bottomPanelVisible ? "Hide bottom panel" : "Show bottom panel",
+                    isDimmed: bottomPanelVisible
+                ) {
+                    onToggleBottomPanelVisibility()
+                }
+
+                Divider()
+                    .frame(height: 18)
+
+                TimeScaleToolbarControl(
+                    editorSettingsStore: editorSettingsStore,
+                    validationReport: validationReport,
+                    highlightedValidationField: highlightedValidationField,
+                    timeScale: Double(runtimeConfigCoordinator.simulationState.timeScale),
+                    profile: runtimeConfigCoordinator.activeModules.timeScaleProfile
+                )
+
+                if runtimeConfigCoordinator.activeModules.isPlayback {
+                    PlaybackLoopToolbarControl(editorSettingsStore: editorSettingsStore)
+                }
+
+                AppSwitchToggle(
+                    "Slow Rotation",
+                    isOn: Binding(
+                        get: { viewportStateStore.viewportState.slowRotationEnabled },
+                        set: { viewportStateStore.setSlowRotationEnabled($0) }
+                    ),
+                    helpText: viewportStateStore.viewportState.slowRotationEnabled ? "Disable slow rotation" : "Enable slow rotation"
+                )
+
+                Divider()
+                    .frame(height: 18)
+
+                AppIconButton(
+                    iconName: "arrow.up.left.and.arrow.down.right",
+                    helpText: viewportStateStore.viewportState.camera.mode == .navigation ? "Navigation mode active" : "Switch to navigation mode",
+                    variant: viewportStateStore.viewportState.camera.mode == .navigation ? .active : .neutral,
+                    isDimmed: viewportStateStore.viewportState.camera.mode == .navigation
+                ) {
+                    viewportStateStore.setCameraMode(.navigation)
+                }
+
+                AppIconButton(
+                    iconName: "arrow.triangle.2.circlepath",
+                    helpText: viewportStateStore.viewportState.camera.mode == .orbit ? "Orbit mode active" : "Switch to orbit mode",
+                    variant: viewportStateStore.viewportState.camera.mode == .orbit ? .active : .neutral,
+                    isDimmed: viewportStateStore.viewportState.camera.mode == .orbit
+                ) {
+                    viewportStateStore.setCameraMode(.orbit)
+                }
+
+                HStack(spacing: 8) {
+                    Text("Move Speed")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Slider(
+                        value: Binding(
+                            get: { Double(viewportStateStore.viewportState.camera.movementSpeed) },
+                            set: { viewportStateStore.setCameraMovementSpeed(Float($0)) }
+                        ),
+                        in: Double(CameraMath.movementSpeedRange.lowerBound)...Double(CameraMath.movementSpeedRange.upperBound)
+                    )
+                    .controlSize(.small)
+                    .frame(width: 120)
+                    Text(String(format: "%.2fx", viewportStateStore.viewportState.camera.movementSpeed))
+                        .font(.caption.monospacedDigit())
+                        .frame(width: 52, alignment: .trailing)
+                }
+
+                Text(validationReport.canStart ? "Ready" : "Blocked")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(validationReport.canStart ? Color.green.opacity(0.9) : Color.red.opacity(0.9))
+            }
+            .frame(height: 38)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+        }
+        .frame(maxWidth: .infinity, minHeight: 50, maxHeight: 50, alignment: .leading)
+        .clipped()
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+    }
+}
+
+private struct TimeScaleToolbarControl: View {
     @ObservedObject var editorSettingsStore: MainWindowEditorSettingsStore
     let validationReport: RuntimeValidationReport
     let highlightedValidationField: RuntimeValidationField?
     let timeScale: Double
+    let profile: ModuleTimeScaleProfile
 
     var body: some View {
         HStack(spacing: 8) {
@@ -1387,11 +1415,11 @@ private struct RealtimeScaleToolbarControl: View {
                     get: { timeScale },
                     set: {
                         var next = editorSettingsStore.editorState.physicsState
-                        next.timeScale = min(max(0.1, $0), 4.0)
+                        next.timeScale = profile.clamped($0)
                         editorSettingsStore.setPhysicsState(next)
                     }
                 ),
-                in: 0.1...4.0
+                in: profile.range
             )
             .controlSize(.small)
             .frame(width: 120)
@@ -1406,44 +1434,22 @@ private struct RealtimeScaleToolbarControl: View {
     }
 }
 
-private struct PlaybackRateToolbarControl: View {
+private struct PlaybackLoopToolbarControl: View {
     @ObservedObject var editorSettingsStore: MainWindowEditorSettingsStore
-    let playbackRate: Double
 
     var body: some View {
-        HStack(spacing: 8) {
-            Text("Playback Rate")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Slider(
-                value: Binding(
-                    get: { playbackRate },
-                    set: {
-                        var next = editorSettingsStore.editorState.playbackState
-                        next.playbackRate = min(max(0.05, $0), 4.0)
-                        editorSettingsStore.setPlaybackState(next)
-                    }
-                ),
-                in: 0.05...4.0
-            )
-            .controlSize(.small)
-            .frame(width: 120)
-            Text(String(format: "%.2fx", playbackRate))
-                .font(.caption.monospacedDigit())
-                .frame(width: 52, alignment: .trailing)
-            AppSwitchToggle(
-                "Loop",
-                isOn: Binding(
-                    get: { editorSettingsStore.editorState.playbackState.looping },
-                    set: {
-                        var next = editorSettingsStore.editorState.playbackState
-                        next.looping = $0
-                        editorSettingsStore.setPlaybackState(next)
-                    }
-                ),
-                helpText: editorSettingsStore.editorState.playbackState.looping ? "Loop playback" : "Stop at the end"
-            )
-        }
+        AppSwitchToggle(
+            "Loop",
+            isOn: Binding(
+                get: { editorSettingsStore.editorState.playbackState.looping },
+                set: {
+                    var next = editorSettingsStore.editorState.playbackState
+                    next.looping = $0
+                    editorSettingsStore.setPlaybackState(next)
+                }
+            ),
+            helpText: editorSettingsStore.editorState.playbackState.looping ? "Loop playback" : "Stop at the end"
+        )
     }
 }
 
@@ -1451,7 +1457,6 @@ private struct PlaybackStatusBar: View {
     let session: SimulationSession
     let activeModules: ActiveModuleSet
     let transportState: SimulationTransportState
-    let playbackRate: Double
     let looping: Bool
 
     var body: some View {
@@ -1484,7 +1489,6 @@ private struct PlaybackStatusBar: View {
                 Text("Visual: \(activeModules.visual.name)")
                     .lineLimit(1)
                 Spacer()
-                Text("Rate \(String(format: "%.2fx", playbackRate))")
                 Text(looping ? "Looping" : "No Loop")
             }
             .font(.caption)
@@ -1772,76 +1776,96 @@ struct ModuleSlotsPanel: View {
     @Environment(\.highlightedValidationField) private var highlightedValidationField
     @State private var pickerKind: ModuleKind?
     @State private var pickerSearchText = ""
+    @State private var isModuleOverridesExpanded = false
 
     private var availableBundles: [ModuleBundle] {
         moduleCatalogStore.availableBundles
     }
 
+    private var activeTrinity: TrinityDefinition? {
+        TrinityCatalog.matching(runtimeConfigCoordinator.activeModules)
+    }
+
     var body: some View {
-        VStack(spacing: 8) {
-            ForEach(EditorViewSupport.moduleSlotOrder) { kind in
-                let assignedModuleID = EditorViewSupport.assignedModules(from: editorSettingsStore)[kind]
-                let resolved = resolvedModule(for: kind)
-                let issue = validationReport.issue(for: .assignedModule(kind))
-                let displayTitle = EditorViewSupport.displayTitle(
-                    for: kind,
-                    activeModules: runtimeConfigCoordinator.activeModules
-                )
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        Text(displayTitle)
-                            .font(.caption.weight(.semibold))
-                        Spacer()
-                        if resolved.visibility == .dev {
-                            Text("DEV")
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(.orange)
-                        }
-                    }
+        VStack(alignment: .leading, spacing: 10) {
+            TrinitySelectorRow(
+                activeTrinity: activeTrinity,
+                activeModules: runtimeConfigCoordinator.activeModules,
+                onSelect: { editorSettingsStore.setSelectedTrinity($0) }
+            )
 
-                    HStack(spacing: 8) {
-                        Button {
-                            pickerKind = kind
-                            pickerSearchText = ""
-                        } label: {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(resolved.name)
+            DisclosureGroup(isExpanded: $isModuleOverridesExpanded) {
+                VStack(spacing: 8) {
+                    ForEach(EditorViewSupport.moduleSlotOrder) { kind in
+                        let assignedModuleID = EditorViewSupport.assignedModules(from: editorSettingsStore)[kind]
+                        let resolved = resolvedModule(for: kind)
+                        let issue = validationReport.issue(for: .assignedModule(kind))
+                        let displayTitle = EditorViewSupport.displayTitle(
+                            for: kind,
+                            activeModules: runtimeConfigCoordinator.activeModules
+                        )
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text(displayTitle)
                                     .font(.caption.weight(.semibold))
-                                    .foregroundStyle(assignedModuleID == nil ? .secondary : .primary)
-                                    .lineLimit(1)
-                                Text(assignedModuleID == nil ? "Internal fallback" : assignedModuleID ?? "")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
+                                Spacer()
+                                if resolved.visibility == .dev {
+                                    Text("DEV")
+                                        .font(.caption2.weight(.semibold))
+                                        .foregroundStyle(.orange)
+                                }
                             }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        .buttonStyle(AppFramedButtonStyle())
 
-                        Spacer()
-                        if assignedModuleID != nil {
-                            Button("Clear") {
-                                editorSettingsStore.setAssignedModuleID(nil, for: kind)
+                            HStack(spacing: 8) {
+                                Button {
+                                    pickerKind = kind
+                                    pickerSearchText = ""
+                                } label: {
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(resolved.name)
+                                            .font(.caption.weight(.semibold))
+                                            .foregroundStyle(assignedModuleID == nil ? .secondary : .primary)
+                                            .lineLimit(1)
+                                        Text(assignedModuleID == nil ? "Internal fallback" : assignedModuleID ?? "")
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                                .buttonStyle(AppFramedButtonStyle())
+
+                                Spacer()
+                                if assignedModuleID != nil {
+                                    Button("Clear") {
+                                        editorSettingsStore.setAssignedModuleID(nil, for: kind)
+                                    }
+                                    .font(.caption)
+                                    .buttonStyle(AppFramedButtonStyle(.destructive))
+                                }
                             }
-                            .font(.caption)
-                            .buttonStyle(AppFramedButtonStyle(.destructive))
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
+                        .background(.quaternary.opacity(0.18), in: RoundedRectangle(cornerRadius: 8))
+                        .contextMenu {
+                            if assignedModuleID != nil {
+                                Button("Clear Assignment", role: .destructive) {
+                                    editorSettingsStore.setAssignedModuleID(nil, for: kind)
+                                }
+                            }
+                        }
+                        .validationDecoration(
+                            issue: issue,
+                            isHighlighted: highlightedValidationField == .assignedModule(kind)
+                        )
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(8)
-                .background(.quaternary.opacity(0.18), in: RoundedRectangle(cornerRadius: 8))
-                .contextMenu {
-                    if assignedModuleID != nil {
-                        Button("Clear Assignment", role: .destructive) {
-                            editorSettingsStore.setAssignedModuleID(nil, for: kind)
-                        }
-                    }
-                }
-                .validationDecoration(
-                    issue: issue,
-                    isHighlighted: highlightedValidationField == .assignedModule(kind)
-                )
+                .padding(.top, 8)
+            } label: {
+                Text("Module Overrides")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
             }
         }
         .popover(isPresented: Binding(
@@ -1877,6 +1901,65 @@ struct ModuleSlotsPanel: View {
         case .optimization:
             return runtimeConfigCoordinator.activeModules.optimization
         }
+    }
+}
+
+private struct TrinitySelectorRow: View {
+    let activeTrinity: TrinityDefinition?
+    let activeModules: ActiveModuleSet
+    let onSelect: (TrinityDefinition) -> Void
+
+    private var displayName: String {
+        activeTrinity?.name ?? "Custom"
+    }
+
+    private var detailText: String {
+        if let activeTrinity {
+            return activeTrinity.executionModel.title
+        }
+        return activeModules.executionModel?.title ?? "Mixed"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Trinity")
+                .font(.caption.weight(.semibold))
+
+            Menu {
+                ForEach(TrinityCatalog.all) { trinity in
+                    Button {
+                        onSelect(trinity)
+                    } label: {
+                        if activeTrinity?.id == trinity.id {
+                            Label(trinity.name, systemImage: "checkmark")
+                        } else {
+                            Text(trinity.name)
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(displayName)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(activeTrinity == nil ? Color.orange : Color.primary)
+                            .lineLimit(1)
+                        Text(detailText)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.down")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(AppFramedButtonStyle())
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(8)
+        .background(.quaternary.opacity(0.18), in: RoundedRectangle(cornerRadius: 8))
     }
 }
 
@@ -1963,335 +2046,6 @@ private struct ModulePickerPopover: View {
             .frame(width: 340, height: 260)
         }
         .padding(12)
-    }
-}
-
-struct ModuleSettingsPanelView: View {
-    let kind: ModuleKind
-    @ObservedObject var editorSettingsStore: MainWindowEditorSettingsStore
-    @ObservedObject var physicsModuleSettingsStore: MainWindowPhysicsModuleSettingsStore
-    @ObservedObject var moduleCatalogStore: MainWindowModuleCatalogStore
-    @ObservedObject var runtimeConfigCoordinator: SimulationRuntimeConfigCoordinator
-    let particleCountUICap: Int
-    let particleCountEngineCap: Int
-
-    private var availableBundles: [ModuleBundle] {
-        moduleCatalogStore.availableBundles
-    }
-
-    private var transportState: SimulationTransportState {
-        runtimeConfigCoordinator.transportState
-    }
-
-    private var resolved: ModuleDescriptor {
-        switch kind {
-        case .physics:
-            return runtimeConfigCoordinator.activeModules.physics
-        case .visual:
-            return runtimeConfigCoordinator.activeModules.visual
-        case .optimization:
-            return runtimeConfigCoordinator.activeModules.optimization
-        }
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(resolved.name)
-                        .font(.caption.weight(.semibold))
-                    Text("\(EditorViewSupport.roleTitle(for: resolved)) Module")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                if resolved.visibility == .dev {
-                    Text("DEV")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.orange)
-                }
-            }
-
-            Group {
-                switch kind {
-                case .physics:
-                    if resolved.name == ModuleCatalog.defaultPhysics.name {
-                        PhysicsSettingsPanel(
-                            store: editorSettingsStore,
-                            particleCountUICap: particleCountUICap,
-                            particleCountEngineCap: particleCountEngineCap
-                        )
-                    } else if resolved.name == TypeMatrixLocalPhysicsSettings.moduleName {
-                        TypeMatrixLocalPhysicsModuleSettingsPanel(
-                            store: editorSettingsStore,
-                            physicsModuleSettingsStore: physicsModuleSettingsStore,
-                            transportState: transportState,
-                            particleCountUICap: particleCountUICap
-                        )
-                    } else {
-                        unavailable
-                    }
-                case .visual:
-                    if resolved.name == ModuleCatalog.defaultVisual.name {
-                        VisualSettingsPanel(
-                            store: editorSettingsStore,
-                            optimizationDebugSupported: runtimeConfigCoordinator.activeModules.visual.acceptsOptimizationDebugInfo
-                                && runtimeConfigCoordinator.activeModules.optimization.providesOptimizationDebugInfo
-                        )
-                    } else {
-                        unavailable
-                    }
-                case .optimization:
-                    if resolved.name == ModuleCatalog.defaultOptimization.name
-                        || resolved.name == FixedGridOptimizationModuleRuntime.moduleName {
-                        OptimizationSettingsPanel(store: editorSettingsStore, resolvedOptimization: resolved)
-                    } else {
-                        unavailable
-                    }
-                }
-            }
-            .id(resolved.id)
-            .animation(.easeInOut(duration: 0.22), value: resolved.id)
-        }
-    }
-
-    private var unavailable: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("No dedicated settings UI is registered for this module yet.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text("Resolved module: \(resolved.name)")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(8)
-        .background(.quaternary.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
-    }
-}
-
-private struct PhysicsSettingsPanel: View {
-    @ObservedObject var store: MainWindowEditorSettingsStore
-    let particleCountUICap: Int
-    let particleCountEngineCap: Int
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            EventuallyAppliedIntSlider(
-                title: "Particle Count",
-                field: .particleCount,
-                appliedValue: Binding(
-                    get: { store.editorState.physicsState.particleCount },
-                    set: {
-                        var next = store.editorState.physicsState
-                        next.particleCount = $0
-                        store.setPhysicsState(next)
-                    }
-                ),
-                range: 1...particleCountUICap,
-                helpText: "UI cap: \(particleCountUICap.formatted()). Hard engine limit: \(particleCountEngineCap.formatted())."
-            )
-            EventuallyAppliedToggle(title: "Random Distribution", field: .randomDistribution, appliedValue: Binding(
-                get: { store.editorState.physicsState.randomDistribution },
-                set: {
-                    var next = store.editorState.physicsState
-                    next.randomDistribution = $0
-                    store.setPhysicsState(next)
-                }
-            ))
-            EventuallyAppliedToggle(title: "Inter-Particle Communication", field: .allParticlesIntercommunicate, appliedValue: Binding(
-                get: { store.editorState.physicsState.allParticlesIntercommunicate },
-                set: {
-                    var next = store.editorState.physicsState
-                    next.allParticlesIntercommunicate = $0
-                    store.setPhysicsState(next)
-                }
-            ))
-            EventuallyAppliedSlider(
-                title: "Particle Types",
-                field: .particleTypes,
-                appliedValue: Binding(
-                    get: { Double(store.editorState.physicsState.particleTypes) },
-                    set: {
-                        var next = store.editorState.physicsState
-                        next.particleTypes = max(1, min(32, Int($0.rounded())))
-                        store.setPhysicsState(next)
-                    }
-                ),
-                range: 1...32,
-                step: 1,
-                tickBehavior: .visible,
-                valueText: { "\(Int($0.rounded()))" }
-            )
-            Picker("Movement", selection: .constant("slide")) {
-                Text("Slide").tag("slide")
-            }
-            .font(.caption)
-            .pickerStyle(.segmented)
-            .disabled(true)
-            ForEach([("Direction X", \SIMD3<Double>.x), ("Direction Y", \SIMD3<Double>.y), ("Direction Z", \SIMD3<Double>.z)], id: \.0) { title, keyPath in
-                EventuallyAppliedSlider(
-                    title: title,
-                    field: .moduleSetting(moduleName: ModuleCatalog.defaultPhysics.name, key: title),
-                    appliedValue: Binding(
-                        get: { store.editorState.physicsState.movementDirection[keyPath: keyPath] },
-                        set: {
-                            var next = store.editorState.physicsState
-                            next.movementDirection[keyPath: keyPath] = $0
-                            store.setPhysicsState(next)
-                        }
-                    ),
-                    range: 0...1,
-                    step: 0.01,
-                    valueText: { String(format: "%.2f", $0) }
-                )
-            }
-        }
-    }
-}
-
-private struct VisualSettingsPanel: View {
-    @ObservedObject var store: MainWindowEditorSettingsStore
-    let optimizationDebugSupported: Bool
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            EventuallyAppliedSlider(
-                title: "Sphere Size",
-                field: .sphereSize,
-                appliedValue: Binding(
-                    get: { store.editorState.visualState.sphereSize },
-                    set: {
-                        var next = store.editorState.visualState
-                        next.sphereSize = $0
-                        store.setVisualState(next)
-                    }
-                ),
-                range: 0.002...0.015,
-                step: 0.0005,
-                valueText: { String(format: "%.3f", $0) }
-            )
-            EventuallyAppliedSlider(
-                title: "Spectrum Offset",
-                field: .spectrumOffset,
-                appliedValue: Binding(
-                    get: { store.editorState.visualState.spectrumOffset },
-                    set: {
-                        var next = store.editorState.visualState
-                        next.spectrumOffset = $0
-                        store.setVisualState(next)
-                    }
-                ),
-                range: 0...1,
-                step: 0.01,
-                valueText: { String(format: "%.2f", $0) }
-            )
-            EventuallyAppliedToggle(
-                title: "Show Optimization Info",
-                field: .showOptimizationInfo,
-                appliedValue: Binding(
-                    get: { store.editorState.visualState.showOptimizationInfo },
-                    set: {
-                        var next = store.editorState.visualState
-                        next.showOptimizationInfo = $0
-                        store.setVisualState(next)
-                    }
-                )
-            )
-            .disabled(!optimizationDebugSupported)
-        }
-    }
-}
-
-private struct OptimizationSettingsPanel: View {
-    @ObservedObject var store: MainWindowEditorSettingsStore
-    let resolvedOptimization: ModuleDescriptor
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            EventuallyAppliedToggle(
-                title: "Leader Communication Log",
-                field: .showLeaderCommunicationLog,
-                appliedValue: Binding(
-                    get: { store.editorState.optimizationState.showLeaderCommunicationLog },
-                    set: {
-                        var next = store.editorState.optimizationState
-                        next.showLeaderCommunicationLog = $0
-                        store.setOptimizationState(next)
-                    }
-                )
-            )
-            EventuallyAppliedToggle(
-                title: "Protect Leader From Unload",
-                appliedValue: Binding(
-                    get: { store.editorState.debugSettings.protectLeaderFromUnload },
-                    set: {
-                        var next = store.editorState.debugSettings
-                        next.protectLeaderFromUnload = $0
-                        store.setDebugSettings(next)
-                    }
-                )
-            )
-
-            if resolvedOptimization.name == FixedGridOptimizationModuleRuntime.moduleName {
-                EventuallyAppliedIntSlider(
-                    title: "Subdivisions",
-                    field: .moduleSetting(moduleName: FixedGridOptimizationModuleRuntime.moduleName, key: "Subdivisions"),
-                    appliedValue: Binding(
-                        get: { store.editorState.optimizationState.fixedGridSubdivisions },
-                        set: {
-                            var next = store.editorState.optimizationState
-                            next.fixedGridSubdivisions = min(FixedGridOptimizationModuleRuntime.maxSubdivisions, max(1, $0))
-                            next.fixedGridSubspaceCap = min(next.fixedGridSubspaceCap, next.fixedGridSubdivisions)
-                            store.setOptimizationState(next)
-                        }
-                    ),
-                    range: 1...FixedGridOptimizationModuleRuntime.maxSubdivisions
-                )
-
-                EventuallyAppliedIntSlider(
-                    title: "Subspace Cap",
-                    field: .moduleSetting(moduleName: FixedGridOptimizationModuleRuntime.moduleName, key: "Subspace Cap"),
-                    appliedValue: Binding(
-                        get: {
-                            min(
-                                store.editorState.optimizationState.fixedGridSubspaceCap,
-                                store.editorState.optimizationState.fixedGridSubdivisions
-                            )
-                        },
-                        set: {
-                            var next = store.editorState.optimizationState
-                            next.fixedGridSubspaceCap = min(max(1, $0), next.fixedGridSubdivisions)
-                            store.setOptimizationState(next)
-                        }
-                    ),
-                    range: 1...max(1, store.editorState.optimizationState.fixedGridSubdivisions)
-                )
-
-                EventuallyAppliedSegmentedPicker(
-                    title: "Neighbor Read Mode",
-                    field: .moduleSetting(moduleName: FixedGridOptimizationModuleRuntime.moduleName, key: "Neighbor Read Mode"),
-                    appliedValue: Binding(
-                        get: { store.editorState.optimizationState.fixedGridNeighborReadMode },
-                        set: {
-                            var next = store.editorState.optimizationState
-                            next.fixedGridNeighborReadMode = $0
-                            store.setOptimizationState(next)
-                        }
-                    ),
-                    options: FixedGridNeighborReadMode.allCases,
-                    optionTitle: { $0.title }
-                )
-
-                Text("Wrapped fixed-grid traversal publishes multi-range candidate spans.")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            } else {
-                Text("Naive all-pairs traversal is the default optimization MVP.")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-        }
     }
 }
 

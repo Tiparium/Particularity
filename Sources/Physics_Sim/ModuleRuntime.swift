@@ -21,7 +21,7 @@ enum SimulationParticleLimits {
     static let settingsUICap = 250_000
 }
 
-struct PhysicsModuleState {
+struct PhysicsModuleState: Codable, Equatable, Sendable {
     var particleCount: Int = 20_000
     var randomDistribution = true
     var particleTypes: Int = 6
@@ -30,29 +30,173 @@ struct PhysicsModuleState {
     var timeScale: Double = 1.0
 }
 
-enum TimeScaleControlMapping {
-    static let sliderRange: ClosedRange<Double> = 0...2
-    static let textEntryRange: ClosedRange<Double> = 0...16
-    static let sliderStep: Double = 0.01
+struct ModuleTimeScaleProfile: Codable, Equatable, Sendable {
+    var minimum: Double
+    var maximum: Double
+    var defaultValue: Double
+    var step: Double
 
-    private static let runtimeScalePerControlUnit: Double = 0.25
+    static let realtimeDefault = ModuleTimeScaleProfile(
+        minimum: 0.1,
+        maximum: 4.0,
+        defaultValue: 1.0,
+        step: 0.01
+    )
 
-    static func controlValue(forRuntimeScale runtimeScale: Double) -> Double {
-        max(0, runtimeScale / runtimeScalePerControlUnit)
+    static let playbackDefault = ModuleTimeScaleProfile(
+        minimum: 0.05,
+        maximum: 4.0,
+        defaultValue: 1.0,
+        step: 0.01
+    )
+
+    var range: ClosedRange<Double> {
+        minimum...max(minimum, maximum)
     }
 
-    static func runtimeScale(forControlValue controlValue: Double) -> Double {
-        max(0, controlValue * runtimeScalePerControlUnit)
+    func clamped(_ value: Double) -> Double {
+        min(max(minimum, value), max(minimum, maximum))
     }
 }
 
-struct VisualModuleState {
+struct ModuleSimulationSetupProfile: Codable, Equatable, Sendable {
+    var particleCount: ModuleParticleCountControl?
+    var randomDistribution: ModuleBoolSetupControl?
+    var interParticleCommunication: ModuleBoolSetupControl?
+    var particleTypes: ModuleIntSetupControl?
+
+    static let defaultRealtime = ModuleSimulationSetupProfile(
+        particleCount: ModuleParticleCountControl(
+            minimum: 1,
+            maximum: SimulationParticleLimits.settingsUICap,
+            defaultValue: 20_000,
+            helpText: "UI cap: \(SimulationParticleLimits.settingsUICap.formatted()). Hard engine limit: \(SimulationParticleLimits.engineCap.formatted())."
+        ),
+        randomDistribution: ModuleBoolSetupControl(defaultValue: true),
+        interParticleCommunication: ModuleBoolSetupControl(defaultValue: true),
+        particleTypes: ModuleIntSetupControl(minimum: 1, maximum: 32, defaultValue: 6)
+    )
+
+    static let typeMatrixRealtime = ModuleSimulationSetupProfile(
+        particleCount: ModuleParticleCountControl(
+            minimum: 1,
+            maximum: SimulationParticleLimits.settingsUICap,
+            defaultValue: 20_000,
+            helpText: "Uses the existing simulation particle count path."
+        ),
+        randomDistribution: ModuleBoolSetupControl(defaultValue: true),
+        interParticleCommunication: ModuleBoolSetupControl(defaultValue: true),
+        particleTypes: ModuleIntSetupControl(
+            minimum: 1,
+            maximum: TypeMatrixLocalPhysicsSettings.maxParticleTypes,
+            defaultValue: 6
+        )
+    )
+
+    var exposesAnyControl: Bool {
+        particleCount != nil
+            || randomDistribution != nil
+            || interParticleCommunication != nil
+            || particleTypes != nil
+    }
+}
+
+enum ModuleSimulationSetupSettingID {
+    static let particleCount = "particleCount"
+    static let randomDistribution = "randomDistribution"
+    static let interParticleCommunication = "interParticleCommunication"
+    static let particleTypes = "particleTypes"
+}
+
+struct ResolvedSimulationSetup: Equatable, Sendable {
+    var particleCount: Int
+    var randomDistribution: Bool
+    var particleTypes: Int
+    var allParticlesIntercommunicate: Bool
+}
+
+enum ModuleSimulationSetupResolver {
+    static func resolve(
+        editorState: SimulationEditorState,
+        activeModules: ActiveModuleSet
+    ) -> ResolvedSimulationSetup {
+        let profile = activeModules.simulationSetupProfile
+        let moduleID = activeModules.physics.moduleID
+        let moduleSettings = editorState.moduleSettings[moduleID] ?? [:]
+
+        let particleCount = profile.particleCount.map { control in
+            let fallback = min(max(control.range.lowerBound, editorState.physicsState.particleCount), control.range.upperBound)
+            return min(
+                max(
+                    control.range.lowerBound,
+                    Int(moduleSettings[ModuleSimulationSetupSettingID.particleCount]?.numberValue?.rounded() ?? Double(fallback))
+                ),
+                control.range.upperBound
+            )
+        } ?? 1
+
+        let randomDistribution = profile.randomDistribution.map { control in
+            moduleSettings[ModuleSimulationSetupSettingID.randomDistribution]?.boolValue
+                ?? editorState.physicsState.randomDistribution
+        } ?? false
+
+        let particleTypes = profile.particleTypes.map { control in
+            let fallback = min(max(control.range.lowerBound, editorState.physicsState.particleTypes), control.range.upperBound)
+            return min(
+                max(
+                    control.range.lowerBound,
+                    Int(moduleSettings[ModuleSimulationSetupSettingID.particleTypes]?.numberValue?.rounded() ?? Double(fallback))
+                ),
+                control.range.upperBound
+            )
+        } ?? 1
+
+        let allParticlesIntercommunicate = profile.interParticleCommunication.map { control in
+            moduleSettings[ModuleSimulationSetupSettingID.interParticleCommunication]?.boolValue
+                ?? editorState.physicsState.allParticlesIntercommunicate
+        } ?? false
+
+        return ResolvedSimulationSetup(
+            particleCount: particleCount,
+            randomDistribution: randomDistribution,
+            particleTypes: particleTypes,
+            allParticlesIntercommunicate: allParticlesIntercommunicate
+        )
+    }
+}
+
+struct ModuleParticleCountControl: Codable, Equatable, Sendable {
+    var minimum: Int
+    var maximum: Int
+    var defaultValue: Int
+    var helpText: String?
+
+    var range: ClosedRange<Int> {
+        max(1, minimum)...max(max(1, minimum), maximum)
+    }
+}
+
+struct ModuleIntSetupControl: Codable, Equatable, Sendable {
+    var minimum: Int
+    var maximum: Int
+    var defaultValue: Int
+
+    var range: ClosedRange<Int> {
+        max(1, minimum)...max(max(1, minimum), maximum)
+    }
+}
+
+struct ModuleBoolSetupControl: Codable, Equatable, Sendable {
+    var defaultValue: Bool
+}
+
+struct VisualModuleState: Codable, Equatable, Sendable {
     var sphereSize: Double = 0.008
     var spectrumOffset: Double = 0.0
     var showOptimizationInfo = false
 }
 
-struct OptimizationModuleState {
+struct OptimizationModuleState: Codable, Equatable, Sendable {
     var showLeaderCommunicationLog = false
     var fixedGridSubdivisions: Int = FixedGridOptimizationModuleRuntime.defaultSubdivisions
     var fixedGridSubspaceCap: Int = 2
@@ -73,16 +217,128 @@ enum FixedGridNeighborReadMode: String, Codable, CaseIterable, Equatable, Sendab
     }
 }
 
-struct DebugSettingsState {
+struct DebugSettingsState: Codable, Equatable, Sendable {
     var protectLeaderFromUnload = true
 }
 
-struct PlaybackModuleState {
-    var playbackRate: Double = 1.0
+enum ModuleSettingValue: Codable, Equatable, Sendable {
+    case bool(Bool)
+    case number(Double)
+    case text(String)
+
+    var boolValue: Bool? {
+        if case let .bool(value) = self { return value }
+        return nil
+    }
+
+    var numberValue: Double? {
+        if case let .number(value) = self { return value }
+        return nil
+    }
+
+    var textValue: String? {
+        if case let .text(value) = self { return value }
+        return nil
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let value = try? container.decode(Bool.self) {
+            self = .bool(value)
+        } else if let value = try? container.decode(Double.self) {
+            self = .number(value)
+        } else {
+            self = .text(try container.decode(String.self))
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .bool(let value):
+            try container.encode(value)
+        case .number(let value):
+            try container.encode(value)
+        case .text(let value):
+            try container.encode(value)
+        }
+    }
+}
+
+struct ModuleSettingsSchema: Decodable, Equatable, Sendable {
+    var sections: [ModuleSettingsSection]
+
+    static let empty = ModuleSettingsSchema(sections: [])
+}
+
+struct ModuleSettingsSection: Decodable, Equatable, Sendable, Identifiable {
+    var id: String
+    var title: String?
+    var controls: [ModuleSettingControl]
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case controls
+    }
+}
+
+struct ModuleSettingOption: Decodable, Equatable, Sendable, Identifiable {
+    var id: String { value }
+    var value: String
+    var title: String
+}
+
+enum ModuleSettingControlType: String, Decodable, Equatable, Sendable {
+    case toggle
+    case slider
+    case intSlider
+    case segmented
+    case text
+}
+
+struct ModuleSettingControl: Decodable, Equatable, Sendable, Identifiable {
+    var id: String
+    var title: String
+    var type: ModuleSettingControlType
+    var defaultValue: ModuleSettingValue
+    var minimum: Double?
+    var maximum: Double?
+    var step: Double?
+    var helpText: String?
+    var options: [ModuleSettingOption]
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case type
+        case defaultValue
+        case minimum
+        case maximum
+        case step
+        case helpText
+        case options
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        type = try container.decode(ModuleSettingControlType.self, forKey: .type)
+        defaultValue = try container.decode(ModuleSettingValue.self, forKey: .defaultValue)
+        minimum = try container.decodeIfPresent(Double.self, forKey: .minimum)
+        maximum = try container.decodeIfPresent(Double.self, forKey: .maximum)
+        step = try container.decodeIfPresent(Double.self, forKey: .step)
+        helpText = try container.decodeIfPresent(String.self, forKey: .helpText)
+        options = try container.decodeIfPresent([ModuleSettingOption].self, forKey: .options) ?? []
+    }
+}
+
+struct PlaybackModuleState: Codable, Equatable, Sendable {
     var looping = true
 }
 
-enum ModuleKind: String, CaseIterable, Identifiable, Hashable {
+enum ModuleKind: String, CaseIterable, Identifiable, Hashable, Sendable {
     case physics
     case visual
     case optimization
@@ -91,9 +347,9 @@ enum ModuleKind: String, CaseIterable, Identifiable, Hashable {
 
     var displayName: String {
         switch self {
-        case .physics: return "Physics Module"
-        case .visual: return "Visual Module"
-        case .optimization: return "Optimization Module"
+        case .physics: return "Processor Module"
+        case .visual: return "Presenter Module"
+        case .optimization: return "Producer Module"
         }
     }
 
@@ -183,13 +439,139 @@ enum ModuleRoleMapping {
     }
 }
 
-struct SimulationEditorState {
+struct SimulationEditorState: Equatable {
     var physicsState = PhysicsModuleState()
     var visualState = VisualModuleState()
     var optimizationState = OptimizationModuleState()
     var playbackState = PlaybackModuleState()
     var debugSettings = DebugSettingsState()
+    var moduleSettings: [String: [String: ModuleSettingValue]] = [:]
     var assignedModuleIDs: [String: String] = [:]
+    var selectedTrinityID: String? = TrinityCatalog.defaultRealtime.id
+    var trinitySettings: [String: TrinitySettingsSnapshot] = [:]
+}
+
+struct TrinitySettingsSnapshot: Codable, Equatable, Sendable {
+    var physicsState = PhysicsModuleState()
+    var visualState = VisualModuleState()
+    var optimizationState = OptimizationModuleState()
+    var playbackState = PlaybackModuleState()
+    var debugSettings = DebugSettingsState()
+    var moduleSettings: [String: [String: ModuleSettingValue]] = [:]
+
+    static let `default` = TrinitySettingsSnapshot()
+
+    init(
+        physicsState: PhysicsModuleState = PhysicsModuleState(),
+        visualState: VisualModuleState = VisualModuleState(),
+        optimizationState: OptimizationModuleState = OptimizationModuleState(),
+        playbackState: PlaybackModuleState = PlaybackModuleState(),
+        debugSettings: DebugSettingsState = DebugSettingsState(),
+        moduleSettings: [String: [String: ModuleSettingValue]] = [:]
+    ) {
+        self.physicsState = physicsState
+        self.visualState = visualState
+        self.optimizationState = optimizationState
+        self.playbackState = playbackState
+        self.debugSettings = debugSettings
+        self.moduleSettings = moduleSettings
+    }
+}
+
+struct TrinityDefinition: Identifiable, Equatable, Sendable {
+    let id: String
+    let name: String
+    let executionModel: ModuleExecutionModel
+    let moduleIDs: [ModuleKind: String]
+    let assignedModuleIDs: [String: String]
+    let defaultSettings: TrinitySettingsSnapshot
+
+    func matches(_ modules: ActiveModuleSet) -> Bool {
+        moduleIDs[.optimization] == modules.optimization.moduleID
+            && moduleIDs[.physics] == modules.physics.moduleID
+            && moduleIDs[.visual] == modules.visual.moduleID
+    }
+}
+
+enum TrinityCatalog {
+    static let defaultRealtime = TrinityDefinition(
+        id: "particularity.trinity.default_realtime",
+        name: "Default",
+        executionModel: .realtime,
+        moduleIDs: [
+            .optimization: ModuleCatalog.defaultOptimization.moduleID,
+            .physics: ModuleCatalog.defaultPhysics.moduleID,
+            .visual: ModuleCatalog.defaultVisual.moduleID,
+        ],
+        assignedModuleIDs: [:],
+        defaultSettings: .default
+    )
+
+    static let primordialSoup = TrinityDefinition(
+        id: "particularity.trinity.primordial_soup_v0_1",
+        name: "Primordial Soup v0.1",
+        executionModel: .realtime,
+        moduleIDs: [
+            .optimization: "particularity.realtime.producer.fixed_grid",
+            .physics: "particularity.realtime.processor.type_matrix_local",
+            .visual: ModuleCatalog.defaultVisual.moduleID,
+        ],
+        assignedModuleIDs: [
+            ModuleKind.optimization.rawValue: "particularity.realtime.producer.fixed_grid",
+            ModuleKind.physics.rawValue: "particularity.realtime.processor.type_matrix_local",
+        ],
+        defaultSettings: .default
+    )
+
+    static let toyPlayback = TrinityDefinition(
+        id: "particularity.trinity.toy_playback",
+        name: "Toy Playback",
+        executionModel: .playback,
+        moduleIDs: [
+            .optimization: "particularity.playback.producer.toy_reader",
+            .physics: "particularity.playback.processor.toy_processor",
+            .visual: "particularity.playback.presenter.toy_presenter",
+        ],
+        assignedModuleIDs: [
+            ModuleKind.optimization.rawValue: "particularity.playback.producer.toy_reader",
+            ModuleKind.physics.rawValue: "particularity.playback.processor.toy_processor",
+            ModuleKind.visual.rawValue: "particularity.playback.presenter.toy_presenter",
+        ],
+        defaultSettings: .default
+    )
+
+    static let mlTrainingPlayback = TrinityDefinition(
+        id: "particularity.trinity.ml_training_playback",
+        name: "ML Training Playback",
+        executionModel: .playback,
+        moduleIDs: [
+            .optimization: "particularity.playback.producer.ml_training_reader",
+            .physics: "particularity.playback.processor.ml_training_processor",
+            .visual: "particularity.playback.presenter.ml_training_presenter",
+        ],
+        assignedModuleIDs: [
+            ModuleKind.optimization.rawValue: "particularity.playback.producer.ml_training_reader",
+            ModuleKind.physics.rawValue: "particularity.playback.processor.ml_training_processor",
+            ModuleKind.visual.rawValue: "particularity.playback.presenter.ml_training_presenter",
+        ],
+        defaultSettings: .default
+    )
+
+    static let all: [TrinityDefinition] = [
+        defaultRealtime,
+        primordialSoup,
+        toyPlayback,
+        mlTrainingPlayback,
+    ]
+
+    static func definition(id: String?) -> TrinityDefinition? {
+        guard let id else { return nil }
+        return all.first { $0.id == id }
+    }
+
+    static func matching(_ modules: ActiveModuleSet) -> TrinityDefinition? {
+        all.first { $0.matches(modules) }
+    }
 }
 
 struct ModuleDescriptor: Identifiable, Equatable {
@@ -208,6 +590,8 @@ struct ModuleDescriptor: Identifiable, Equatable {
     let executionModel: ModuleExecutionModel
     let pipelineStage: ModulePipelineStage
     let entryPoints: ModuleEntryPoints
+    let timeScale: ModuleTimeScaleProfile?
+    let simulationSetup: ModuleSimulationSetupProfile?
 
     init(
         moduleID: String? = nil,
@@ -224,7 +608,9 @@ struct ModuleDescriptor: Identifiable, Equatable {
         producesContracts: [String] = [],
         executionModel: ModuleExecutionModel? = nil,
         pipelineStage: ModulePipelineStage? = nil,
-        entryPoints: ModuleEntryPoints = ModuleEntryPoints()
+        entryPoints: ModuleEntryPoints = ModuleEntryPoints(),
+        timeScale: ModuleTimeScaleProfile? = nil,
+        simulationSetup: ModuleSimulationSetupProfile? = nil
     ) {
         self.moduleID = moduleID ?? "internal.\(kind).\(name)"
         self.kind = kind
@@ -241,6 +627,8 @@ struct ModuleDescriptor: Identifiable, Equatable {
         self.executionModel = executionModel ?? ModuleRoleMapping.defaultExecutionModel(for: kind)
         self.pipelineStage = pipelineStage ?? ModuleRoleMapping.defaultPipelineStage(for: kind)
         self.entryPoints = entryPoints
+        self.timeScale = timeScale
+        self.simulationSetup = simulationSetup
     }
 
     var id: String {
@@ -259,7 +647,9 @@ struct ModuleDescriptor: Identifiable, Equatable {
         producesContracts: [String]? = nil,
         executionModel: ModuleExecutionModel?,
         pipelineStage: ModulePipelineStage?,
-        entryPoints: ModuleEntryPoints? = nil
+        entryPoints: ModuleEntryPoints? = nil,
+        timeScale: ModuleTimeScaleProfile? = nil,
+        simulationSetup: ModuleSimulationSetupProfile? = nil
     ) -> ModuleDescriptor {
         ModuleDescriptor(
             moduleID: moduleID ?? self.moduleID,
@@ -276,7 +666,9 @@ struct ModuleDescriptor: Identifiable, Equatable {
             producesContracts: producesContracts ?? self.producesContracts,
             executionModel: executionModel ?? self.executionModel,
             pipelineStage: pipelineStage ?? self.pipelineStage,
-            entryPoints: entryPoints ?? self.entryPoints
+            entryPoints: entryPoints ?? self.entryPoints,
+            timeScale: timeScale ?? self.timeScale,
+            simulationSetup: simulationSetup ?? self.simulationSetup
         )
     }
 }
@@ -354,6 +746,9 @@ struct ModuleManifest: Decodable, Equatable {
     let pipelineStage: ModulePipelineStage
     let shaderSource: String?
     let entryPoints: ModuleEntryPoints
+    let settings: ModuleSettingsSchema?
+    let timeScale: ModuleTimeScaleProfile?
+    let simulationSetup: ModuleSimulationSetupProfile?
 
     private enum CodingKeys: String, CodingKey {
         case id
@@ -367,6 +762,9 @@ struct ModuleManifest: Decodable, Equatable {
         case pipelineStage
         case shaderSource
         case entryPoints
+        case settings
+        case timeScale
+        case simulationSetup
     }
 
     init(from decoder: Decoder) throws {
@@ -382,6 +780,9 @@ struct ModuleManifest: Decodable, Equatable {
         pipelineStage = try container.decode(ModulePipelineStage.self, forKey: .pipelineStage)
         shaderSource = try container.decodeIfPresent(String.self, forKey: .shaderSource)
         entryPoints = try container.decodeIfPresent(ModuleEntryPoints.self, forKey: .entryPoints) ?? ModuleEntryPoints()
+        settings = try container.decodeIfPresent(ModuleSettingsSchema.self, forKey: .settings)
+        timeScale = try container.decodeIfPresent(ModuleTimeScaleProfile.self, forKey: .timeScale)
+        simulationSetup = try container.decodeIfPresent(ModuleSimulationSetupProfile.self, forKey: .simulationSetup)
     }
 }
 
@@ -389,6 +790,9 @@ enum ModuleCatalog {
     static let toyPlaybackFamilyID = "particularity.playback.family.toy_v1"
     static let toyPlaybackSourceContract = "particularity.playback.toy_source.v1"
     static let toyPlaybackParticleSurfaceContract = "particularity.presentation.toy_particle_surface.v1"
+    static let mlPlaybackFamilyID = "particularity.playback.family.ml_training_v1"
+    static let mlPlaybackSourceContract = "particularity.playback.ml_training_source.v1"
+    static let mlPlaybackParticleSurfaceContract = "particularity.presentation.ml_training_particle_surface.v1"
 
     static let defaultPhysics = ModuleDescriptor(
         moduleID: "internal.realtime.processor.default_physics_slide_loop",
@@ -398,7 +802,9 @@ enum ModuleCatalog {
         isDefaultFallback: true,
         acceptsOptimizationDebugInfo: false,
         providesOptimizationDebugInfo: false,
-        supportsLeaderCommunicationLog: false
+        supportsLeaderCommunicationLog: false,
+        timeScale: .realtimeDefault,
+        simulationSetup: .defaultRealtime
     )
 
     static let defaultVisual = ModuleDescriptor(
@@ -432,7 +838,9 @@ enum ModuleCatalog {
             isDefaultFallback: false,
             acceptsOptimizationDebugInfo: false,
             providesOptimizationDebugInfo: false,
-            supportsLeaderCommunicationLog: false
+            supportsLeaderCommunicationLog: false,
+            timeScale: .realtimeDefault,
+            simulationSetup: .defaultRealtime
         ),
         "TypeMatrixLocalAttractionRepulsion": ModuleDescriptor(
             moduleID: "particularity.realtime.processor.type_matrix_local",
@@ -442,7 +850,9 @@ enum ModuleCatalog {
             isDefaultFallback: false,
             acceptsOptimizationDebugInfo: false,
             providesOptimizationDebugInfo: false,
-            supportsLeaderCommunicationLog: false
+            supportsLeaderCommunicationLog: false,
+            timeScale: .realtimeDefault,
+            simulationSetup: .typeMatrixRealtime
         ),
         "DefaultGreySpheres": ModuleDescriptor(
             moduleID: "particularity.realtime.presenter.default_grey_spheres",
@@ -491,7 +901,8 @@ enum ModuleCatalog {
             consumesContracts: [toyPlaybackSourceContract],
             producesContracts: [toyPlaybackParticleSurfaceContract],
             executionModel: .playback,
-            pipelineStage: .processor
+            pipelineStage: .processor,
+            timeScale: .playbackDefault
         ),
         "ToyPlaybackPresenter": ModuleDescriptor(
             moduleID: "particularity.playback.presenter.toy_presenter",
@@ -504,6 +915,50 @@ enum ModuleCatalog {
             supportsLeaderCommunicationLog: false,
             moduleFamilyID: toyPlaybackFamilyID,
             consumesContracts: [toyPlaybackParticleSurfaceContract],
+            executionModel: .playback,
+            pipelineStage: .presenter
+        ),
+        "MLTrainingPlaybackReader": ModuleDescriptor(
+            moduleID: "particularity.playback.producer.ml_training_reader",
+            kind: "optimization",
+            name: "MLTrainingPlaybackReader",
+            visibility: .production,
+            isDefaultFallback: false,
+            acceptsOptimizationDebugInfo: false,
+            providesOptimizationDebugInfo: false,
+            supportsLeaderCommunicationLog: false,
+            moduleFamilyID: mlPlaybackFamilyID,
+            producesContracts: [mlPlaybackSourceContract],
+            executionModel: .playback,
+            pipelineStage: .producer
+        ),
+        "MLTrainingPlaybackProcessor": ModuleDescriptor(
+            moduleID: "particularity.playback.processor.ml_training_processor",
+            kind: "physics",
+            name: "MLTrainingPlaybackProcessor",
+            visibility: .production,
+            isDefaultFallback: false,
+            acceptsOptimizationDebugInfo: false,
+            providesOptimizationDebugInfo: false,
+            supportsLeaderCommunicationLog: false,
+            moduleFamilyID: mlPlaybackFamilyID,
+            consumesContracts: [mlPlaybackSourceContract],
+            producesContracts: [mlPlaybackParticleSurfaceContract],
+            executionModel: .playback,
+            pipelineStage: .processor,
+            timeScale: .playbackDefault
+        ),
+        "MLTrainingPlaybackPresenter": ModuleDescriptor(
+            moduleID: "particularity.playback.presenter.ml_training_presenter",
+            kind: "visual",
+            name: "MLTrainingPlaybackPresenter",
+            visibility: .production,
+            isDefaultFallback: false,
+            acceptsOptimizationDebugInfo: false,
+            providesOptimizationDebugInfo: false,
+            supportsLeaderCommunicationLog: false,
+            moduleFamilyID: mlPlaybackFamilyID,
+            consumesContracts: [mlPlaybackParticleSurfaceContract],
             executionModel: .playback,
             pipelineStage: .presenter
         ),
@@ -594,6 +1049,17 @@ struct ActiveModuleSet: Equatable {
 
     var isPlayback: Bool {
         descriptors.allSatisfy { $0.executionModel == .playback }
+    }
+
+    var timeScaleProfile: ModuleTimeScaleProfile {
+        physics.timeScale
+            ?? optimization.timeScale
+            ?? visual.timeScale
+            ?? (isPlayback ? .playbackDefault : .realtimeDefault)
+    }
+
+    var simulationSetupProfile: ModuleSimulationSetupProfile {
+        physics.simulationSetup ?? ModuleSimulationSetupProfile()
     }
 }
 

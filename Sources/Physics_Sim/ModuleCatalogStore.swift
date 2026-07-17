@@ -81,7 +81,9 @@ final class MainWindowModuleCatalogStore: ObservableObject {
                 producesContracts: manifest.producesContracts,
                 executionModel: manifest.executionModel,
                 pipelineStage: manifest.pipelineStage,
-                entryPoints: manifest.entryPoints
+                entryPoints: manifest.entryPoints,
+                timeScale: manifest.timeScale,
+                simulationSetup: manifest.simulationSetup
             )
         }
 
@@ -100,7 +102,9 @@ final class MainWindowModuleCatalogStore: ObservableObject {
             producesContracts: manifest.producesContracts,
             executionModel: manifest.executionModel,
             pipelineStage: manifest.pipelineStage,
-            entryPoints: manifest.entryPoints
+            entryPoints: manifest.entryPoints,
+            timeScale: manifest.timeScale,
+            simulationSetup: manifest.simulationSetup
         )
     }
 

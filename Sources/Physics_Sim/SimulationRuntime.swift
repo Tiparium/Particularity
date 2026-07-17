@@ -190,6 +190,8 @@ final class SimulationRuntime: @unchecked Sendable {
     private var customStandardPhysicsAccumulatePipeline: MTLComputePipelineState?
     private var customStandardPhysicsApplyPipeline: MTLComputePipelineState?
     private var toyPlaybackRuntime: ToyPlaybackRuntime?
+    private var mlPlaybackRuntime: MLPlaybackRuntime?
+    private var mlPlaybackRuntimeLoadAttempted = false
     private var playbackCurrentSeconds: Double = 0
     private var playbackLastUptime: TimeInterval?
     private var playbackCurrentSampleIndex: Int?
@@ -422,8 +424,11 @@ final class SimulationRuntime: @unchecked Sendable {
                     cachedFixedGridTopology = nil
                 }
             }
-            if previousModules.executionModel != nextModules.executionModel {
+            if previousModules.executionModel != nextModules.executionModel
+                || previousModules.completeModuleFamilyID != nextModules.completeModuleFamilyID {
                 toyPlaybackRuntime = nil
+                mlPlaybackRuntime = nil
+                mlPlaybackRuntimeLoadAttempted = false
                 playbackCurrentSeconds = 0
                 playbackLastUptime = nil
                 playbackCurrentSampleIndex = nil
@@ -456,11 +461,13 @@ final class SimulationRuntime: @unchecked Sendable {
 
     func seekPlayback(to seconds: Double) {
         simulationQueue.async {
-            guard self.isToyPlaybackActive,
+            guard self.isPlaybackRuntimeActive,
                   self.currentSimulationState.transportState != .stopped else {
                 return
             }
-            let playbackRuntime = self.ensureToyPlaybackRuntime()
+            guard let playbackRuntime = self.ensureActivePlaybackRuntime() else {
+                return
+            }
             self.playbackCurrentSeconds = min(max(0, seconds), playbackRuntime.timeline.durationSeconds)
             self.playbackLastUptime = nil
             let frame = playbackRuntime.frame(at: self.playbackCurrentSeconds)
@@ -536,7 +543,7 @@ final class SimulationRuntime: @unchecked Sendable {
                 }
             }
 
-            if isToyPlaybackActive {
+            if isPlaybackRuntimeActive {
                 if previous.transportState == .stopped,
                    nextState.transportState == .running {
                     playbackCurrentSeconds = 0
@@ -663,6 +670,8 @@ final class SimulationRuntime: @unchecked Sendable {
         typeMatrixSidecarFrontBuffer = nil
         typeMatrixSidecarBackBuffer = nil
         toyPlaybackRuntime = nil
+        mlPlaybackRuntime = nil
+        mlPlaybackRuntimeLoadAttempted = false
         playbackCurrentSeconds = 0
         playbackLastUptime = nil
         playbackCurrentSampleIndex = nil
@@ -682,8 +691,8 @@ final class SimulationRuntime: @unchecked Sendable {
 
     private func stepSimulation(at now: TimeInterval) {
         guard !simulationWorkInFlight else { return }
-        if isToyPlaybackActive {
-            stepToyPlayback(at: now)
+        if isPlaybackRuntimeActive {
+            stepPlayback(at: now)
             return
         }
         guard ensureParticleStateBuffers() else { return }
@@ -822,7 +831,7 @@ final class SimulationRuntime: @unchecked Sendable {
         commandBuffer.commit()
     }
 
-    private func stepToyPlayback(at now: TimeInterval) {
+    private func stepPlayback(at now: TimeInterval) {
         guard currentSimulationState.transportState == .running else {
             publishSnapshots()
             return
@@ -830,7 +839,10 @@ final class SimulationRuntime: @unchecked Sendable {
         simulationWorkInFlight = true
         defer { simulationWorkInFlight = false }
 
-        let playbackRuntime = ensureToyPlaybackRuntime()
+        guard let playbackRuntime = ensureActivePlaybackRuntime() else {
+            publishSnapshots()
+            return
+        }
 
         let previousUptime = playbackLastUptime ?? now
         playbackLastUptime = now
@@ -849,6 +861,16 @@ final class SimulationRuntime: @unchecked Sendable {
         publishSnapshots()
     }
 
+    private func ensureActivePlaybackRuntime() -> ParticlePlaybackRuntime? {
+        if isToyPlaybackActive {
+            return ensureToyPlaybackRuntime()
+        }
+        if isMLPlaybackActive {
+            return ensureMLPlaybackRuntime()
+        }
+        return nil
+    }
+
     private func ensureToyPlaybackRuntime() -> ToyPlaybackRuntime {
         if let toyPlaybackRuntime {
             return toyPlaybackRuntime
@@ -862,9 +884,28 @@ final class SimulationRuntime: @unchecked Sendable {
         return runtime
     }
 
+    private func ensureMLPlaybackRuntime() -> MLPlaybackRuntime? {
+        if let mlPlaybackRuntime {
+            return mlPlaybackRuntime
+        }
+        guard !mlPlaybackRuntimeLoadAttempted else {
+            return nil
+        }
+        mlPlaybackRuntimeLoadAttempted = true
+
+        guard let runtime = MLPlaybackRuntime() else {
+            return nil
+        }
+        mlPlaybackRuntime = runtime
+        RuntimeEventLogger.log(
+            "ml_playback loaded duration=\(String(format: "%.3f", runtime.timeline.durationSeconds)) samples=\(runtime.timeline.sampleCount ?? 0)"
+        )
+        return runtime
+    }
+
     private func makePlaybackTimelineState() -> PlaybackTimelineState {
-        guard isToyPlaybackActive else { return PlaybackTimelineState() }
-        let base = toyPlaybackRuntime?.timeline ?? ToyPlaybackRuntime().timeline
+        guard isPlaybackRuntimeActive else { return PlaybackTimelineState() }
+        let base = ensureActivePlaybackRuntime()?.timeline ?? PlaybackTimelineState()
         return PlaybackTimelineState(
             currentSeconds: playbackCurrentSeconds,
             durationSeconds: base.durationSeconds,
@@ -1683,6 +1724,14 @@ final class SimulationRuntime: @unchecked Sendable {
         activeModules.optimization.name == "ToyPlaybackReader"
             && activeModules.physics.name == "ToyPlaybackProcessor"
             && activeModules.visual.name == "ToyPlaybackPresenter"
+    }
+
+    private var isMLPlaybackActive: Bool {
+        activeModules.completeModuleFamilyID == ModuleCatalog.mlPlaybackFamilyID
+    }
+
+    private var isPlaybackRuntimeActive: Bool {
+        isToyPlaybackActive || isMLPlaybackActive
     }
 
     private var isTemplatePhysicsActive: Bool {

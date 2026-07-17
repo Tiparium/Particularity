@@ -9,13 +9,14 @@ enum SimulationConfigurationDerivation {
         transportState: SimulationTransportState,
         availableBundles: [ModuleBundle]
     ) -> ResolvedRuntimeConfiguration {
-        let simulationState = simulationState(
-            transportState: transportState,
+        let activeModules = activeModules(
             editorState: editorState,
             availableBundles: availableBundles
         )
-        let activeModules = activeModules(
+        let simulationState = simulationState(
+            transportState: transportState,
             editorState: editorState,
+            activeModules: activeModules,
             availableBundles: availableBundles
         )
         let projectedBytes = projectedMemoryBytes(
@@ -40,20 +41,26 @@ enum SimulationConfigurationDerivation {
     static func simulationState(
         transportState: SimulationTransportState,
         editorState: SimulationEditorState,
+        activeModules: ActiveModuleSet,
         availableBundles: [ModuleBundle]
     ) -> SimulationViewportState {
-        SimulationViewportState(
+        let clampedTimeScale = activeModules.timeScaleProfile.clamped(editorState.physicsState.timeScale)
+        let setup = ModuleSimulationSetupResolver.resolve(
+            editorState: editorState,
+            activeModules: activeModules
+        )
+        return SimulationViewportState(
             transportState: transportState,
-            particleCount: editorState.physicsState.particleCount,
-            randomDistribution: editorState.physicsState.randomDistribution,
-            particleTypes: editorState.physicsState.particleTypes,
-            allParticlesIntercommunicate: editorState.physicsState.allParticlesIntercommunicate,
+            particleCount: setup.particleCount,
+            randomDistribution: setup.randomDistribution,
+            particleTypes: setup.particleTypes,
+            allParticlesIntercommunicate: setup.allParticlesIntercommunicate,
             movementDirection: SIMD3<Float>(
                 Float(editorState.physicsState.movementDirection.x),
                 Float(editorState.physicsState.movementDirection.y),
                 Float(editorState.physicsState.movementDirection.z)
             ),
-            timeScale: Float(editorState.physicsState.timeScale),
+            timeScale: Float(clampedTimeScale),
             sphereSize: Float(editorState.visualState.sphereSize),
             spectrumOffset: Float(editorState.visualState.spectrumOffset),
             showOptimizationInfo: visualSupportsOptimizationDebug(
@@ -61,7 +68,7 @@ enum SimulationConfigurationDerivation {
                 availableBundles: availableBundles
             ) && editorState.visualState.showOptimizationInfo,
             showLeaderCommunicationLog: editorState.optimizationState.showLeaderCommunicationLog,
-            playbackRate: Float(max(0, editorState.playbackState.playbackRate)),
+            playbackRate: Float(max(0, clampedTimeScale)),
             playbackLooping: editorState.playbackState.looping,
             fixedGridSubdivisions: max(1, editorState.optimizationState.fixedGridSubdivisions),
             fixedGridSubspaceCap: max(
@@ -109,7 +116,7 @@ enum SimulationConfigurationDerivation {
 
         issues.append(contentsOf: moduleAssignmentIssues(editorState: editorState, availableBundles: availableBundles))
 
-        if editorState.physicsState.particleCount < 1 {
+        if simulationState.particleCount < 1 {
             issues.append(
                 RuntimeValidationIssue(
                     field: .particleCount,
@@ -118,7 +125,7 @@ enum SimulationConfigurationDerivation {
             )
         }
 
-        if editorState.physicsState.particleCount > SimulationParticleLimits.engineCap {
+        if simulationState.particleCount > SimulationParticleLimits.engineCap {
             issues.append(
                 RuntimeValidationIssue(
                     field: .particleCount,
@@ -161,7 +168,7 @@ enum SimulationConfigurationDerivation {
         issues.append(
             contentsOf: DefaultOptimizationModuleRuntime.validationIssues(
                 activeModules: activeModules,
-                editorState: editorState
+                particleCount: simulationState.particleCount
             )
         )
 
@@ -210,7 +217,11 @@ enum SimulationConfigurationDerivation {
         editorState: SimulationEditorState,
         activeModules modules: ActiveModuleSet
     ) -> UInt64 {
-        let particleCount = max(1, editorState.physicsState.particleCount)
+        let setup = ModuleSimulationSetupResolver.resolve(
+            editorState: editorState,
+            activeModules: modules
+        )
+        let particleCount = max(1, setup.particleCount)
         let baseParticleStride = 40
         let visualStride = 16
         let optimizationStride = 16

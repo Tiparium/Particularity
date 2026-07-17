@@ -10,13 +10,18 @@ struct PlaybackTimelineState: Equatable {
     var currentSampleIndex: Int?
 }
 
-struct ToyPlaybackFrame {
+struct PlaybackParticleFrame {
     let sampleIndex: Int
     let timeSeconds: Double
     let particles: [ParticleState]
 }
 
-final class ToyPlaybackRuntime {
+protocol ParticlePlaybackRuntime {
+    var timeline: PlaybackTimelineState { get }
+    func frame(at seconds: Double) -> PlaybackParticleFrame
+}
+
+final class ToyPlaybackRuntime: ParticlePlaybackRuntime {
     private static let durationSeconds: Double = 8
     private static let sampleCount = 240
     private static let particleCount = 960
@@ -32,14 +37,14 @@ final class ToyPlaybackRuntime {
         )
     }
 
-    func frame(at seconds: Double) -> ToyPlaybackFrame {
+    func frame(at seconds: Double) -> PlaybackParticleFrame {
         let boundedSeconds = min(max(0, seconds), Self.durationSeconds)
         let normalizedTime = Self.durationSeconds > 0 ? boundedSeconds / Self.durationSeconds : 0
         let sampleIndex = min(
             Self.sampleCount - 1,
             max(0, Int((normalizedTime * Double(Self.sampleCount - 1)).rounded()))
         )
-        return ToyPlaybackFrame(
+        return PlaybackParticleFrame(
             sampleIndex: sampleIndex,
             timeSeconds: boundedSeconds,
             particles: makeParticles(normalizedTime: normalizedTime)

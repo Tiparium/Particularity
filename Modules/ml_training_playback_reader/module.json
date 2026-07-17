@@ -1,0 +1,36 @@
+{
+  "id": "particularity.playback.producer.ml_training_reader",
+  "name": "MLTrainingPlaybackReader",
+  "kind": "optimization",
+  "executionModel": "playback",
+  "pipelineStage": "producer",
+  "moduleFamilyID": "particularity.playback.family.ml_training_v1",
+  "version": 1,
+  "producesContracts": [
+    "particularity.playback.ml_training_source.v1"
+  ],
+  "entryPoints": {},
+  "settings": {
+    "sections": [
+      {
+        "id": "source",
+        "title": "Source",
+        "controls": [
+          {
+            "id": "fixture",
+            "title": "Fixture",
+            "type": "segmented",
+            "defaultValue": "layers15",
+            "options": [
+              {
+                "value": "layers15",
+                "title": "Layer Sweep"
+              }
+            ],
+            "helpText": "Local ML playback fixture used by the reader."
+          }
+        ]
+      }
+    ]
+  }
+}

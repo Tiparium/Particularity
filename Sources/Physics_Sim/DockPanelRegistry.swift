@@ -60,8 +60,6 @@ struct DockPanelRenderContext {
     let debugSettingsStore: MainWindowDebugSettingsStore
     let interactionSnapshotRecorder: InteractionSnapshotRecorder
     let performanceReviewLogger: PerformanceReviewLogger
-    let particleCountUICap: Int
-    let particleCountEngineCap: Int
     let importerTargetKind: Binding<ModuleKind>
     let isImporterPresented: Binding<Bool>
     let startInteractionSnapshotRecording: () -> Void
@@ -79,7 +77,7 @@ enum DockPanelRegistry {
     static let definitions: [DockPanelDefinition] = [
         DockPanelDefinition(
             type: .moduleSlots,
-            title: "Module Slots",
+            title: "Trinity",
             subtype: .core,
             defaultZone: .left
         ) { context in
@@ -106,9 +104,7 @@ enum DockPanelRegistry {
                     editorSettingsStore: context.editorSettingsStore,
                     physicsModuleSettingsStore: context.physicsModuleSettingsStore,
                     moduleCatalogStore: context.moduleCatalogStore,
-                    runtimeConfigCoordinator: context.runtimeConfigCoordinator,
-                    particleCountUICap: context.particleCountUICap,
-                    particleCountEngineCap: context.particleCountEngineCap
+                    runtimeConfigCoordinator: context.runtimeConfigCoordinator
                 )
             )
         },
@@ -124,9 +120,7 @@ enum DockPanelRegistry {
                     editorSettingsStore: context.editorSettingsStore,
                     physicsModuleSettingsStore: context.physicsModuleSettingsStore,
                     moduleCatalogStore: context.moduleCatalogStore,
-                    runtimeConfigCoordinator: context.runtimeConfigCoordinator,
-                    particleCountUICap: context.particleCountUICap,
-                    particleCountEngineCap: context.particleCountEngineCap
+                    runtimeConfigCoordinator: context.runtimeConfigCoordinator
                 )
             )
         },
@@ -142,9 +136,7 @@ enum DockPanelRegistry {
                     editorSettingsStore: context.editorSettingsStore,
                     physicsModuleSettingsStore: context.physicsModuleSettingsStore,
                     moduleCatalogStore: context.moduleCatalogStore,
-                    runtimeConfigCoordinator: context.runtimeConfigCoordinator,
-                    particleCountUICap: context.particleCountUICap,
-                    particleCountEngineCap: context.particleCountEngineCap
+                    runtimeConfigCoordinator: context.runtimeConfigCoordinator
                 )
             )
         },

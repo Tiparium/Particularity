@@ -100,6 +100,86 @@ struct ModuleCompatibilityTests {
         #expect(ModuleCompatibility.incompatibilityReason(for: modules, state: viewportState()) == nil)
     }
 
+    @Test("matches Primordial Soup trinity from its module trio")
+    func matchesPrimordialSoupTrinity() {
+        let modules = ActiveModuleSet(
+            physics: ModuleCatalog.knownModulesByName["TypeMatrixLocalAttractionRepulsion"]!,
+            visual: ModuleCatalog.defaultVisual,
+            optimization: ModuleCatalog.knownModulesByName[FixedGridOptimizationModuleRuntime.moduleName]!
+        )
+
+        let trinity = TrinityCatalog.matching(modules)
+
+        #expect(trinity?.id == TrinityCatalog.primordialSoup.id)
+        #expect(trinity?.name == "Primordial Soup v0.1")
+    }
+
+    @Test("matches toy playback trinity from its module trio")
+    func matchesToyPlaybackTrinity() {
+        let modules = ActiveModuleSet(
+            physics: ModuleCatalog.knownModulesByName["ToyPlaybackProcessor"]!,
+            visual: ModuleCatalog.knownModulesByName["ToyPlaybackPresenter"]!,
+            optimization: ModuleCatalog.knownModulesByName["ToyPlaybackReader"]!
+        )
+
+        #expect(TrinityCatalog.matching(modules)?.id == TrinityCatalog.toyPlayback.id)
+    }
+
+    @Test("accepts known ML playback trio")
+    func acceptsKnownMLPlaybackTrio() {
+        let modules = ActiveModuleSet(
+            physics: ModuleCatalog.knownModulesByName["MLTrainingPlaybackProcessor"]!,
+            visual: ModuleCatalog.knownModulesByName["MLTrainingPlaybackPresenter"]!,
+            optimization: ModuleCatalog.knownModulesByName["MLTrainingPlaybackReader"]!
+        )
+
+        #expect(ModuleCompatibility.incompatibilityReason(for: modules, state: viewportState()) == nil)
+        #expect(TrinityCatalog.matching(modules)?.id == TrinityCatalog.mlTrainingPlayback.id)
+    }
+
+    @Test("persists selected trinity and local settings")
+    func persistsSelectedTrinityAndLocalSettings() throws {
+        var editorState = SimulationEditorState()
+        editorState.selectedTrinityID = TrinityCatalog.primordialSoup.id
+        editorState.trinitySettings[TrinityCatalog.primordialSoup.id] = TrinitySettingsSnapshot(
+            physicsState: PhysicsModuleState(particleCount: 1234),
+            playbackState: PlaybackModuleState(looping: false)
+        )
+
+        let data = try JSONEncoder().encode(MainWindowSimulationStateSnapshot.from(editorState: editorState))
+        let decoded = try JSONDecoder().decode(MainWindowSimulationStateSnapshot.self, from: data)
+
+        #expect(decoded.selectedTrinityID == TrinityCatalog.primordialSoup.id)
+        #expect(decoded.trinitySettings[TrinityCatalog.primordialSoup.id]?.physicsState.particleCount == 1234)
+        #expect(decoded.trinitySettings[TrinityCatalog.primordialSoup.id]?.playbackState.looping == false)
+    }
+
+    @Test("persists trinity local generic module settings")
+    func persistsTrinityLocalGenericModuleSettings() throws {
+        var editorState = SimulationEditorState()
+        editorState.selectedTrinityID = TrinityCatalog.mlTrainingPlayback.id
+        editorState.moduleSettings = [
+            "particularity.playback.presenter.ml_training_presenter": [
+                "surfaceMesh": .bool(true),
+                "surfaceSmoothing": .number(0.35),
+                "normalization": .text("perFrame"),
+            ],
+        ]
+        editorState.trinitySettings[TrinityCatalog.mlTrainingPlayback.id] = TrinitySettingsSnapshot(
+            moduleSettings: editorState.moduleSettings
+        )
+
+        let data = try JSONEncoder().encode(MainWindowSimulationStateSnapshot.from(editorState: editorState))
+        let decoded = try JSONDecoder().decode(MainWindowSimulationStateSnapshot.self, from: data)
+        let moduleSettings = decoded.trinitySettings[TrinityCatalog.mlTrainingPlayback.id]?.moduleSettings[
+            "particularity.playback.presenter.ml_training_presenter"
+        ]
+
+        #expect(moduleSettings?["surfaceMesh"] == .bool(true))
+        #expect(moduleSettings?["surfaceSmoothing"] == .number(0.35))
+        #expect(moduleSettings?["normalization"] == .text("perFrame"))
+    }
+
     @Test("rejects playback trio with incompatible contracts")
     func rejectsPlaybackTrioWithIncompatibleContracts() {
         let modules = ActiveModuleSet(
@@ -162,6 +242,228 @@ struct ModuleCompatibilityTests {
         #expect(manifest.producesContracts == ["demo.output"])
         #expect(manifest.entryPoints.preUpdate == ["demo_clear"])
         #expect(manifest.entryPoints.update == ["demo_accumulate", "demo_apply"])
+    }
+
+    @Test("decodes module settings schema")
+    func decodesModuleSettingsSchema() throws {
+        let json = """
+        {
+          "id": "example.playback.presenter.demo",
+          "name": "Demo Presenter",
+          "kind": "visual",
+          "version": 1,
+          "executionModel": "playback",
+          "pipelineStage": "presenter",
+          "entryPoints": {},
+          "settings": {
+            "sections": [
+              {
+                "id": "surface",
+                "title": "Surface",
+                "controls": [
+                  {
+                    "id": "surfaceMesh",
+                    "title": "Surface Mesh",
+                    "type": "toggle",
+                    "defaultValue": true
+                  },
+                  {
+                    "id": "surfaceSmoothing",
+                    "title": "Surface Smoothing",
+                    "type": "slider",
+                    "defaultValue": 0.35,
+                    "minimum": 0,
+                    "maximum": 1,
+                    "step": 0.01
+                  }
+                ]
+              }
+            ]
+          }
+        }
+        """.data(using: .utf8)!
+
+        let manifest = try JSONDecoder().decode(ModuleManifest.self, from: json)
+
+        #expect(manifest.settings?.sections.count == 1)
+        #expect(manifest.settings?.sections.first?.controls.count == 2)
+        #expect(manifest.settings?.sections.first?.controls.first?.defaultValue == .bool(true))
+        #expect(manifest.settings?.sections.first?.controls.last?.defaultValue == .number(0.35))
+    }
+
+    @Test("decodes module time scale profile")
+    func decodesModuleTimeScaleProfile() throws {
+        let json = """
+        {
+          "id": "example.playback.processor.demo",
+          "name": "Demo Processor",
+          "kind": "physics",
+          "version": 1,
+          "executionModel": "playback",
+          "pipelineStage": "processor",
+          "timeScale": {
+            "minimum": 0.05,
+            "maximum": 8.0,
+            "defaultValue": 1.25,
+            "step": 0.05
+          },
+          "entryPoints": {}
+        }
+        """.data(using: .utf8)!
+
+        let manifest = try JSONDecoder().decode(ModuleManifest.self, from: json)
+
+        #expect(manifest.timeScale?.minimum == 0.05)
+        #expect(manifest.timeScale?.maximum == 8.0)
+        #expect(manifest.timeScale?.defaultValue == 1.25)
+        #expect(manifest.timeScale?.step == 0.05)
+    }
+
+    @Test("decodes module simulation setup profile")
+    func decodesModuleSimulationSetupProfile() throws {
+        let json = """
+        {
+          "id": "example.realtime.processor.demo",
+          "name": "Demo Processor",
+          "kind": "physics",
+          "version": 1,
+          "executionModel": "realtime",
+          "pipelineStage": "processor",
+          "simulationSetup": {
+            "particleCount": {
+              "minimum": 1,
+              "maximum": 50000,
+              "defaultValue": 1000,
+              "helpText": "Demo particle budget."
+            },
+            "randomDistribution": {
+              "defaultValue": false
+            },
+            "interParticleCommunication": {
+              "defaultValue": true
+            },
+            "particleTypes": {
+              "minimum": 1,
+              "maximum": 8,
+              "defaultValue": 4
+            }
+          },
+          "entryPoints": {}
+        }
+        """.data(using: .utf8)!
+
+        let manifest = try JSONDecoder().decode(ModuleManifest.self, from: json)
+
+        #expect(manifest.simulationSetup?.particleCount?.maximum == 50_000)
+        #expect(manifest.simulationSetup?.randomDistribution?.defaultValue == false)
+        #expect(manifest.simulationSetup?.interParticleCommunication?.defaultValue == true)
+        #expect(manifest.simulationSetup?.particleTypes?.maximum == 8)
+    }
+
+    @Test("playback processors do not expose simulation setup controls by default")
+    func playbackProcessorsDoNotExposeSimulationSetupByDefault() {
+        let modules = ActiveModuleSet(
+            physics: ModuleCatalog.knownModulesByName["ToyPlaybackProcessor"]!,
+            visual: ModuleCatalog.knownModulesByName["ToyPlaybackPresenter"]!,
+            optimization: ModuleCatalog.knownModulesByName["ToyPlaybackReader"]!
+        )
+
+        #expect(modules.simulationSetupProfile.exposesAnyControl == false)
+    }
+
+    @Test("resolves simulation setup from processor module settings")
+    func resolvesSimulationSetupFromProcessorModuleSettings() {
+        var editorState = SimulationEditorState()
+        editorState.physicsState.particleCount = 20_000
+        editorState.physicsState.randomDistribution = true
+        editorState.physicsState.particleTypes = 6
+        editorState.physicsState.allParticlesIntercommunicate = true
+        editorState.moduleSettings[ModuleCatalog.defaultPhysics.moduleID] = [
+            ModuleSimulationSetupSettingID.particleCount: .number(1234),
+            ModuleSimulationSetupSettingID.randomDistribution: .bool(false),
+            ModuleSimulationSetupSettingID.particleTypes: .number(3),
+            ModuleSimulationSetupSettingID.interParticleCommunication: .bool(false),
+        ]
+
+        let configuration = SimulationConfigurationDerivation.resolvedRuntimeConfiguration(
+            editorState: editorState,
+            transportState: .stopped,
+            availableBundles: []
+        )
+
+        #expect(configuration.simulationState.particleCount == 1234)
+        #expect(configuration.simulationState.randomDistribution == false)
+        #expect(configuration.simulationState.particleTypes == 3)
+        #expect(configuration.simulationState.allParticlesIntercommunicate == false)
+    }
+
+    @Test("playback runtime setup does not inherit realtime particle setup")
+    func playbackRuntimeSetupDoesNotInheritRealtimeParticleSetup() {
+        var editorState = SimulationEditorState()
+        editorState.assignedModuleIDs = TrinityCatalog.toyPlayback.assignedModuleIDs
+        editorState.physicsState.particleCount = 50_000
+        editorState.physicsState.particleTypes = 12
+        editorState.physicsState.randomDistribution = true
+        editorState.physicsState.allParticlesIntercommunicate = true
+
+        let configuration = SimulationConfigurationDerivation.resolvedRuntimeConfiguration(
+            editorState: editorState,
+            transportState: .stopped,
+            availableBundles: [
+                moduleBundle(
+                    id: "particularity.playback.producer.toy_reader",
+                    kind: .optimization,
+                    descriptor: ModuleCatalog.knownModulesByName["ToyPlaybackReader"]!
+                ),
+                moduleBundle(
+                    id: "particularity.playback.processor.toy_processor",
+                    kind: .physics,
+                    descriptor: ModuleCatalog.knownModulesByName["ToyPlaybackProcessor"]!
+                ),
+                moduleBundle(
+                    id: "particularity.playback.presenter.toy_presenter",
+                    kind: .visual,
+                    descriptor: ModuleCatalog.knownModulesByName["ToyPlaybackPresenter"]!
+                ),
+            ]
+        )
+
+        #expect(configuration.simulationState.particleCount == 1)
+        #expect(configuration.simulationState.particleTypes == 1)
+        #expect(configuration.simulationState.randomDistribution == false)
+        #expect(configuration.simulationState.allParticlesIntercommunicate == false)
+    }
+
+    @Test("uses unified time scale for playback rate")
+    func usesUnifiedTimeScaleForPlaybackRate() {
+        var editorState = SimulationEditorState()
+        editorState.assignedModuleIDs = TrinityCatalog.toyPlayback.assignedModuleIDs
+        editorState.physicsState.timeScale = 2.5
+
+        let configuration = SimulationConfigurationDerivation.resolvedRuntimeConfiguration(
+            editorState: editorState,
+            transportState: .running,
+            availableBundles: [
+                moduleBundle(
+                    id: "particularity.playback.producer.toy_reader",
+                    kind: .optimization,
+                    descriptor: ModuleCatalog.knownModulesByName["ToyPlaybackReader"]!
+                ),
+                moduleBundle(
+                    id: "particularity.playback.processor.toy_processor",
+                    kind: .physics,
+                    descriptor: ModuleCatalog.knownModulesByName["ToyPlaybackProcessor"]!
+                ),
+                moduleBundle(
+                    id: "particularity.playback.presenter.toy_presenter",
+                    kind: .visual,
+                    descriptor: ModuleCatalog.knownModulesByName["ToyPlaybackPresenter"]!
+                ),
+            ]
+        )
+
+        #expect(configuration.simulationState.timeScale == 2.5)
+        #expect(configuration.simulationState.playbackRate == 2.5)
     }
 
     @Test("rejects manifests without explicit IDs")

@@ -6,6 +6,12 @@
   "pipelineStage": "processor",
   "moduleFamilyID": "particularity.playback.family.toy_v1",
   "version": 1,
+  "timeScale": {
+    "minimum": 0.05,
+    "maximum": 4.0,
+    "defaultValue": 1.0,
+    "step": 0.01
+  },
   "consumesContracts": [
     "particularity.playback.toy_source.v1"
   ],

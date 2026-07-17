@@ -21,12 +21,14 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
     var fixedGridSubdivisions: Int
     var fixedGridSubspaceCap: Int
     var fixedGridNeighborReadMode: FixedGridNeighborReadMode
-    var playbackRate: Double
     var playbackLooping: Bool
     var protectLeaderFromUnload: Bool
+    var moduleSettings: [String: [String: ModuleSettingValue]]
     var assignedPhysicsModuleID: String?
     var assignedVisualModuleID: String?
     var assignedOptimizationModuleID: String?
+    var selectedTrinityID: String?
+    var trinitySettings: [String: TrinitySettingsSnapshot]
 
     private enum CodingKeys: String, CodingKey {
         case particleCount
@@ -44,12 +46,14 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
         case fixedGridSubdivisions
         case fixedGridSubspaceCap
         case fixedGridNeighborReadMode
-        case playbackRate
         case playbackLooping
         case protectLeaderFromUnload
+        case moduleSettings
         case assignedPhysicsModuleID
         case assignedVisualModuleID
         case assignedOptimizationModuleID
+        case selectedTrinityID
+        case trinitySettings
         case assignedPhysicsModulePath
         case assignedVisualModulePath
         case assignedOptimizationModulePath
@@ -71,12 +75,14 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
         fixedGridSubdivisions: FixedGridOptimizationModuleRuntime.defaultSubdivisions,
         fixedGridSubspaceCap: 2,
         fixedGridNeighborReadMode: .scratch,
-        playbackRate: 1.0,
         playbackLooping: true,
         protectLeaderFromUnload: true,
+        moduleSettings: [:],
         assignedPhysicsModuleID: nil,
         assignedVisualModuleID: nil,
-        assignedOptimizationModuleID: nil
+        assignedOptimizationModuleID: nil,
+        selectedTrinityID: TrinityCatalog.defaultRealtime.id,
+        trinitySettings: [:]
     )
 
     var editorState: SimulationEditorState {
@@ -86,7 +92,10 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
             optimizationState: optimizationState,
             playbackState: playbackState,
             debugSettings: debugSettings,
-            assignedModuleIDs: assignedModules
+            moduleSettings: moduleSettings,
+            assignedModuleIDs: assignedModules,
+            selectedTrinityID: selectedTrinityID,
+            trinitySettings: trinitySettings
         )
     }
 
@@ -123,10 +132,7 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
     }
 
     var playbackState: PlaybackModuleState {
-        PlaybackModuleState(
-            playbackRate: playbackRate,
-            looping: playbackLooping
-        )
+        PlaybackModuleState(looping: playbackLooping)
     }
 
     var assignedModules: [String: String] {
@@ -143,7 +149,10 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
         optimizationState: OptimizationModuleState,
         playbackState: PlaybackModuleState,
         debugSettings: DebugSettingsState,
-        assignedModuleIDs: [String: String]
+        moduleSettings: [String: [String: ModuleSettingValue]],
+        assignedModuleIDs: [String: String],
+        selectedTrinityID: String?,
+        trinitySettings: [String: TrinitySettingsSnapshot]
     ) -> MainWindowSimulationStateSnapshot {
         MainWindowSimulationStateSnapshot(
             particleCount: physicsState.particleCount,
@@ -161,12 +170,14 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
             fixedGridSubdivisions: optimizationState.fixedGridSubdivisions,
             fixedGridSubspaceCap: optimizationState.fixedGridSubspaceCap,
             fixedGridNeighborReadMode: optimizationState.fixedGridNeighborReadMode,
-            playbackRate: playbackState.playbackRate,
             playbackLooping: playbackState.looping,
             protectLeaderFromUnload: debugSettings.protectLeaderFromUnload,
+            moduleSettings: moduleSettings,
             assignedPhysicsModuleID: assignedModuleIDs[Self.physicsModuleKey],
             assignedVisualModuleID: assignedModuleIDs[Self.visualModuleKey],
-            assignedOptimizationModuleID: assignedModuleIDs[Self.optimizationModuleKey]
+            assignedOptimizationModuleID: assignedModuleIDs[Self.optimizationModuleKey],
+            selectedTrinityID: selectedTrinityID,
+            trinitySettings: trinitySettings
         )
     }
 
@@ -177,7 +188,10 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
             optimizationState: editorState.optimizationState,
             playbackState: editorState.playbackState,
             debugSettings: editorState.debugSettings,
-            assignedModuleIDs: editorState.assignedModuleIDs
+            moduleSettings: editorState.moduleSettings,
+            assignedModuleIDs: editorState.assignedModuleIDs,
+            selectedTrinityID: editorState.selectedTrinityID,
+            trinitySettings: editorState.trinitySettings
         )
     }
 
@@ -197,12 +211,14 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
         fixedGridSubdivisions: Int,
         fixedGridSubspaceCap: Int,
         fixedGridNeighborReadMode: FixedGridNeighborReadMode,
-        playbackRate: Double,
         playbackLooping: Bool,
         protectLeaderFromUnload: Bool,
+        moduleSettings: [String: [String: ModuleSettingValue]],
         assignedPhysicsModuleID: String?,
         assignedVisualModuleID: String?,
-        assignedOptimizationModuleID: String?
+        assignedOptimizationModuleID: String?,
+        selectedTrinityID: String?,
+        trinitySettings: [String: TrinitySettingsSnapshot]
     ) {
         self.particleCount = particleCount
         self.randomDistribution = randomDistribution
@@ -219,12 +235,14 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
         self.fixedGridSubdivisions = fixedGridSubdivisions
         self.fixedGridSubspaceCap = fixedGridSubspaceCap
         self.fixedGridNeighborReadMode = fixedGridNeighborReadMode
-        self.playbackRate = playbackRate
         self.playbackLooping = playbackLooping
         self.protectLeaderFromUnload = protectLeaderFromUnload
+        self.moduleSettings = moduleSettings
         self.assignedPhysicsModuleID = assignedPhysicsModuleID
         self.assignedVisualModuleID = assignedVisualModuleID
         self.assignedOptimizationModuleID = assignedOptimizationModuleID
+        self.selectedTrinityID = selectedTrinityID
+        self.trinitySettings = trinitySettings
     }
 
     init(from decoder: Decoder) throws {
@@ -245,15 +263,20 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
         fixedGridSubdivisions = try container.decodeIfPresent(Int.self, forKey: .fixedGridSubdivisions) ?? fallback.fixedGridSubdivisions
         fixedGridSubspaceCap = try container.decodeIfPresent(Int.self, forKey: .fixedGridSubspaceCap) ?? fallback.fixedGridSubspaceCap
         fixedGridNeighborReadMode = try container.decodeIfPresent(FixedGridNeighborReadMode.self, forKey: .fixedGridNeighborReadMode) ?? fallback.fixedGridNeighborReadMode
-        playbackRate = try container.decodeIfPresent(Double.self, forKey: .playbackRate) ?? fallback.playbackRate
         playbackLooping = try container.decodeIfPresent(Bool.self, forKey: .playbackLooping) ?? fallback.playbackLooping
         protectLeaderFromUnload = try container.decodeIfPresent(Bool.self, forKey: .protectLeaderFromUnload) ?? fallback.protectLeaderFromUnload
+        moduleSettings = try container.decodeIfPresent([String: [String: ModuleSettingValue]].self, forKey: .moduleSettings)
+            ?? fallback.moduleSettings
         assignedPhysicsModuleID = try container.decodeIfPresent(String.self, forKey: .assignedPhysicsModuleID)
             ?? container.decodeIfPresent(String.self, forKey: .assignedPhysicsModulePath)
         assignedVisualModuleID = try container.decodeIfPresent(String.self, forKey: .assignedVisualModuleID)
             ?? container.decodeIfPresent(String.self, forKey: .assignedVisualModulePath)
         assignedOptimizationModuleID = try container.decodeIfPresent(String.self, forKey: .assignedOptimizationModuleID)
             ?? container.decodeIfPresent(String.self, forKey: .assignedOptimizationModulePath)
+        selectedTrinityID = try container.decodeIfPresent(String.self, forKey: .selectedTrinityID)
+            ?? fallback.selectedTrinityID
+        trinitySettings = try container.decodeIfPresent([String: TrinitySettingsSnapshot].self, forKey: .trinitySettings)
+            ?? fallback.trinitySettings
     }
 
     func encode(to encoder: Encoder) throws {
@@ -273,12 +296,14 @@ struct MainWindowSimulationStateSnapshot: Codable, Equatable, Sendable {
         try container.encode(fixedGridSubdivisions, forKey: .fixedGridSubdivisions)
         try container.encode(fixedGridSubspaceCap, forKey: .fixedGridSubspaceCap)
         try container.encode(fixedGridNeighborReadMode, forKey: .fixedGridNeighborReadMode)
-        try container.encode(playbackRate, forKey: .playbackRate)
         try container.encode(playbackLooping, forKey: .playbackLooping)
         try container.encode(protectLeaderFromUnload, forKey: .protectLeaderFromUnload)
+        try container.encode(moduleSettings, forKey: .moduleSettings)
         try container.encodeIfPresent(assignedPhysicsModuleID, forKey: .assignedPhysicsModuleID)
         try container.encodeIfPresent(assignedVisualModuleID, forKey: .assignedVisualModuleID)
         try container.encodeIfPresent(assignedOptimizationModuleID, forKey: .assignedOptimizationModuleID)
+        try container.encodeIfPresent(selectedTrinityID, forKey: .selectedTrinityID)
+        try container.encode(trinitySettings, forKey: .trinitySettings)
     }
 }
 
@@ -308,6 +333,12 @@ final class MainWindowEditorSettingsStore: ObservableObject {
 
     init() {
         self.editorState = MainWindowSimulationStateStore.shared.load().editorState
+        var normalizedState = editorState
+        refreshSelectedTrinity(in: &normalizedState)
+        if normalizedState != editorState {
+            editorState = normalizedState
+            persist()
+        }
     }
 
     func setPhysicsState(_ nextState: PhysicsModuleState) {
@@ -360,8 +391,8 @@ final class MainWindowEditorSettingsStore: ObservableObject {
         InteractionSnapshotRecorder.shared.record(
             event: "ui.set_playback_state",
             details: [
-                "from": "rate=\(previous.playbackRate) looping=\(previous.looping)",
-                "to": "rate=\(nextState.playbackRate) looping=\(nextState.looping)",
+                "from": "looping=\(previous.looping)",
+                "to": "looping=\(nextState.looping)",
             ]
         )
     }
@@ -380,6 +411,36 @@ final class MainWindowEditorSettingsStore: ObservableObject {
         )
     }
 
+    func moduleSetting(
+        moduleID: String,
+        settingID: String,
+        defaultValue: ModuleSettingValue
+    ) -> ModuleSettingValue {
+        editorState.moduleSettings[moduleID]?[settingID] ?? defaultValue
+    }
+
+    func setModuleSetting(
+        moduleID: String,
+        settingID: String,
+        value: ModuleSettingValue
+    ) {
+        let previous = editorState.moduleSettings[moduleID]?[settingID]
+        updateEditorState {
+            var moduleValues = $0.moduleSettings[moduleID] ?? [:]
+            moduleValues[settingID] = value
+            $0.moduleSettings[moduleID] = moduleValues
+        }
+        InteractionSnapshotRecorder.shared.record(
+            event: "ui.set_module_setting",
+            details: [
+                "moduleID": moduleID,
+                "settingID": settingID,
+                "from": String(describing: previous),
+                "to": String(describing: value),
+            ]
+        )
+    }
+
     func setAssignedModuleID(_ moduleID: String?, for kind: ModuleKind) {
         let previous = editorState.assignedModuleIDs[kind.rawValue]
         updateEditorState {
@@ -388,6 +449,7 @@ final class MainWindowEditorSettingsStore: ObservableObject {
             } else {
                 $0.assignedModuleIDs.removeValue(forKey: kind.rawValue)
             }
+            $0.selectedTrinityID = nil
         }
         InteractionSnapshotRecorder.shared.record(
             event: "ui.set_assigned_module_id",
@@ -395,6 +457,29 @@ final class MainWindowEditorSettingsStore: ObservableObject {
                 "kind": kind.rawValue,
                 "from": InteractionSnapshotFormat.assignedModuleID(previous),
                 "to": InteractionSnapshotFormat.assignedModuleID(moduleID),
+            ]
+        )
+    }
+
+    func setSelectedTrinity(_ trinity: TrinityDefinition) {
+        let previous = editorState.selectedTrinityID
+        updateEditorState {
+            persistCurrentTrinitySettings(in: &$0)
+            let restoredSettings = $0.trinitySettings[trinity.id] ?? trinity.defaultSettings
+            $0.physicsState = restoredSettings.physicsState
+            $0.visualState = restoredSettings.visualState
+            $0.optimizationState = restoredSettings.optimizationState
+            $0.playbackState = restoredSettings.playbackState
+            $0.debugSettings = restoredSettings.debugSettings
+            $0.moduleSettings = restoredSettings.moduleSettings
+            $0.assignedModuleIDs = trinity.assignedModuleIDs
+            $0.selectedTrinityID = trinity.id
+        }
+        InteractionSnapshotRecorder.shared.record(
+            event: "ui.set_selected_trinity",
+            details: [
+                "from": previous ?? "custom",
+                "to": trinity.id,
             ]
         )
     }
@@ -432,8 +517,47 @@ final class MainWindowEditorSettingsStore: ObservableObject {
     private func updateEditorState(_ mutate: (inout SimulationEditorState) -> Void) {
         var nextEditorState = editorState
         mutate(&nextEditorState)
+        refreshSelectedTrinity(in: &nextEditorState)
         editorState = nextEditorState
         persist()
+    }
+
+    private func refreshSelectedTrinity(in state: inout SimulationEditorState) {
+        guard let matchingTrinity = TrinityCatalog.all.first(where: { trinity in
+            normalizedAssignedModuleIDs(state.assignedModuleIDs) == normalizedAssignedModuleIDs(trinity.assignedModuleIDs)
+        }) else {
+            state.selectedTrinityID = nil
+            return
+        }
+
+        state.selectedTrinityID = matchingTrinity.id
+        state.trinitySettings[matchingTrinity.id] = TrinitySettingsSnapshot(
+            physicsState: state.physicsState,
+            visualState: state.visualState,
+            optimizationState: state.optimizationState,
+            playbackState: state.playbackState,
+            debugSettings: state.debugSettings,
+            moduleSettings: state.moduleSettings
+        )
+    }
+
+    private func persistCurrentTrinitySettings(in state: inout SimulationEditorState) {
+        guard let trinityID = state.selectedTrinityID,
+              TrinityCatalog.definition(id: trinityID) != nil else {
+            return
+        }
+        state.trinitySettings[trinityID] = TrinitySettingsSnapshot(
+            physicsState: state.physicsState,
+            visualState: state.visualState,
+            optimizationState: state.optimizationState,
+            playbackState: state.playbackState,
+            debugSettings: state.debugSettings,
+            moduleSettings: state.moduleSettings
+        )
+    }
+
+    private func normalizedAssignedModuleIDs(_ assignedModuleIDs: [String: String]) -> [String: String] {
+        assignedModuleIDs.filter { !$0.value.isEmpty }
     }
 
     private func persist() {

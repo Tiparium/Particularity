@@ -151,13 +151,12 @@ enum DefaultOptimizationModuleRuntime {
 
     static func validationIssues(
         activeModules: ActiveModuleSet,
-        editorState: SimulationEditorState
+        particleCount: Int
     ) -> [RuntimeValidationIssue] {
         guard activeModules.optimization.name == ModuleCatalog.defaultOptimization.name else {
             return []
         }
 
-        let particleCount = editorState.physicsState.particleCount
         guard particleCount > particleCountCap else { return [] }
         return [
             RuntimeValidationIssue(
