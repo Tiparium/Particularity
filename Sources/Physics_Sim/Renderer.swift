@@ -8,6 +8,7 @@ enum RendererError: LocalizedError {
     case missingCommandQueue
     case missingFunction(String)
     case renderPipelineCreationFailed(String)
+    case computePipelineCreationFailed(String)
     case depthStateCreationFailed(String)
     case vertexBufferCreationFailed(String)
     case incompatibleModules(ActiveModuleSet, String)
@@ -22,6 +23,8 @@ enum RendererError: LocalizedError {
             return "Renderer is missing the Metal function '\(name)'."
         case .renderPipelineCreationFailed(let name):
             return "Renderer failed to create the render pipeline for '\(name)'."
+        case .computePipelineCreationFailed(let name):
+            return "Renderer failed to create the compute pipeline for '\(name)'."
         case .depthStateCreationFailed(let label):
             return "Renderer failed to create the depth state '\(label)'."
         case .vertexBufferCreationFailed(let label):
@@ -40,6 +43,8 @@ final class Renderer: NSObject, MTKViewDelegate {
     private let viewportStateStore: MainWindowViewportStateStore
     private let linePipeline: MTLRenderPipelineState
     private let particlePipeline: MTLRenderPipelineState
+    private let meshPipeline: MTLRenderPipelineState
+    private let playbackMeshSmoothPipeline: MTLComputePipelineState
     private let depthState: MTLDepthStencilState
     private let particleReadOnlyDepthState: MTLDepthStencilState
     private let cameraStateSink: @MainActor (ViewportCameraState) -> Void
@@ -52,6 +57,11 @@ final class Renderer: NSObject, MTKViewDelegate {
     private var lineVertexBuffer: MTLBuffer
     private var lineIndexBuffer: MTLBuffer
     private var lineIndexCount: Int
+    private var meshIndexBuffer: MTLBuffer?
+    private var meshIndexCount = 0
+    private var meshGridSide = 0
+    private var smoothedMeshParticleBuffer: MTLBuffer?
+    private var smoothedMeshParticleBufferLength = 0
 
     private var frameRateTracker = RendererFrameRateTracker(windowSeconds: 3.0)
     private var activeKeys: Set<String> = []
@@ -88,7 +98,10 @@ final class Renderer: NSObject, MTKViewDelegate {
             let lineVertexFunction = library.makeFunction(name: "line_vs"),
             let lineFragmentFunction = library.makeFunction(name: "line_fs"),
             let particleVertexFunction = library.makeFunction(name: "particle_vs"),
-            let particleFragmentFunction = library.makeFunction(name: "particle_fs")
+            let particleFragmentFunction = library.makeFunction(name: "particle_fs"),
+            let meshVertexFunction = library.makeFunction(name: "ml_playback_surface_mesh_vs"),
+            let meshFragmentFunction = library.makeFunction(name: "ml_playback_surface_mesh_fs"),
+            let playbackMeshSmoothFunction = library.makeFunction(name: "ml_playback_surface_mesh_smooth")
         else {
             throw RendererError.missingFunction("render shader entry point")
         }
@@ -129,6 +142,20 @@ final class Renderer: NSObject, MTKViewDelegate {
         particleDescriptor.colorAttachments[0].destinationRGBBlendFactor = .oneMinusSourceAlpha
         particleDescriptor.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
 
+        let meshDescriptor = MTLRenderPipelineDescriptor()
+        meshDescriptor.vertexFunction = meshVertexFunction
+        meshDescriptor.fragmentFunction = meshFragmentFunction
+        meshDescriptor.colorAttachments[0].pixelFormat = mtkView.colorPixelFormat
+        meshDescriptor.depthAttachmentPixelFormat = mtkView.depthStencilPixelFormat
+        meshDescriptor.inputPrimitiveTopology = .triangle
+        meshDescriptor.colorAttachments[0].isBlendingEnabled = true
+        meshDescriptor.colorAttachments[0].rgbBlendOperation = .add
+        meshDescriptor.colorAttachments[0].alphaBlendOperation = .add
+        meshDescriptor.colorAttachments[0].sourceRGBBlendFactor = .sourceAlpha
+        meshDescriptor.colorAttachments[0].sourceAlphaBlendFactor = .sourceAlpha
+        meshDescriptor.colorAttachments[0].destinationRGBBlendFactor = .oneMinusSourceAlpha
+        meshDescriptor.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
+
         let depthDescriptor = MTLDepthStencilDescriptor()
         depthDescriptor.depthCompareFunction = .less
         depthDescriptor.isDepthWriteEnabled = true
@@ -148,8 +175,14 @@ final class Renderer: NSObject, MTKViewDelegate {
         do {
             linePipeline = try device.makeRenderPipelineState(descriptor: lineDescriptor)
             particlePipeline = try device.makeRenderPipelineState(descriptor: particleDescriptor)
+            meshPipeline = try device.makeRenderPipelineState(descriptor: meshDescriptor)
         } catch {
             throw RendererError.renderPipelineCreationFailed(error.localizedDescription)
+        }
+        do {
+            playbackMeshSmoothPipeline = try device.makeComputePipelineState(function: playbackMeshSmoothFunction)
+        } catch {
+            throw RendererError.computePipelineCreationFailed(error.localizedDescription)
         }
 
         let geometry = try TSPWireframeGeometry.make(device: device)
@@ -236,16 +269,42 @@ final class Renderer: NSObject, MTKViewDelegate {
         let renderState = session.renderState
         let simulationState = session.simulationState
 
-        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: passDesc) else {
-            return
-        }
-
         let size = view.drawableSize
         let aspect = Float(size.width / max(size.height, 1))
         let projection = float4x4.perspective(fovY: 60.0 * .pi / 180.0, aspect: aspect, near: 0.1, far: 100.0)
         let projectionYScale = projection.columns.1.y
         let model = float4x4.identity()
         let mvp = projection * liveCameraState.viewMatrix() * model
+        let mlSurfaceParticleCount: Int? = {
+            guard simulationState.mlPlayback.isActive else { return nil }
+            let surfaceCount = max(1, simulationState.mlPlayback.surfaceCount)
+            let total = renderState.activeParticleCount
+            guard total > 0, total % surfaceCount == 0 else { return nil }
+            let perSurface = total / surfaceCount
+            guard gridSide(for: perSurface) != nil else { return nil }
+            return perSurface
+        }()
+        var meshParticleBufferForFrame: MTLBuffer?
+        if renderState.activeParticleCount > 0,
+           let particleBuffer = renderState.particleBuffer,
+           simulationState.mlPlayback.isActive,
+           simulationState.mlPlayback.surfaceMeshEnabled,
+           let surfaceParticleCount = mlSurfaceParticleCount,
+           let gridSide = gridSide(for: surfaceParticleCount),
+           ensureMeshIndexBuffer(gridSide: gridSide) != nil,
+           meshIndexCount > 0 {
+            meshParticleBufferForFrame = smoothedMeshParticleBuffer(
+                sourceParticleBuffer: particleBuffer,
+                particleCount: renderState.activeParticleCount,
+                gridSide: gridSide,
+                smoothing: simulationState.mlPlayback.surfaceSmoothing,
+                commandBuffer: commandBuffer
+            )
+        }
+
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: passDesc) else {
+            return
+        }
 
         var lineUniforms = LineUniforms(mvp: mvp, color: SIMD4<Float>(0.78, 0.78, 0.80, 1.0))
         encoder.setRenderPipelineState(linePipeline)
@@ -271,11 +330,48 @@ final class Renderer: NSObject, MTKViewDelegate {
                 particleTypeCount: UInt32(max(1, simulationState.particleTypes)),
                 showOptimizationInfo: simulationState.showOptimizationInfo ? 1 : 0
             )
-            encoder.setRenderPipelineState(particlePipeline)
-            encoder.setDepthStencilState(simulationState.showOptimizationInfo ? particleReadOnlyDepthState : depthState)
-            encoder.setVertexBuffer(particleBuffer, offset: 0, index: 0)
-            encoder.setVertexBytes(&particleUniforms, length: MemoryLayout<ParticleUniforms>.stride, index: 1)
-            encoder.drawPrimitives(type: .point, vertexStart: 0, vertexCount: renderState.activeParticleCount)
+            if simulationState.mlPlayback.isActive,
+               simulationState.mlPlayback.surfaceMeshEnabled,
+               let surfaceParticleCount = mlSurfaceParticleCount,
+               let meshIndexBuffer = ensureMeshIndexBuffer(gridSide: gridSide(for: surfaceParticleCount) ?? 0),
+               let meshParticleBuffer = meshParticleBufferForFrame,
+               meshIndexCount > 0 {
+                var surfaceUniforms = MLPlaybackSurfaceUniforms(
+                    mvp: mvp,
+                    spectrumOffset: simulationState.spectrumOffset,
+                    amplitudeScale: simulationState.mlPlayback.amplitudeScale,
+                    surfaceCount: UInt32(max(1, simulationState.mlPlayback.surfaceCount)),
+                    visualRecipe: UInt32(simulationState.mlPlayback.visualRecipe.rawValueForShader),
+                    frontLayerHorizontalOffset: simulationState.mlPlayback.frontLayer.horizontalOffset,
+                    middleLayerHorizontalOffset: simulationState.mlPlayback.middleLayer.horizontalOffset,
+                    finalLayerHorizontalOffset: simulationState.mlPlayback.finalLayer.horizontalOffset,
+                    frontLayerOffset: simulationState.mlPlayback.frontLayer.heightOffset,
+                    middleLayerOffset: simulationState.mlPlayback.middleLayer.heightOffset,
+                    finalLayerOffset: simulationState.mlPlayback.finalLayer.heightOffset
+                )
+                encoder.setRenderPipelineState(meshPipeline)
+                encoder.setDepthStencilState(depthState)
+                encoder.setVertexBuffer(meshParticleBuffer, offset: 0, index: 0)
+                for surfaceIndex in 0..<max(1, simulationState.mlPlayback.surfaceCount) {
+                    encoder.setVertexBytes(&surfaceUniforms, length: MemoryLayout<MLPlaybackSurfaceUniforms>.stride, index: 1)
+                    encoder.drawIndexedPrimitives(
+                        type: .triangle,
+                        indexCount: meshIndexCount,
+                        indexType: .uint32,
+                        indexBuffer: meshIndexBuffer,
+                        indexBufferOffset: 0,
+                        instanceCount: 1,
+                        baseVertex: surfaceIndex * surfaceParticleCount,
+                        baseInstance: 0
+                    )
+                }
+            } else {
+                encoder.setRenderPipelineState(particlePipeline)
+                encoder.setDepthStencilState(simulationState.showOptimizationInfo ? particleReadOnlyDepthState : depthState)
+                encoder.setVertexBuffer(particleBuffer, offset: 0, index: 0)
+                encoder.setVertexBytes(&particleUniforms, length: MemoryLayout<ParticleUniforms>.stride, index: 1)
+                encoder.drawPrimitives(type: .point, vertexStart: 0, vertexCount: renderState.activeParticleCount)
+            }
         }
 
         if let debugLineBuffer = renderState.debugLineBuffer {
@@ -377,6 +473,95 @@ final class Renderer: NSObject, MTKViewDelegate {
             commitCameraState()
             publishCameraState()
         }
+    }
+
+    private func gridSide(for particleCount: Int) -> Int? {
+        guard particleCount > 3 else { return nil }
+        let side = Int(Double(particleCount).squareRoot().rounded())
+        guard side * side == particleCount, side >= 2 else { return nil }
+        return side
+    }
+
+    private func ensureMeshIndexBuffer(gridSide: Int) -> MTLBuffer? {
+        if meshGridSide == gridSide, let existing = meshIndexBuffer {
+            return existing
+        }
+
+        let quadCount = (gridSide - 1) * (gridSide - 1)
+        guard quadCount > 0 else { return nil }
+        var indices: [UInt32] = []
+        indices.reserveCapacity(quadCount * 6)
+
+        for y in 0..<(gridSide - 1) {
+            for x in 0..<(gridSide - 1) {
+                let a = UInt32(y * gridSide + x)
+                let b = UInt32(y * gridSide + (x + 1))
+                let c = UInt32((y + 1) * gridSide + x)
+                let d = UInt32((y + 1) * gridSide + (x + 1))
+                indices.append(a)
+                indices.append(c)
+                indices.append(b)
+                indices.append(b)
+                indices.append(c)
+                indices.append(d)
+            }
+        }
+
+        guard let buffer = device.makeBuffer(
+            bytes: indices,
+            length: indices.count * MemoryLayout<UInt32>.stride
+        ) else {
+            return nil
+        }
+        meshIndexBuffer = buffer
+        meshIndexCount = indices.count
+        meshGridSide = gridSide
+        return buffer
+    }
+
+    private func smoothedMeshParticleBuffer(
+        sourceParticleBuffer: MTLBuffer,
+        particleCount: Int,
+        gridSide: Int,
+        smoothing: Float,
+        commandBuffer: MTLCommandBuffer
+    ) -> MTLBuffer {
+        let clampedSmoothing = min(max(smoothing, 0), 1)
+        guard clampedSmoothing > 0.0001 else {
+            return sourceParticleBuffer
+        }
+
+        let bufferLength = particleCount * MemoryLayout<ParticleState>.stride
+        if smoothedMeshParticleBuffer == nil || smoothedMeshParticleBufferLength != bufferLength {
+            smoothedMeshParticleBuffer = device.makeBuffer(length: bufferLength)
+            smoothedMeshParticleBufferLength = bufferLength
+        }
+        guard let smoothedMeshParticleBuffer else {
+            return sourceParticleBuffer
+        }
+
+        var params = PlaybackMeshSmoothParams(
+            particleCount: UInt32(particleCount),
+            gridSide: UInt32(gridSide),
+            smoothing: clampedSmoothing
+        )
+        guard let computeEncoder = commandBuffer.makeComputeCommandEncoder() else {
+            return sourceParticleBuffer
+        }
+        computeEncoder.setComputePipelineState(playbackMeshSmoothPipeline)
+        computeEncoder.setBuffer(sourceParticleBuffer, offset: 0, index: 0)
+        computeEncoder.setBuffer(smoothedMeshParticleBuffer, offset: 0, index: 1)
+        computeEncoder.setBytes(&params, length: MemoryLayout<PlaybackMeshSmoothParams>.stride, index: 2)
+        let width = playbackMeshSmoothPipeline.threadExecutionWidth
+        let threadsPerThreadgroup = MTLSize(width: width, height: 1, depth: 1)
+        let threadgroups = MTLSize(
+            width: (particleCount + width - 1) / width,
+            height: 1,
+            depth: 1
+        )
+        computeEncoder.dispatchThreadgroups(threadgroups, threadsPerThreadgroup: threadsPerThreadgroup)
+        computeEncoder.endEncoding()
+        return smoothedMeshParticleBuffer
     }
 
     private func axisIntent(positive: String, negative: String) -> Float {

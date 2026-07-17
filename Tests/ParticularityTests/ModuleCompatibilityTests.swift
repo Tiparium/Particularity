@@ -582,6 +582,7 @@ struct ModuleCompatibilityTests {
             showLeaderCommunicationLog: false,
             playbackRate: 1,
             playbackLooping: true,
+            mlPlayback: MLPlaybackViewportSettings(),
             fixedGridSubdivisions: 1,
             fixedGridSubspaceCap: 1,
             fixedGridNeighborReadMode: .scratch

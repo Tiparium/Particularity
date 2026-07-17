@@ -70,6 +70,10 @@ enum SimulationConfigurationDerivation {
             showLeaderCommunicationLog: editorState.optimizationState.showLeaderCommunicationLog,
             playbackRate: Float(max(0, clampedTimeScale)),
             playbackLooping: editorState.playbackState.looping,
+            mlPlayback: mlPlaybackSettings(
+                editorState: editorState,
+                activeModules: activeModules
+            ),
             fixedGridSubdivisions: max(1, editorState.optimizationState.fixedGridSubdivisions),
             fixedGridSubspaceCap: max(
                 1,
@@ -79,6 +83,73 @@ enum SimulationConfigurationDerivation {
                 )
             ),
             fixedGridNeighborReadMode: editorState.optimizationState.fixedGridNeighborReadMode
+        )
+    }
+
+    private static func mlPlaybackSettings(
+        editorState: SimulationEditorState,
+        activeModules: ActiveModuleSet
+    ) -> MLPlaybackViewportSettings {
+        guard activeModules.completeModuleFamilyID == ModuleCatalog.mlPlaybackFamilyID else {
+            return MLPlaybackViewportSettings()
+        }
+
+        let processorSettings = editorState.moduleSettings[activeModules.physics.id] ?? [:]
+        let presenterSettings = editorState.moduleSettings[activeModules.visual.id] ?? [:]
+        let selectionMode = processorSettings["surfaceSelectionMode"]?.textValue == "all"
+            ? MLPlaybackSurfaceSelectionMode.all
+            : .frontMiddleFinal
+        let normalizationMode = presenterSettings["normalization"]?.textValue == "global"
+            ? MLPlaybackNormalizationMode.global
+            : .perFrame
+        let visualRecipe: MLPlaybackVisualRecipe = {
+            switch presenterSettings["visualRecipe"]?.textValue {
+            case "confidenceMargin":
+                return .confidenceMargin
+            case "predictionDelta":
+                return .predictionDelta
+            default:
+                return .typeSpectrum
+            }
+        }()
+
+        return MLPlaybackViewportSettings(
+            isActive: true,
+            interpolationEnabled: processorSettings["interpolation"]?.boolValue ?? true,
+            surfaceSelectionMode: selectionMode,
+            surfaceMeshEnabled: presenterSettings["surfaceMesh"]?.boolValue ?? true,
+            surfaceSmoothing: Float(min(max(presenterSettings["surfaceSmoothing"]?.numberValue ?? 0.35, 0), 1)),
+            normalizationMode: normalizationMode,
+            amplitudeScale: Float(min(max(presenterSettings["amplitudeScale"]?.numberValue ?? 0.72, 0.05), 2.5)),
+            visualRecipe: visualRecipe,
+            frontLayer: mlPlaybackLayerSettings(
+                settings: presenterSettings,
+                prefix: "front",
+                fallback: MLPlaybackLayerSettings(visible: true, slot: 0, horizontalOffset: -0.24, heightOffset: 0.32)
+            ),
+            middleLayer: mlPlaybackLayerSettings(
+                settings: presenterSettings,
+                prefix: "middle",
+                fallback: MLPlaybackLayerSettings(visible: true, slot: 0, horizontalOffset: 0, heightOffset: 0)
+            ),
+            finalLayer: mlPlaybackLayerSettings(
+                settings: presenterSettings,
+                prefix: "final",
+                fallback: MLPlaybackLayerSettings(visible: true, slot: 0, horizontalOffset: 0.24, heightOffset: -0.32)
+            )
+        )
+    }
+
+    private static func mlPlaybackLayerSettings(
+        settings: [String: ModuleSettingValue],
+        prefix: String,
+        fallback: MLPlaybackLayerSettings
+    ) -> MLPlaybackLayerSettings {
+        MLPlaybackLayerSettings(
+            visible: settings["\(prefix)LayerVisible"]?.boolValue ?? fallback.visible,
+            slot: min(max(Int(settings["\(prefix)LayerSlot"]?.numberValue?.rounded() ?? Double(fallback.slot)), 0), 4),
+            horizontalOffset: Float(min(max(settings["\(prefix)LayerHorizontalOffset"]?.numberValue ?? Double(fallback.horizontalOffset), -1.5), 1.5)),
+            heightOffset: Float(min(max(settings["\(prefix)LayerHeightOffset"]?.numberValue ?? Double(fallback.heightOffset), -1.5), 1.5))
         )
     }
 

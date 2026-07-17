@@ -33,6 +33,35 @@
             "step": 0.01
           },
           {
+            "id": "amplitudeScale",
+            "title": "Amplitude Scale",
+            "type": "slider",
+            "defaultValue": 0.72,
+            "minimum": 0.05,
+            "maximum": 2.5,
+            "step": 0.01
+          },
+          {
+            "id": "visualRecipe",
+            "title": "Visual Recipe",
+            "type": "segmented",
+            "defaultValue": "typeSpectrum",
+            "options": [
+              {
+                "value": "typeSpectrum",
+                "title": "Surface"
+              },
+              {
+                "value": "confidenceMargin",
+                "title": "Bands"
+              },
+              {
+                "value": "predictionDelta",
+                "title": "Focus"
+              }
+            ]
+          },
+          {
             "id": "normalization",
             "title": "Normalization",
             "type": "segmented",
@@ -47,6 +76,123 @@
                 "title": "Global"
               }
             ]
+          }
+        ]
+      },
+      {
+        "id": "frontLayer",
+        "title": "Front Layer",
+        "controls": [
+          {
+            "id": "frontLayerVisible",
+            "title": "Visible",
+            "type": "toggle",
+            "defaultValue": true
+          },
+          {
+            "id": "frontLayerSlot",
+            "title": "Neuron",
+            "type": "slider",
+            "defaultValue": 0,
+            "minimum": 0,
+            "maximum": 4,
+            "step": 1
+          },
+          {
+            "id": "frontLayerHorizontalOffset",
+            "title": "Horizontal Offset",
+            "type": "slider",
+            "defaultValue": -0.24,
+            "minimum": -1.5,
+            "maximum": 1.5,
+            "step": 0.02
+          },
+          {
+            "id": "frontLayerHeightOffset",
+            "title": "Height Offset",
+            "type": "slider",
+            "defaultValue": 0.32,
+            "minimum": -1.5,
+            "maximum": 1.5,
+            "step": 0.02
+          }
+        ]
+      },
+      {
+        "id": "middleLayer",
+        "title": "Middle Layer",
+        "controls": [
+          {
+            "id": "middleLayerVisible",
+            "title": "Visible",
+            "type": "toggle",
+            "defaultValue": true
+          },
+          {
+            "id": "middleLayerSlot",
+            "title": "Neuron",
+            "type": "slider",
+            "defaultValue": 0,
+            "minimum": 0,
+            "maximum": 4,
+            "step": 1
+          },
+          {
+            "id": "middleLayerHorizontalOffset",
+            "title": "Horizontal Offset",
+            "type": "slider",
+            "defaultValue": 0,
+            "minimum": -1.5,
+            "maximum": 1.5,
+            "step": 0.02
+          },
+          {
+            "id": "middleLayerHeightOffset",
+            "title": "Height Offset",
+            "type": "slider",
+            "defaultValue": 0,
+            "minimum": -1.5,
+            "maximum": 1.5,
+            "step": 0.02
+          }
+        ]
+      },
+      {
+        "id": "finalLayer",
+        "title": "Final Layer",
+        "controls": [
+          {
+            "id": "finalLayerVisible",
+            "title": "Visible",
+            "type": "toggle",
+            "defaultValue": true
+          },
+          {
+            "id": "finalLayerSlot",
+            "title": "Neuron",
+            "type": "slider",
+            "defaultValue": 0,
+            "minimum": 0,
+            "maximum": 4,
+            "step": 1
+          },
+          {
+            "id": "finalLayerHorizontalOffset",
+            "title": "Horizontal Offset",
+            "type": "slider",
+            "defaultValue": 0.24,
+            "minimum": -1.5,
+            "maximum": 1.5,
+            "step": 0.02
+          },
+          {
+            "id": "finalLayerHeightOffset",
+            "title": "Height Offset",
+            "type": "slider",
+            "defaultValue": -0.32,
+            "minimum": -1.5,
+            "maximum": 1.5,
+            "step": 0.02
           }
         ]
       }

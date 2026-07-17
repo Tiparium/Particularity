@@ -278,6 +278,7 @@ final class SimulationSession {
             let librarySource = [
                 SimulationMetalSharedSource.source,
                 DefaultVisualModuleRuntime.shaderSource,
+                MLTrainingPlaybackPresenterRuntime.shaderSource,
                 defaultPhysicsSource,
                 packagedPhysicsSources.joined(separator: "\n\n"),
                 DefaultOptimizationModuleRuntime.computeShaderSource,

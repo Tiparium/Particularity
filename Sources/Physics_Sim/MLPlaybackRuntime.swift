@@ -5,6 +5,7 @@ final class MLPlaybackRuntime: ParticlePlaybackRuntime {
     static let fixturePath = "Sources/lab/data/derived/ml_playback_neuron_sweeps_v3/e08_run001_layers15.mlpb"
 
     private let fixture: MLPlaybackFixture
+    private var settings = MLPlaybackViewportSettings(isActive: true)
 
     var timeline: PlaybackTimelineState {
         PlaybackTimelineState(
@@ -24,22 +25,59 @@ final class MLPlaybackRuntime: ParticlePlaybackRuntime {
         self.fixture = fixture
     }
 
+    func updateSettings(_ settings: MLPlaybackViewportSettings) {
+        self.settings = settings
+    }
+
     func frame(at seconds: Double) -> PlaybackParticleFrame {
-        fixture.interpolatedFrame(at: seconds)
+        fixture.frame(at: seconds, settings: settings)
     }
 }
 
-private struct MLPlaybackFixture {
+private final class MLPlaybackFixture {
     let url: URL
     let particleCount: Int
     let durationSeconds: Double
     let frameByteCount: UInt64
     let frames: [MLPlaybackFrameIndex]
     let isLayeredFixture: Bool
+    private let handle: FileHandle
+    private var cachedFrames: [MLPlaybackFrameCacheKey: [ParticleState]] = [:]
+    private var cachedFrameOrder: [MLPlaybackFrameCacheKey] = []
+    private let cacheLimit = 8
 
-    func interpolatedFrame(at seconds: Double) -> PlaybackParticleFrame {
+    init(
+        url: URL,
+        particleCount: Int,
+        durationSeconds: Double,
+        frameByteCount: UInt64,
+        frames: [MLPlaybackFrameIndex],
+        isLayeredFixture: Bool,
+        handle: FileHandle
+    ) {
+        self.url = url
+        self.particleCount = particleCount
+        self.durationSeconds = durationSeconds
+        self.frameByteCount = frameByteCount
+        self.frames = frames
+        self.isLayeredFixture = isLayeredFixture
+        self.handle = handle
+    }
+
+    deinit {
+        try? handle.close()
+    }
+
+    func frame(at seconds: Double, settings: MLPlaybackViewportSettings) -> PlaybackParticleFrame {
+        if settings.interpolationEnabled {
+            return interpolatedFrame(at: seconds, settings: settings)
+        }
+        return nearestFrame(at: seconds, settings: settings)
+    }
+
+    private func interpolatedFrame(at seconds: Double, settings: MLPlaybackViewportSettings) -> PlaybackParticleFrame {
         guard frames.count > 1 else {
-            return nearestFrame(at: seconds)
+            return nearestFrame(at: seconds, settings: settings)
         }
 
         let boundedSeconds = min(max(0, seconds), durationSeconds)
@@ -47,17 +85,13 @@ private struct MLPlaybackFixture {
             return PlaybackParticleFrame(sampleIndex: 0, timeSeconds: boundedSeconds, particles: [])
         }
         if boundedSeconds <= first.timeSeconds {
-            return readFrame(first, sampleIndex: 0, timelineSeconds: boundedSeconds)
+            return readFrame(first, sampleIndex: 0, timelineSeconds: boundedSeconds, settings: settings)
         }
         if let last = frames.last, boundedSeconds >= last.timeSeconds {
-            return readFrame(last, sampleIndex: max(0, frames.count - 1), timelineSeconds: boundedSeconds)
+            return readFrame(last, sampleIndex: max(0, frames.count - 1), timelineSeconds: boundedSeconds, settings: settings)
         }
 
-        var upperIndex = 1
-        while upperIndex < frames.count && frames[upperIndex].timeSeconds < boundedSeconds {
-            upperIndex += 1
-        }
-
+        let upperIndex = upperFrameIndex(for: boundedSeconds)
         let lowerIndex = max(0, upperIndex - 1)
         let upperClampedIndex = min(upperIndex, frames.count - 1)
         let lowerFrame = frames[lowerIndex]
@@ -66,14 +100,14 @@ private struct MLPlaybackFixture {
         let alpha = Float(min(max((boundedSeconds - lowerFrame.timeSeconds) / denominator, 0), 1))
 
         guard alpha > 0 else {
-            return readFrame(lowerFrame, sampleIndex: lowerIndex, timelineSeconds: boundedSeconds)
+            return readFrame(lowerFrame, sampleIndex: lowerIndex, timelineSeconds: boundedSeconds, settings: settings)
         }
         guard alpha < 1 else {
-            return readFrame(upperFrame, sampleIndex: upperClampedIndex, timelineSeconds: boundedSeconds)
+            return readFrame(upperFrame, sampleIndex: upperClampedIndex, timelineSeconds: boundedSeconds, settings: settings)
         }
-        guard let lowerParticles = readParticles(frame: lowerFrame),
-              let upperParticles = readParticles(frame: upperFrame) else {
-            return nearestFrame(at: boundedSeconds)
+        guard let lowerParticles = particles(frame: lowerFrame, settings: settings),
+              let upperParticles = particles(frame: upperFrame, settings: settings) else {
+            return nearestFrame(at: boundedSeconds, settings: settings)
         }
 
         let count = min(lowerParticles.count, upperParticles.count)
@@ -93,7 +127,6 @@ private struct MLPlaybackFixture {
                 )
             )
         }
-
         return PlaybackParticleFrame(
             sampleIndex: lowerIndex,
             timeSeconds: boundedSeconds,
@@ -101,7 +134,7 @@ private struct MLPlaybackFixture {
         )
     }
 
-    private func nearestFrame(at seconds: Double) -> PlaybackParticleFrame {
+    private func nearestFrame(at seconds: Double, settings: MLPlaybackViewportSettings) -> PlaybackParticleFrame {
         guard let first = frames.first else {
             let boundedSeconds = min(max(0, seconds), durationSeconds)
             return PlaybackParticleFrame(sampleIndex: 0, timeSeconds: boundedSeconds, particles: [])
@@ -123,26 +156,67 @@ private struct MLPlaybackFixture {
             }
         }
 
-        return readFrame(nearestFrame, sampleIndex: nearestIndex, timelineSeconds: boundedSeconds)
+        return readFrame(nearestFrame, sampleIndex: nearestIndex, timelineSeconds: boundedSeconds, settings: settings)
     }
 
     private func readFrame(
         _ frame: MLPlaybackFrameIndex,
         sampleIndex: Int,
-        timelineSeconds: Double
+        timelineSeconds: Double,
+        settings: MLPlaybackViewportSettings
     ) -> PlaybackParticleFrame {
         PlaybackParticleFrame(
             sampleIndex: sampleIndex,
             timeSeconds: timelineSeconds,
-            particles: readParticles(frame: frame) ?? []
+            particles: particles(frame: frame, settings: settings) ?? []
         )
     }
 
-    private func readParticles(frame: MLPlaybackFrameIndex) -> [ParticleState]? {
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
-        defer { try? handle.close() }
+    private func particles(
+        frame: MLPlaybackFrameIndex,
+        settings: MLPlaybackViewportSettings
+    ) -> [ParticleState]? {
+        let key = MLPlaybackFrameCacheKey(
+            step: frame.step,
+            surfaceSelectionMode: settings.surfaceSelectionMode,
+            normalizationMode: settings.normalizationMode,
+            amplitudeScale: settings.amplitudeScale,
+            frontLayer: settings.frontLayer,
+            middleLayer: settings.middleLayer,
+            finalLayer: settings.finalLayer
+        )
+        if let cached = cachedFrames[key] {
+            return cached
+        }
 
+        guard let decoded = readParticles(frame: frame, settings: settings) else {
+            return nil
+        }
+        var prepared = decoded
+        prepareSurfaceHeights(&prepared, settings: settings)
+        cachedFrames[key] = prepared
+        cachedFrameOrder.append(key)
+        while cachedFrameOrder.count > cacheLimit {
+            let evicted = cachedFrameOrder.removeFirst()
+            cachedFrames.removeValue(forKey: evicted)
+        }
+        return prepared
+    }
+
+    private func readParticles(
+        frame: MLPlaybackFrameIndex,
+        settings: MLPlaybackViewportSettings
+    ) -> [ParticleState]? {
         do {
+            if isLayeredFixture,
+               settings.surfaceSelectionMode == .frontMiddleFinal,
+               let selected = try readSelectedLayeredParticles(
+                frame: frame,
+                selections: settings.selectedLayerSurfaces
+               ) {
+                return selected
+            }
+
             try handle.seek(toOffset: frame.byteOffset)
             let frameData = handle.readData(ofLength: Int(frameByteCount))
             guard UInt64(frameData.count) == frameByteCount else { return nil }
@@ -163,11 +237,131 @@ private struct MLPlaybackFixture {
         }
     }
 
+    private func readSelectedLayeredParticles(
+        frame: MLPlaybackFrameIndex,
+        selections: [MLPlaybackSurfaceSelection]
+    ) throws -> [ParticleState]? {
+        let surfaceCount = 15
+        guard !selections.isEmpty else { return [] }
+        guard particleCount % surfaceCount == 0 else { return nil }
+        let surfaceParticleCount = particleCount / surfaceCount
+        let surfaceByteCount = surfaceParticleCount * MLPlaybackFixtureLoader.binaryParticleRecordByteCount
+        var particles: [ParticleState] = []
+        particles.reserveCapacity(surfaceParticleCount * selections.count)
+
+        for surface in selections {
+            let layer = min(max(0, surface.layer), 2)
+            let slot = min(max(0, surface.slot), 4)
+            let groupIndex = layer * 5 + slot
+            let byteOffset = frame.byteOffset + UInt64(4 + 8 + groupIndex * surfaceByteCount)
+            try handle.seek(toOffset: byteOffset)
+            let surfaceData = handle.readData(ofLength: surfaceByteCount)
+            guard surfaceData.count == surfaceByteCount else { return nil }
+            let decodedSurface = try surfaceData.withUnsafeBytes { rawBuffer in
+                var cursor = 0
+                return try MLPlaybackFixtureLoader.decodeParticles(
+                    particleCount: surfaceParticleCount,
+                    isLayeredFixture: true,
+                    from: rawBuffer,
+                    cursor: &cursor
+                )
+            }
+            particles.append(contentsOf: decodedSurface)
+        }
+        return particles
+    }
+
+    private func prepareSurfaceHeights(
+        _ particles: inout [ParticleState],
+        settings: MLPlaybackViewportSettings
+    ) {
+        guard !particles.isEmpty else { return }
+        let declaredSurfaceCount = settings.surfaceCount
+        let surfaceParticleCount: Int? = {
+            if particles.count % declaredSurfaceCount == 0 {
+                return particles.count / declaredSurfaceCount
+            }
+            if particles.count % 15 == 0 {
+                return particles.count / 15
+            }
+            return nil
+        }()
+        guard let surfaceParticleCount, surfaceParticleCount > 0 else { return }
+
+        let surfaceHeightScale = settings.amplitudeScale
+        let surfaceCount = max(1, particles.count / surfaceParticleCount)
+        for surfaceIndex in 0..<surfaceCount {
+            let surfaceStart = surfaceIndex * surfaceParticleCount
+            let surfaceEnd = min(particles.count, surfaceStart + surfaceParticleCount)
+            guard surfaceStart < surfaceEnd else { continue }
+
+            var rawMinimum = Float.greatestFiniteMagnitude
+            var rawMaximum = -Float.greatestFiniteMagnitude
+            for index in surfaceStart..<surfaceEnd {
+                let rawActivation = particles[index].velocity.x
+                rawMinimum = min(rawMinimum, rawActivation)
+                rawMaximum = max(rawMaximum, rawActivation)
+            }
+            let rawMidpoint = (rawMinimum + rawMaximum) * 0.5
+            let rawHalfRange = max(0.000001, (rawMaximum - rawMinimum) * 0.5)
+
+            var mean: Float = 0
+            for index in surfaceStart..<surfaceEnd {
+                let height: Float
+                switch settings.normalizationMode {
+                case .global:
+                    height = particles[index].position.z
+                case .perFrame:
+                    height = ((particles[index].velocity.x - rawMidpoint) / rawHalfRange) * surfaceHeightScale
+                }
+                particles[index].position.z = height
+                mean += height
+            }
+            mean /= Float(max(1, surfaceEnd - surfaceStart))
+
+            var maxCenteredMagnitude: Float = 0.000001
+            for index in surfaceStart..<surfaceEnd {
+                let centeredHeight = particles[index].position.z - mean
+                particles[index].position.z = centeredHeight
+                maxCenteredMagnitude = max(maxCenteredMagnitude, abs(centeredHeight))
+            }
+
+            let normalizationScale = surfaceHeightScale / maxCenteredMagnitude
+            for index in surfaceStart..<surfaceEnd {
+                particles[index].position.z *= normalizationScale
+            }
+        }
+    }
+
+    private func upperFrameIndex(for seconds: Double) -> Int {
+        var lower = 1
+        var upper = frames.count - 1
+        while lower < upper {
+            let middle = (lower + upper) / 2
+            if frames[middle].timeSeconds < seconds {
+                lower = middle + 1
+            } else {
+                upper = middle
+            }
+        }
+        return lower
+    }
+
     private func interpolate(_ lower: SIMD4<Float>, _ upper: SIMD4<Float>, alpha: Float) -> SIMD3<Float> {
         let lower3 = SIMD3<Float>(lower.x, lower.y, lower.z)
         let upper3 = SIMD3<Float>(upper.x, upper.y, upper.z)
         return lower3 + (upper3 - lower3) * alpha
     }
+}
+
+private struct MLPlaybackFrameCacheKey: Hashable {
+    let step: Int
+    let surfaceSelectionMode: MLPlaybackSurfaceSelectionMode
+    let normalizationMode: MLPlaybackNormalizationMode
+    let amplitudeScale: Float
+    let frontLayer: MLPlaybackLayerSettings
+    let middleLayer: MLPlaybackLayerSettings
+    let finalLayer: MLPlaybackLayerSettings
 }
 
 private struct MLPlaybackFrameIndex {
@@ -178,7 +372,7 @@ private struct MLPlaybackFrameIndex {
 
 private enum MLPlaybackFixtureLoader {
     private static let binaryMagic = [UInt8]("MLPBST1\0".utf8)
-    private static let binaryParticleRecordByteCount = 40
+    fileprivate static let binaryParticleRecordByteCount = 40
 
     static func loadFixture() -> MLPlaybackFixture? {
         let url = projectRootURL().appendingPathComponent(MLPlaybackRuntime.fixturePath, isDirectory: false)
@@ -229,13 +423,15 @@ private enum MLPlaybackFixtureLoader {
                     frameOffset += frameByteCount
                 }
 
+                let runtimeHandle = try FileHandle(forReadingFrom: url)
                 return MLPlaybackFixture(
                     url: url,
                     particleCount: particleCount,
                     durationSeconds: durationSeconds,
                     frameByteCount: frameByteCount,
                     frames: frames,
-                    isLayeredFixture: url.lastPathComponent.contains("layers15")
+                    isLayeredFixture: url.lastPathComponent.contains("layers15"),
+                    handle: runtimeHandle
                 )
             }
         } catch {

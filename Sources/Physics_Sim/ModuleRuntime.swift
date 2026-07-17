@@ -1190,9 +1190,101 @@ struct SimulationViewportState: Equatable {
     var showLeaderCommunicationLog: Bool
     var playbackRate: Float
     var playbackLooping: Bool
+    var mlPlayback: MLPlaybackViewportSettings
     var fixedGridSubdivisions: Int
     var fixedGridSubspaceCap: Int
     var fixedGridNeighborReadMode: FixedGridNeighborReadMode
+}
+
+enum MLPlaybackSurfaceSelectionMode: String, Equatable, Hashable {
+    case frontMiddleFinal
+    case all
+}
+
+enum MLPlaybackNormalizationMode: String, Equatable, Hashable {
+    case perFrame
+    case global
+}
+
+enum MLPlaybackVisualRecipe: String, Equatable {
+    case typeSpectrum
+    case confidenceMargin
+    case predictionDelta
+
+    var rawValueForShader: Int {
+        switch self {
+        case .typeSpectrum:
+            return 0
+        case .confidenceMargin:
+            return 1
+        case .predictionDelta:
+            return 2
+        }
+    }
+}
+
+struct MLPlaybackLayerSettings: Equatable, Hashable {
+    var visible: Bool = true
+    var slot: Int = 0
+    var horizontalOffset: Float = 0
+    var heightOffset: Float = 0
+}
+
+struct MLPlaybackViewportSettings: Equatable {
+    var isActive: Bool = false
+    var interpolationEnabled: Bool = true
+    var surfaceSelectionMode: MLPlaybackSurfaceSelectionMode = .frontMiddleFinal
+    var surfaceMeshEnabled: Bool = true
+    var surfaceSmoothing: Float = 0.35
+    var normalizationMode: MLPlaybackNormalizationMode = .perFrame
+    var amplitudeScale: Float = 0.72
+    var visualRecipe: MLPlaybackVisualRecipe = .typeSpectrum
+    var frontLayer = MLPlaybackLayerSettings(
+        visible: true,
+        slot: 0,
+        horizontalOffset: -0.24,
+        heightOffset: 0.32
+    )
+    var middleLayer = MLPlaybackLayerSettings(
+        visible: true,
+        slot: 0,
+        horizontalOffset: 0,
+        heightOffset: 0
+    )
+    var finalLayer = MLPlaybackLayerSettings(
+        visible: true,
+        slot: 0,
+        horizontalOffset: 0.24,
+        heightOffset: -0.32
+    )
+
+    var surfaceCount: Int {
+        switch surfaceSelectionMode {
+        case .frontMiddleFinal:
+            return selectedLayerSurfaces.count
+        case .all:
+            return 15
+        }
+    }
+
+    var selectedLayerSurfaces: [MLPlaybackSurfaceSelection] {
+        var selections: [MLPlaybackSurfaceSelection] = []
+        if frontLayer.visible {
+            selections.append(MLPlaybackSurfaceSelection(layer: 0, slot: frontLayer.slot))
+        }
+        if middleLayer.visible {
+            selections.append(MLPlaybackSurfaceSelection(layer: 1, slot: middleLayer.slot))
+        }
+        if finalLayer.visible {
+            selections.append(MLPlaybackSurfaceSelection(layer: 2, slot: finalLayer.slot))
+        }
+        return selections
+    }
+}
+
+struct MLPlaybackSurfaceSelection: Equatable, Hashable {
+    var layer: Int
+    var slot: Int
 }
 
 struct LeaderCommunicationLogEntry: Identifiable, Equatable {

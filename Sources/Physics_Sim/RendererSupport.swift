@@ -18,6 +18,28 @@ struct ParticleUniforms {
     var padding: UInt32 = 0
 }
 
+struct MLPlaybackSurfaceUniforms {
+    var mvp: float4x4
+    var spectrumOffset: Float
+    var amplitudeScale: Float
+    var surfaceCount: UInt32
+    var visualRecipe: UInt32
+    var padding0: UInt32 = 0
+    var frontLayerHorizontalOffset: Float = -0.24
+    var middleLayerHorizontalOffset: Float = 0.0
+    var finalLayerHorizontalOffset: Float = 0.24
+    var frontLayerOffset: Float = 0.32
+    var middleLayerOffset: Float = 0.0
+    var finalLayerOffset: Float = -0.32
+}
+
+struct PlaybackMeshSmoothParams {
+    var particleCount: UInt32
+    var gridSide: UInt32
+    var smoothing: Float
+    var padding0: UInt32 = 0
+}
+
 struct LineVertex {
     var position: SIMD3<Float>
 }

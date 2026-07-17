@@ -220,6 +220,7 @@ final class SimulationRuntime: @unchecked Sendable {
         showLeaderCommunicationLog: false,
         playbackRate: 1.0,
         playbackLooping: true,
+        mlPlayback: MLPlaybackViewportSettings(),
         fixedGridSubdivisions: FixedGridOptimizationModuleRuntime.defaultSubdivisions,
         fixedGridSubspaceCap: 2,
         fixedGridNeighborReadMode: .scratch
@@ -251,6 +252,7 @@ final class SimulationRuntime: @unchecked Sendable {
         showLeaderCommunicationLog: false,
         playbackRate: 1.0,
         playbackLooping: true,
+        mlPlayback: MLPlaybackViewportSettings(),
         fixedGridSubdivisions: FixedGridOptimizationModuleRuntime.defaultSubdivisions,
         fixedGridSubspaceCap: 2,
         fixedGridNeighborReadMode: .scratch
@@ -853,6 +855,10 @@ final class SimulationRuntime: @unchecked Sendable {
             duration: playbackRuntime.timeline.durationSeconds,
             looping: currentSimulationState.playbackLooping
         )
+
+        if let mlPlaybackRuntime = playbackRuntime as? MLPlaybackRuntime {
+            mlPlaybackRuntime.updateSettings(currentSimulationState.mlPlayback)
+        }
 
         let frame = playbackRuntime.frame(at: playbackCurrentSeconds)
         playbackCurrentSampleIndex = frame.sampleIndex
