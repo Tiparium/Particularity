@@ -52,7 +52,7 @@ struct CameraTransition {
 }
 
 enum CameraMath {
-    static let worldUp = SIMD3<Float>(0, 1, 0)
+    static let worldUp = SIMD3<Float>(0, 0, 1)
     static let orbitMinRadius: Float = 0.12
     static let orbitMaxRadius: Float = 2.5
     static let navBounds: ClosedRange<Float> = -2.5...2.5
@@ -78,15 +78,15 @@ enum CameraMath {
         simd_normalize(
             SIMD3<Float>(
                 cosf(pitch) * sinf(yaw),
-                sinf(pitch),
-                cosf(pitch) * cosf(yaw)
+                cosf(pitch) * cosf(yaw),
+                sinf(pitch)
             )
         )
     }
 
     static func rightVector(yaw: Float, pitch: Float) -> SIMD3<Float> {
         let forward = forwardVector(yaw: yaw, pitch: pitch)
-        return simd_normalize(simd_cross(forward, worldUp)) * -1
+        return simd_normalize(simd_cross(forward, worldUp))
     }
 
     static func upVector(yaw: Float, pitch: Float) -> SIMD3<Float> {
@@ -103,8 +103,8 @@ enum CameraMath {
         let radius = max(orbitMinRadius, simd_length(position))
         let normalized = position / radius
         return (
-            yaw: atan2f(normalized.x, normalized.z),
-            pitch: asinf(max(-1, min(1, normalized.y))),
+            yaw: atan2f(normalized.x, normalized.y),
+            pitch: asinf(max(-1, min(1, normalized.z))),
             radius: radius
         )
     }
@@ -114,8 +114,8 @@ enum CameraMath {
             ? simd_normalize(-position)
             : forwardVector(yaw: ViewportCameraState.defaultYaw, pitch: ViewportCameraState.defaultPitch)
         return (
-            yaw: atan2f(directionToCenter.x, directionToCenter.z),
-            pitch: clampPitch(asinf(max(-1, min(1, directionToCenter.y))))
+            yaw: atan2f(directionToCenter.x, directionToCenter.y),
+            pitch: clampPitch(asinf(max(-1, min(1, directionToCenter.z))))
         )
     }
 

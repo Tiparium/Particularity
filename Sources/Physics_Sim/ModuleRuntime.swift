@@ -1349,8 +1349,8 @@ struct ViewportCameraState: Codable, Equatable, Sendable {
     static let defaultMovementSpeed: Float = 1.0
     static let defaultPosition = SIMD3<Float>(
         cosf(defaultPitch) * sinf(defaultYaw) * defaultRadius,
-        sinf(defaultPitch) * defaultRadius,
-        cosf(defaultPitch) * cosf(defaultYaw) * defaultRadius
+        cosf(defaultPitch) * cosf(defaultYaw) * defaultRadius,
+        sinf(defaultPitch) * defaultRadius
     )
 
     private enum CodingKeys: String, CodingKey {
@@ -1393,8 +1393,8 @@ struct ViewportCameraState: Codable, Equatable, Sendable {
         } else {
             let radius = try container.decodeIfPresent(Float.self, forKey: .radius) ?? Self.defaultRadius
             self.positionX = cosf(pitch) * sinf(yaw) * radius
-            self.positionY = sinf(pitch) * radius
-            self.positionZ = cosf(pitch) * cosf(yaw) * radius
+            self.positionY = cosf(pitch) * cosf(yaw) * radius
+            self.positionZ = sinf(pitch) * radius
         }
     }
 

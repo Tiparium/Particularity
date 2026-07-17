@@ -448,12 +448,10 @@ private struct ViewportAxisIndicator: View {
         let perspectiveDistance = Float(debugSettingsStore.snapshot.compassPerspectiveDistance)
         let perspectiveStrength = Float(debugSettingsStore.snapshot.compassPerspectiveStrength)
 
-        // TODO: Temporary compass-only Z-up correction. The underlying renderer/camera stack
-        // is still Y-up and needs a proper engine-wide refactor so the whole program uses Z-up.
         let worldAxes: [(String, Color, SIMD3<Float>)] = [
             ("X", .red, SIMD3<Float>(1, 0, 0)),
-            ("Y", .green, SIMD3<Float>(0, 0, 1)),
-            ("Z", .blue, SIMD3<Float>(0, 1, 0)),
+            ("Y", .green, SIMD3<Float>(0, 1, 0)),
+            ("Z", .blue, SIMD3<Float>(0, 0, 1)),
         ]
 
         return worldAxes
