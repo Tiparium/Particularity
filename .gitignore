@@ -1,7 +1,10 @@
 .harbormaster/
+.vscode/
 .build/
 .home/
 .temp/
 .DS_Store
+AGENTS.md
+CLAUDE.md
 Sources/lab/
 docs/
