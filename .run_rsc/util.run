@@ -210,6 +210,9 @@ case "$subcmd" in
   build)
     swift build "$@"
     ;;
+  test)
+    swift test "$@"
+    ;;
   setup)
     echo "Running utility setup for machine provisioning..."
     echo "Downloading Metal toolchain component (run this on M1.2 setup as requested)."
@@ -224,6 +227,7 @@ Utility subgroup commands:
   ./run util particles
   ./run util particles headless
   ./run util build
+  ./run util test
   ./run util setup
   ./run util selfcheck
   ./run util help
@@ -231,6 +235,7 @@ Utility subgroup commands:
 Top-level aliases:
   ./run particles
   ./run build
+  ./run test
   ./run setup
   ./run selfcheck
 HELP
