@@ -18,6 +18,7 @@ Router:
   ./run crouton     (alias for ./run core hello_world)
   ./run particles   (alias for ./run util particles)
   ./run build       (alias for ./run util build)
+  ./run test        (alias for ./run util test)
   ./run setup      (alias for ./run util setup)
   ./run selfcheck  (alias for ./run util selfcheck)
   ./run help
@@ -47,6 +48,9 @@ case "$group" in
     ;;
   build)
     exec "$RUN_RSC_DIR/util.run" build "$@"
+    ;;
+  test)
+    exec "$RUN_RSC_DIR/util.run" test "$@"
     ;;
   setup)
     exec "$RUN_RSC_DIR/util.run" setup "$@"
