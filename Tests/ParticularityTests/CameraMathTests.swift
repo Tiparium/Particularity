@@ -1,4 +1,5 @@
 import Foundation
+import simd
 import Testing
 @testable import Particularity
 
@@ -20,6 +21,34 @@ struct CameraMathTests {
             sinf(ViewportCameraState.defaultPitch) * ViewportCameraState.defaultRadius
         )
         expectVector(ViewportCameraState.defaultPosition, equals: expected)
+    }
+
+    @Test("scroll dollies orbit camera without changing movement speed")
+    func scrollDolliesOrbitCameraWithoutChangingMovementSpeed() {
+        var viewportState = ViewportCameraState()
+        viewportState.mode = .orbit
+        viewportState.movementSpeed = 2.0
+        let cameraState = CameraState(viewportCameraState: viewportState)
+        let initialRadius = simd_length(cameraState.authoritativeState.position)
+
+        cameraState.dollyByScroll(deltaY: 10)
+
+        #expect(cameraState.authoritativeState.movementSpeed == 2.0)
+        #expect(simd_length(cameraState.authoritativeState.position) > initialRadius)
+    }
+
+    @Test("scroll dollies navigation camera without changing movement speed")
+    func scrollDolliesNavigationCameraWithoutChangingMovementSpeed() {
+        var viewportState = ViewportCameraState()
+        viewportState.mode = .navigation
+        viewportState.movementSpeed = 2.0
+        let cameraState = CameraState(viewportCameraState: viewportState)
+        let initialPosition = cameraState.authoritativeState.position
+
+        cameraState.dollyByScroll(deltaY: 10)
+
+        #expect(cameraState.authoritativeState.movementSpeed == 2.0)
+        #expect(simd_distance(cameraState.authoritativeState.position, initialPosition) > 0)
     }
 
     private func expectVector(

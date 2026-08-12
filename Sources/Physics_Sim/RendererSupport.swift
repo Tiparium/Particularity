@@ -58,6 +58,7 @@ enum CameraMath {
     static let navBounds: ClosedRange<Float> = -2.5...2.5
     static let pitchLimit: Float = 1.35
     static let movementSpeedRange: ClosedRange<Float> = 0.2...4.0
+    static let scrollDollyScale: Float = 0.0035
 
     static func resetState(for mode: ViewportCameraMode) -> ViewportCameraState {
         var state = ViewportCameraState()
@@ -230,11 +231,34 @@ final class CameraState {
         renderedState = authoritativeState
     }
 
-    func adjustMovementSpeed(byScrollDelta deltaY: Float) {
+    func dollyByScroll(deltaY: Float) {
         guard !isTransitioning else { return }
-        let nextSpeed = authoritativeState.movementSpeed * expf(-deltaY * 0.035)
-        authoritativeState.movementSpeed = CameraMath.clampMovementSpeed(nextSpeed)
-        renderedState.movementSpeed = authoritativeState.movementSpeed
+        switch authoritativeState.mode {
+        case .orbit:
+            dollyOrbitByScroll(deltaY: deltaY)
+        case .navigation:
+            dollyNavigationByScroll(deltaY: deltaY)
+        }
+    }
+
+    private func dollyOrbitByScroll(deltaY: Float) {
+        var orbit = CameraMath.orbitComponents(position: authoritativeState.position)
+        orbit.radius = max(
+            CameraMath.orbitMinRadius,
+            min(CameraMath.orbitMaxRadius, orbit.radius * expf(deltaY * CameraMath.scrollDollyScale))
+        )
+        authoritativeState.position = CameraMath.orbitPosition(yaw: orbit.yaw, pitch: orbit.pitch, radius: orbit.radius)
+        let orientation = CameraMath.legalOrbitOrientation(for: authoritativeState.position)
+        authoritativeState.yaw = orientation.yaw
+        authoritativeState.pitch = orientation.pitch
+        renderedState = authoritativeState
+    }
+
+    private func dollyNavigationByScroll(deltaY: Float) {
+        let forward = CameraMath.forwardVector(yaw: authoritativeState.yaw, pitch: authoritativeState.pitch)
+        let offset = -forward * deltaY * CameraMath.scrollDollyScale
+        authoritativeState.position = CameraMath.clampNavigationPosition(authoritativeState.position + offset)
+        renderedState = authoritativeState
     }
 
     func reset() {

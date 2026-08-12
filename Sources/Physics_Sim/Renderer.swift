@@ -215,8 +215,7 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     func dollyByScroll(deltaY: Float) {
         registerManualCameraInteraction()
-        liveCameraState.adjustMovementSpeed(byScrollDelta: deltaY)
-        viewportStateStore.setCameraMovementSpeed(liveCameraState.authoritativeState.movementSpeed)
+        liveCameraState.dollyByScroll(deltaY: deltaY)
         publishCameraState()
     }
 
