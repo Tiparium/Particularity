@@ -114,6 +114,79 @@ struct ModuleCompatibilityTests {
         #expect(trinity?.name == "Primordial Soup v0.1")
     }
 
+    @Test("matches Primordial Soup v0.2 trinity from its module trio")
+    func matchesPrimordialSoupV02Trinity() {
+        let modules = ActiveModuleSet(
+            physics: ModuleCatalog.knownModulesByName[PrimordialSoupLifecycleSettings.moduleName]!,
+            visual: ModuleCatalog.defaultVisual,
+            optimization: ModuleCatalog.knownModulesByName[FixedGridOptimizationModuleRuntime.moduleName]!
+        )
+
+        let trinity = TrinityCatalog.matching(modules)
+
+        #expect(trinity?.id == TrinityCatalog.primordialSoupV02.id)
+        #expect(trinity?.name == "Primordial Soup v0.2")
+    }
+
+    @Test("generates dense Primordial Soup v0.2 behavior spaces")
+    func generatesDensePrimordialSoupV02BehaviorSpace() {
+        var settings = PrimordialSoupLifecycleGenerationSettings.defaults
+        settings.typeCount = 5
+        settings.complexity = 1
+        settings.forceComplexity = 1
+        settings.seed = 42
+
+        let behaviorSpace = PrimordialSoupLifecycleBehaviorSpaceGenerator.generate(settings: settings)
+
+        #expect(behaviorSpace.typeProfiles.count == 5)
+        #expect(behaviorSpace.relationships.count == 25)
+        #expect(behaviorSpace.relationships.contains { $0.signedForce != 0 })
+        #expect(behaviorSpace.relationships.contains { $0.energyCost != 0 })
+    }
+
+    @Test("derives Primordial Soup v0.2 render type count from behavior space")
+    func derivesPrimordialSoupV02RenderTypeCountFromBehaviorSpace() throws {
+        var generationSettings = PrimordialSoupLifecycleGenerationSettings.defaults
+        generationSettings.typeCount = 9
+        var settings = PrimordialSoupLifecycleSettings()
+        settings.pendingGenerationSettings = generationSettings
+        settings.activeBehaviorSpace = PrimordialSoupLifecycleBehaviorSpaceGenerator.generate(settings: generationSettings)
+
+        let data = try JSONEncoder().encode(settings)
+        let blob = String(data: data, encoding: .utf8)!
+        let snapshot = MainWindowPhysicsModuleSettingsSnapshot(
+            blobsByModuleName: [PrimordialSoupLifecycleSettings.moduleName: blob]
+        )
+        var editorState = SimulationEditorState()
+        editorState.selectedTrinityID = TrinityCatalog.primordialSoupV02.id
+        editorState.assignedModuleIDs = TrinityCatalog.primordialSoupV02.assignedModuleIDs
+
+        let resolved = SimulationConfigurationDerivation.resolvedRuntimeConfiguration(
+            editorState: editorState,
+            transportState: .stopped,
+            availableBundles: [
+                moduleBundle(
+                    id: "particularity.realtime.producer.fixed_grid",
+                    kind: .optimization,
+                    descriptor: ModuleCatalog.knownModulesByName[FixedGridOptimizationModuleRuntime.moduleName]!
+                ),
+                moduleBundle(
+                    id: "particularity.realtime.processor.primordial_soup_lifecycle",
+                    kind: .physics,
+                    descriptor: ModuleCatalog.knownModulesByName[PrimordialSoupLifecycleSettings.moduleName]!
+                ),
+                moduleBundle(
+                    id: ModuleCatalog.defaultVisual.moduleID,
+                    kind: .visual,
+                    descriptor: ModuleCatalog.defaultVisual
+                ),
+            ],
+            physicsModuleSettingsSnapshot: snapshot
+        )
+
+        #expect(resolved.simulationState.particleTypes == 9)
+    }
+
     @Test("matches toy playback trinity from its module trio")
     func matchesToyPlaybackTrinity() {
         let modules = ActiveModuleSet(
@@ -395,6 +468,40 @@ struct ModuleCompatibilityTests {
         #expect(configuration.simulationState.randomDistribution == false)
         #expect(configuration.simulationState.particleTypes == 3)
         #expect(configuration.simulationState.allParticlesIntercommunicate == false)
+    }
+
+    @Test("derives Primordial Soup v0.1 render type count from processor setup")
+    func derivesPrimordialSoupV01RenderTypeCountFromProcessorSetup() {
+        var editorState = SimulationEditorState()
+        editorState.assignedModuleIDs = TrinityCatalog.primordialSoup.assignedModuleIDs
+        editorState.physicsState.particleTypes = 3
+        editorState.moduleSettings["particularity.realtime.processor.type_matrix_local"] = [
+            ModuleSimulationSetupSettingID.particleTypes: .number(11),
+        ]
+
+        let configuration = SimulationConfigurationDerivation.resolvedRuntimeConfiguration(
+            editorState: editorState,
+            transportState: .stopped,
+            availableBundles: [
+                moduleBundle(
+                    id: "particularity.realtime.producer.fixed_grid",
+                    kind: .optimization,
+                    descriptor: ModuleCatalog.knownModulesByName[FixedGridOptimizationModuleRuntime.moduleName]!
+                ),
+                moduleBundle(
+                    id: "particularity.realtime.processor.type_matrix_local",
+                    kind: .physics,
+                    descriptor: ModuleCatalog.knownModulesByName[TypeMatrixLocalPhysicsSettings.moduleName]!
+                ),
+                moduleBundle(
+                    id: ModuleCatalog.defaultVisual.moduleID,
+                    kind: .visual,
+                    descriptor: ModuleCatalog.defaultVisual
+                ),
+            ]
+        )
+
+        #expect(configuration.simulationState.particleTypes == 11)
     }
 
     @Test("playback runtime setup does not inherit realtime particle setup")

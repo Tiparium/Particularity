@@ -7,7 +7,8 @@ enum SimulationConfigurationDerivation {
     static func resolvedRuntimeConfiguration(
         editorState: SimulationEditorState,
         transportState: SimulationTransportState,
-        availableBundles: [ModuleBundle]
+        availableBundles: [ModuleBundle],
+        physicsModuleSettingsSnapshot: MainWindowPhysicsModuleSettingsSnapshot? = nil
     ) -> ResolvedRuntimeConfiguration {
         let activeModules = activeModules(
             editorState: editorState,
@@ -17,7 +18,8 @@ enum SimulationConfigurationDerivation {
             transportState: transportState,
             editorState: editorState,
             activeModules: activeModules,
-            availableBundles: availableBundles
+            availableBundles: availableBundles,
+            physicsModuleSettingsSnapshot: physicsModuleSettingsSnapshot
         )
         let projectedBytes = projectedMemoryBytes(
             editorState: editorState,
@@ -42,19 +44,25 @@ enum SimulationConfigurationDerivation {
         transportState: SimulationTransportState,
         editorState: SimulationEditorState,
         activeModules: ActiveModuleSet,
-        availableBundles: [ModuleBundle]
+        availableBundles: [ModuleBundle],
+        physicsModuleSettingsSnapshot: MainWindowPhysicsModuleSettingsSnapshot? = nil
     ) -> SimulationViewportState {
         let clampedTimeScale = activeModules.timeScaleProfile.clamped(editorState.physicsState.timeScale)
         let setup = ModuleSimulationSetupResolver.resolve(
             editorState: editorState,
             activeModules: activeModules
         )
+        let particleTypes = processorExposedParticleTypeCount(
+            setupParticleTypes: setup.particleTypes,
+            activeModules: activeModules,
+            physicsModuleSettingsSnapshot: physicsModuleSettingsSnapshot
+        )
         return SimulationViewportState(
             transportState: transportState,
             particleCount: setup.particleCount,
             randomDistribution: setup.randomDistribution,
-            particleTypes: setup.particleTypes,
-            allParticlesIntercommunicate: setup.allParticlesIntercommunicate,
+            particleTypes: particleTypes,
+            allParticlesIntercommunicate: activeModules.physics.name == PrimordialSoupLifecycleSettings.moduleName ? true : setup.allParticlesIntercommunicate,
             movementDirection: SIMD3<Float>(
                 Float(editorState.physicsState.movementDirection.x),
                 Float(editorState.physicsState.movementDirection.y),
@@ -84,6 +92,28 @@ enum SimulationConfigurationDerivation {
             ),
             fixedGridNeighborReadMode: editorState.optimizationState.fixedGridNeighborReadMode
         )
+    }
+
+    private static func processorExposedParticleTypeCount(
+        setupParticleTypes: Int,
+        activeModules: ActiveModuleSet,
+        physicsModuleSettingsSnapshot: MainWindowPhysicsModuleSettingsSnapshot?
+    ) -> Int {
+        // The presenter spaces palette colors using this count, but the count itself belongs to the
+        // active processor. v0.1 exposes it as module setup; v0.2 derives it from the behavior space.
+        guard activeModules.physics.name == PrimordialSoupLifecycleSettings.moduleName,
+              let physicsModuleSettingsSnapshot else {
+            return setupParticleTypes
+        }
+        let decodedSettings: PrimordialSoupLifecycleSettings? = {
+            guard let blob = physicsModuleSettingsSnapshot.blobsByModuleName[PrimordialSoupLifecycleSettings.moduleName],
+                  let data = blob.data(using: .utf8) else {
+                return nil
+            }
+            return try? JSONDecoder().decode(PrimordialSoupLifecycleSettings.self, from: data)
+        }()
+        let settings = (decodedSettings ?? PrimordialSoupLifecycleSettings()).sanitized()
+        return max(1, settings.activeTypeCount)
     }
 
     private static func mlPlaybackSettings(

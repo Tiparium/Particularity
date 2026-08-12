@@ -53,6 +53,7 @@ final class SimulationSession {
     private var currentSimulationState: SimulationViewportState
     private var activeModules: ActiveModuleSet
     private var typeMatrixLocalSettings = TypeMatrixLocalPhysicsSettings()
+    private var primordialSoupLifecycleSettings = PrimordialSoupLifecycleSettings()
     private var lifecycleState: LifecycleState = .active
     private var suspensionStartedAt: TimeInterval?
     private var suspendTimeoutWorkItem: DispatchWorkItem?
@@ -178,6 +179,19 @@ final class SimulationSession {
             ]
         )
         runtime?.updateTypeMatrixLocalSettings(nextSettings)
+    }
+
+    func updatePrimordialSoupLifecycleSettings(_ nextSettings: PrimordialSoupLifecycleSettings) {
+        primordialSoupLifecycleSettings = nextSettings
+        InteractionSnapshotRecorder.shared.record(
+            event: "session.update_primordial_soup_lifecycle_settings",
+            details: [
+                "nonce": "\(nextSettings.regenerationNonce)",
+                "typeCount": "\(nextSettings.activeTypeCount)",
+                "pending": "\(nextSettings.hasPendingBehaviorSpaceChanges)",
+            ]
+        )
+        runtime?.updatePrimordialSoupLifecycleSettings(nextSettings)
     }
 
     func seekPlayback(to seconds: Double) {
@@ -315,6 +329,7 @@ final class SimulationSession {
         guard let runtime else { return }
         try runtime.updateActiveModules(activeModules)
         runtime.updateTypeMatrixLocalSettings(typeMatrixLocalSettings)
+        runtime.updatePrimordialSoupLifecycleSettings(primordialSoupLifecycleSettings)
         runtime.updateSimulationState(currentSimulationState)
     }
 }

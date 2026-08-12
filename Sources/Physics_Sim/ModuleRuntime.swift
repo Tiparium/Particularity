@@ -523,6 +523,22 @@ enum TrinityCatalog {
         defaultSettings: .default
     )
 
+    static let primordialSoupV02 = TrinityDefinition(
+        id: "particularity.trinity.primordial_soup_v0_2",
+        name: "Primordial Soup v0.2",
+        executionModel: .realtime,
+        moduleIDs: [
+            .optimization: "particularity.realtime.producer.fixed_grid",
+            .physics: "particularity.realtime.processor.primordial_soup_lifecycle",
+            .visual: ModuleCatalog.defaultVisual.moduleID,
+        ],
+        assignedModuleIDs: [
+            ModuleKind.optimization.rawValue: "particularity.realtime.producer.fixed_grid",
+            ModuleKind.physics.rawValue: "particularity.realtime.processor.primordial_soup_lifecycle",
+        ],
+        defaultSettings: .default
+    )
+
     static let toyPlayback = TrinityDefinition(
         id: "particularity.trinity.toy_playback",
         name: "Toy Playback",
@@ -560,6 +576,7 @@ enum TrinityCatalog {
     static let all: [TrinityDefinition] = [
         defaultRealtime,
         primordialSoup,
+        primordialSoupV02,
         toyPlayback,
         mlTrainingPlayback,
     ]
@@ -853,6 +870,28 @@ enum ModuleCatalog {
             supportsLeaderCommunicationLog: false,
             timeScale: .realtimeDefault,
             simulationSetup: .typeMatrixRealtime
+        ),
+        PrimordialSoupLifecycleSettings.moduleName: ModuleDescriptor(
+            moduleID: "particularity.realtime.processor.primordial_soup_lifecycle",
+            kind: "physics",
+            name: PrimordialSoupLifecycleSettings.moduleName,
+            visibility: .production,
+            isDefaultFallback: false,
+            acceptsOptimizationDebugInfo: false,
+            providesOptimizationDebugInfo: false,
+            supportsLeaderCommunicationLog: false,
+            timeScale: .realtimeDefault,
+            simulationSetup: ModuleSimulationSetupProfile(
+                particleCount: ModuleParticleCountControl(
+                    minimum: 1,
+                    maximum: SimulationParticleLimits.settingsUICap,
+                    defaultValue: PrimordialSoupLifecycleSettings.particleCapacityDefault,
+                    helpText: "Maximum particle capacity for Primordial Soup v0.2."
+                ),
+                randomDistribution: nil,
+                interParticleCommunication: nil,
+                particleTypes: nil
+            )
         ),
         "DefaultGreySpheres": ModuleDescriptor(
             moduleID: "particularity.realtime.presenter.default_grey_spheres",

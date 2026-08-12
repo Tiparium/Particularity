@@ -84,6 +84,12 @@ struct ModuleSettingsPanelView: View {
                     setupProfile: runtimeConfigCoordinator.activeModules.simulationSetupProfile,
                     setupModuleID: runtimeConfigCoordinator.activeModules.physics.moduleID
                 )
+            } else if resolved.name == PrimordialSoupLifecycleSettings.moduleName {
+                PrimordialSoupLifecycleSettingsPanel(
+                    store: editorSettingsStore,
+                    physicsModuleSettingsStore: physicsModuleSettingsStore,
+                    setupModuleID: runtimeConfigCoordinator.activeModules.physics.moduleID
+                )
             } else {
                 unavailable
             }

@@ -69,6 +69,83 @@ private struct TypeMatrixPhysicsApplyParams {
     var teleportationMinimumDistance: Float
 }
 
+private struct PrimordialSoupLifecycleRelationshipGPU {
+    var signedForce: Float
+    var energyCost: Float
+    var threatContribution: Float
+    var reserved0: Float = 0
+}
+
+private struct PrimordialSoupLifecycleTypeProfileGPU {
+    var maxSpeed: Float
+    var motility: Float
+    var innerRadius: Float
+    var middleRadius: Float
+    var outerRadius: Float
+    var energyDecayRate: Float
+    var reproductionEnergyThreshold: Float
+    var reproductionEnergyCost: Float
+    var childEnergyFraction: Float
+    var reproductionCooldown: Float
+    var threatSensitivity: Float
+    var reserved0: Float = 0
+}
+
+private struct PrimordialSoupLifecycleSidecarState {
+    var energy: Float
+    var age: Float
+    var reproductionCooldownRemaining: Float
+    var interactionEnergyDelta: Float
+
+    static let inactive = PrimordialSoupLifecycleSidecarState(
+        energy: 0,
+        age: 0,
+        reproductionCooldownRemaining: 0,
+        interactionEnergyDelta: 0
+    )
+}
+
+private struct PrimordialSoupLifecycleSpawnRecord {
+    var particle: ParticleState
+    var sidecar: PrimordialSoupLifecycleSidecarState
+    var targetSlot: UInt32
+    var reserved0: UInt32 = 0
+    var reserved1: UInt32 = 0
+    var reserved2: UInt32 = 0
+}
+
+private struct PrimordialSoupLifecycleAccumulateParams {
+    var particleCount: UInt32
+    var particleTypeCount: UInt32
+    var neighborReadMode: UInt32
+    var padding0: UInt32 = 0
+    var innerRadiusMultiplier: Float
+    var middleRadiusMultiplier: Float
+    var outerRadiusMultiplier: Float
+    var attractionMultiplier: Float
+    var repulsionMultiplier: Float
+}
+
+private struct PrimordialSoupLifecycleApplyParams {
+    var particleCount: UInt32
+    var particleTypeCount: UInt32
+    var initialActiveCount: UInt32
+    var spawnRecordCapacity: UInt32
+    var randomSeed: UInt32
+    var deltaTime: Float
+    var dampingEnabled: UInt32
+    var momentumEnabled: UInt32
+    var speedLimitEnabled: UInt32
+    var dampingStrength: Float
+    var momentumStrength: Float
+    var speedLimit: Float
+}
+
+private struct PrimordialSoupLifecycleSpawnResolveParams {
+    var particleCount: UInt32
+    var spawnRecordCapacity: UInt32
+}
+
 private struct TemplatePhysicsAccumulateParams {
     var particleCount: UInt32
     var interactionRadius: Float
@@ -152,6 +229,9 @@ final class SimulationRuntime: @unchecked Sendable {
     private let templatePhysicsApplyPipeline: MTLComputePipelineState
     private let typeMatrixPhysicsAccumulatePipeline: MTLComputePipelineState
     private let typeMatrixPhysicsApplyPipeline: MTLComputePipelineState
+    private let primordialSoupLifecycleAccumulatePipeline: MTLComputePipelineState
+    private let primordialSoupLifecycleApplyPipeline: MTLComputePipelineState
+    private let primordialSoupLifecycleResolveSpawnsPipeline: MTLComputePipelineState
     private let debugLinePipeline: MTLComputePipelineState
     private let fixedGridClearCellCountsPipeline: MTLComputePipelineState
     private let fixedGridAssignParticlesPipeline: MTLComputePipelineState
@@ -186,6 +266,16 @@ final class SimulationRuntime: @unchecked Sendable {
     private var typeMatrixInteractionBuffer: MTLBuffer?
     private var typeMatrixSidecarFrontBuffer: MTLBuffer?
     private var typeMatrixSidecarBackBuffer: MTLBuffer?
+    private var primordialSoupLifecycleRelationshipBuffer: MTLBuffer?
+    private var primordialSoupLifecycleTypeProfileBuffer: MTLBuffer?
+    private var primordialSoupLifecycleSidecarFrontBuffer: MTLBuffer?
+    private var primordialSoupLifecycleSidecarBackBuffer: MTLBuffer?
+    private var primordialSoupLifecycleSpawnRecordsBuffer: MTLBuffer?
+    private var primordialSoupLifecycleFrameSpawnCounterBuffer: MTLBuffer?
+    private var primordialSoupLifecycleNextSpawnSlotCounterBuffer: MTLBuffer?
+    private var primordialSoupLifecycleInitialActiveCount = 0
+    private var primordialSoupLifecycleSpawnRecordCapacity = 0
+    private var primordialSoupLifecycleFrameIndex: UInt32 = 0
     private var customStandardPhysicsModuleID: String?
     private var customStandardPhysicsAccumulatePipeline: MTLComputePipelineState?
     private var customStandardPhysicsApplyPipeline: MTLComputePipelineState?
@@ -206,6 +296,7 @@ final class SimulationRuntime: @unchecked Sendable {
     private var cachedDefaultInteractionParticleCount: Int?
     private var cachedFixedGridTopology: FixedGridInteractionTopology?
     private var typeMatrixLocalSettings = TypeMatrixLocalPhysicsSettings()
+    private var primordialSoupLifecycleSettings = PrimordialSoupLifecycleSettings()
     private var currentSimulationState = SimulationViewportState(
         transportState: .stopped,
         particleCount: 20_000,
@@ -289,6 +380,15 @@ final class SimulationRuntime: @unchecked Sendable {
         guard let typeMatrixApplyFunction = library.makeFunction(name: "type_matrix_apply_impulse") else {
             throw SimulationRuntimeError.missingFunction("type_matrix_apply_impulse")
         }
+        guard let primordialSoupLifecycleAccumulateFunction = library.makeFunction(name: "primordial_soup_lifecycle_accumulate_impulse") else {
+            throw SimulationRuntimeError.missingFunction("primordial_soup_lifecycle_accumulate_impulse")
+        }
+        guard let primordialSoupLifecycleApplyFunction = library.makeFunction(name: "primordial_soup_lifecycle_apply_impulse") else {
+            throw SimulationRuntimeError.missingFunction("primordial_soup_lifecycle_apply_impulse")
+        }
+        guard let primordialSoupLifecycleResolveSpawnsFunction = library.makeFunction(name: "primordial_soup_lifecycle_resolve_spawns") else {
+            throw SimulationRuntimeError.missingFunction("primordial_soup_lifecycle_resolve_spawns")
+        }
         guard let debugLineFunction = library.makeFunction(name: "build_debug_lines") else {
             throw SimulationRuntimeError.missingFunction("build_debug_lines")
         }
@@ -318,6 +418,9 @@ final class SimulationRuntime: @unchecked Sendable {
             self.templatePhysicsApplyPipeline = try device.makeComputePipelineState(function: templatePhysicsApplyFunction)
             self.typeMatrixPhysicsAccumulatePipeline = try device.makeComputePipelineState(function: typeMatrixAccumulateFunction)
             self.typeMatrixPhysicsApplyPipeline = try device.makeComputePipelineState(function: typeMatrixApplyFunction)
+            self.primordialSoupLifecycleAccumulatePipeline = try device.makeComputePipelineState(function: primordialSoupLifecycleAccumulateFunction)
+            self.primordialSoupLifecycleApplyPipeline = try device.makeComputePipelineState(function: primordialSoupLifecycleApplyFunction)
+            self.primordialSoupLifecycleResolveSpawnsPipeline = try device.makeComputePipelineState(function: primordialSoupLifecycleResolveSpawnsFunction)
             self.debugLinePipeline = try device.makeComputePipelineState(function: debugLineFunction)
             self.fixedGridClearCellCountsPipeline = try device.makeComputePipelineState(function: fixedGridClearCellCountsFunction)
             self.fixedGridAssignParticlesPipeline = try device.makeComputePipelineState(function: fixedGridAssignParticlesFunction)
@@ -340,6 +443,12 @@ final class SimulationRuntime: @unchecked Sendable {
                 failingName = "type_matrix_accumulate_impulse"
             } else if description.contains("type_matrix_apply_impulse") {
                 failingName = "type_matrix_apply_impulse"
+            } else if description.contains("primordial_soup_lifecycle_accumulate_impulse") {
+                failingName = "primordial_soup_lifecycle_accumulate_impulse"
+            } else if description.contains("primordial_soup_lifecycle_apply_impulse") {
+                failingName = "primordial_soup_lifecycle_apply_impulse"
+            } else if description.contains("primordial_soup_lifecycle_resolve_spawns") {
+                failingName = "primordial_soup_lifecycle_resolve_spawns"
             } else if description.contains("fixed_grid_clear_cell_counts") {
                 failingName = "fixed_grid_clear_cell_counts"
             } else if description.contains("fixed_grid_assign_particles_to_groups") {
@@ -407,6 +516,19 @@ final class SimulationRuntime: @unchecked Sendable {
         }
     }
 
+    func updatePrimordialSoupLifecycleSettings(_ nextSettings: PrimordialSoupLifecycleSettings) {
+        simulationQueue.async {
+            self.primordialSoupLifecycleSettings = nextSettings
+            RuntimeEventLogger.log(
+                "primordial_soup_lifecycle runtime_update nonce=\(nextSettings.regenerationNonce) transport=\(self.currentSimulationState.transportState.rawValue) active=\(self.isPrimordialSoupLifecyclePhysicsActive)"
+            )
+            guard self.isPrimordialSoupLifecyclePhysicsActive else {
+                return
+            }
+            self.uploadPrimordialSoupLifecycleBehaviorSpace(nextSettings.activeBehaviorSpace)
+        }
+    }
+
     func updateActiveModules(_ nextModules: ActiveModuleSet) throws {
         try simulationQueue.sync {
             if let reason = ModuleCompatibility.incompatibilityReason(for: nextModules, state: currentSimulationState) {
@@ -438,6 +560,16 @@ final class SimulationRuntime: @unchecked Sendable {
             }
             if self.currentSimulationState.transportState == .stopped {
                 self.typeMatrixInteractionBuffer = nil
+                self.primordialSoupLifecycleRelationshipBuffer = nil
+                self.primordialSoupLifecycleTypeProfileBuffer = nil
+                self.primordialSoupLifecycleSidecarFrontBuffer = nil
+                self.primordialSoupLifecycleSidecarBackBuffer = nil
+                self.primordialSoupLifecycleSpawnRecordsBuffer = nil
+                self.primordialSoupLifecycleFrameSpawnCounterBuffer = nil
+                self.primordialSoupLifecycleNextSpawnSlotCounterBuffer = nil
+                self.primordialSoupLifecycleInitialActiveCount = 0
+                self.primordialSoupLifecycleSpawnRecordCapacity = 0
+                self.primordialSoupLifecycleFrameIndex = 0
             }
         }
     }
@@ -543,6 +675,12 @@ final class SimulationRuntime: @unchecked Sendable {
                 } else {
                     uploadTypeMatrixInteractionBuffer(from: typeMatrixLocalSettings.matrixValues)
                 }
+            }
+
+            if previous.transportState == .stopped,
+               nextState.transportState == .running,
+               isPrimordialSoupLifecyclePhysicsActive {
+                uploadPrimordialSoupLifecycleBehaviorSpace(primordialSoupLifecycleSettings.activeBehaviorSpace)
             }
 
             if isPlaybackRuntimeActive {
@@ -673,6 +811,16 @@ final class SimulationRuntime: @unchecked Sendable {
         typeMatrixSidecarBackBuffer = nil
         toyPlaybackRuntime = nil
         mlPlaybackRuntime = nil
+        primordialSoupLifecycleRelationshipBuffer = nil
+        primordialSoupLifecycleTypeProfileBuffer = nil
+        primordialSoupLifecycleSidecarFrontBuffer = nil
+        primordialSoupLifecycleSidecarBackBuffer = nil
+        primordialSoupLifecycleSpawnRecordsBuffer = nil
+        primordialSoupLifecycleFrameSpawnCounterBuffer = nil
+        primordialSoupLifecycleNextSpawnSlotCounterBuffer = nil
+        primordialSoupLifecycleInitialActiveCount = 0
+        primordialSoupLifecycleSpawnRecordCapacity = 0
+        primordialSoupLifecycleFrameIndex = 0
         mlPlaybackRuntimeLoadAttempted = false
         playbackCurrentSeconds = 0
         playbackLastUptime = nil
@@ -812,12 +960,24 @@ final class SimulationRuntime: @unchecked Sendable {
             metricsAccumulator.recordLeaderInteractions(leaderInteractionCount, at: now)
         }
 
+        if isPrimordialSoupLifecyclePhysicsActive {
+            resetPrimordialSoupLifecycleFrameSpawnCounter(in: commandBuffer)
+        }
+
         if let physicsEncoder = commandBuffer.makeComputeCommandEncoder() {
             encodePhysicsApply(
                 into: physicsEncoder,
                 sourceParticleBuffer: particleFrontBuffer,
                 destinationParticleBuffer: particleBackBuffer,
                 now: now
+            )
+        }
+
+        if isPrimordialSoupLifecyclePhysicsActive,
+           let spawnResolveEncoder = commandBuffer.makeComputeCommandEncoder() {
+            encodePrimordialSoupLifecycleSpawnResolve(
+                into: spawnResolveEncoder,
+                destinationParticleBuffer: particleBackBuffer
             )
         }
 
@@ -1025,6 +1185,51 @@ final class SimulationRuntime: @unchecked Sendable {
             return
         }
 
+        if isPrimordialSoupLifecyclePhysicsActive {
+            guard let relationshipBuffer = primordialSoupLifecycleRelationshipBuffer,
+                  let typeProfileBuffer = primordialSoupLifecycleTypeProfileBuffer,
+                  let lifecycleSidecarFrontBuffer = primordialSoupLifecycleSidecarFrontBuffer,
+                  let lifecycleSidecarBackBuffer = primordialSoupLifecycleSidecarBackBuffer else {
+                zeroParticleImpulseChannel()
+                physicsEncoder.endEncoding()
+                return
+            }
+            physicsEncoder.setComputePipelineState(primordialSoupLifecycleAccumulatePipeline)
+            physicsEncoder.setBuffer(sourceParticleBuffer, offset: 0, index: 0)
+            physicsEncoder.setBuffer(destinationParticleBuffer, offset: 0, index: 1)
+            physicsEncoder.setBuffer(interactionGroupIndicesBuffer, offset: 0, index: 2)
+            physicsEncoder.setBuffer(interactionRangeOffsetsBuffer, offset: 0, index: 3)
+            physicsEncoder.setBuffer(interactionRangeTargetsBuffer, offset: 0, index: 4)
+            physicsEncoder.setBuffer(interactionRangesBuffer, offset: 0, index: 5)
+            physicsEncoder.setBuffer(interactionIndicesBuffer, offset: 0, index: 6)
+            physicsEncoder.setBuffer(interactionScratchParticlesBuffer ?? sourceParticleBuffer, offset: 0, index: 7)
+            physicsEncoder.setBuffer(interactionScratchToCanonicalBuffer ?? interactionIndicesBuffer, offset: 0, index: 8)
+            physicsEncoder.setBuffer(relationshipBuffer, offset: 0, index: 9)
+            physicsEncoder.setBuffer(typeProfileBuffer, offset: 0, index: 10)
+            physicsEncoder.setBuffer(lifecycleSidecarFrontBuffer, offset: 0, index: 11)
+            physicsEncoder.setBuffer(lifecycleSidecarBackBuffer, offset: 0, index: 12)
+            var params = PrimordialSoupLifecycleAccumulateParams(
+                particleCount: UInt32(activeParticleCount),
+                particleTypeCount: UInt32(max(1, primordialSoupLifecycleSettings.activeTypeCount)),
+                neighborReadMode: activeNeighborReadModeRawValue,
+                innerRadiusMultiplier: Float(primordialSoupLifecycleSettings.innerRadiusMultiplier),
+                middleRadiusMultiplier: Float(primordialSoupLifecycleSettings.middleRadiusMultiplier),
+                outerRadiusMultiplier: Float(primordialSoupLifecycleSettings.outerRadiusMultiplier),
+                attractionMultiplier: Float(primordialSoupLifecycleSettings.attractionMultiplier),
+                repulsionMultiplier: Float(primordialSoupLifecycleSettings.repulsionMultiplier)
+            )
+            physicsEncoder.setBytes(&params, length: MemoryLayout<PrimordialSoupLifecycleAccumulateParams>.stride, index: 13)
+            let threadsPerGroup = MTLSize(
+                width: min(primordialSoupLifecycleAccumulatePipeline.maxTotalThreadsPerThreadgroup, physicsThreadsPerGroup),
+                height: 1,
+                depth: 1
+            )
+            let threadCount = MTLSize(width: activeParticleCount, height: 1, depth: 1)
+            physicsEncoder.dispatchThreads(threadCount, threadsPerThreadgroup: threadsPerGroup)
+            physicsEncoder.endEncoding()
+            return
+        }
+
         if isTemplatePhysicsActive {
             physicsEncoder.setComputePipelineState(templatePhysicsAccumulatePipeline)
             physicsEncoder.setBuffer(sourceParticleBuffer, offset: 0, index: 0)
@@ -1147,6 +1352,47 @@ final class SimulationRuntime: @unchecked Sendable {
             let threadCount = MTLSize(width: activeParticleCount, height: 1, depth: 1)
             physicsEncoder.dispatchThreads(threadCount, threadsPerThreadgroup: threadsPerGroup)
             physicsEncoder.endEncoding()
+        } else if isPrimordialSoupLifecyclePhysicsActive {
+            guard let typeProfileBuffer = primordialSoupLifecycleTypeProfileBuffer,
+                  let lifecycleSidecarBackBuffer = primordialSoupLifecycleSidecarBackBuffer,
+                  let spawnRecordsBuffer = primordialSoupLifecycleSpawnRecordsBuffer,
+                  let frameSpawnCounterBuffer = primordialSoupLifecycleFrameSpawnCounterBuffer,
+                  let nextSpawnSlotCounterBuffer = primordialSoupLifecycleNextSpawnSlotCounterBuffer else {
+                physicsEncoder.endEncoding()
+                return
+            }
+            physicsEncoder.setComputePipelineState(primordialSoupLifecycleApplyPipeline)
+            physicsEncoder.setBuffer(sourceParticleBuffer, offset: 0, index: 0)
+            physicsEncoder.setBuffer(destinationParticleBuffer, offset: 0, index: 1)
+            physicsEncoder.setBuffer(typeProfileBuffer, offset: 0, index: 2)
+            physicsEncoder.setBuffer(lifecycleSidecarBackBuffer, offset: 0, index: 3)
+            physicsEncoder.setBuffer(spawnRecordsBuffer, offset: 0, index: 4)
+            physicsEncoder.setBuffer(frameSpawnCounterBuffer, offset: 0, index: 5)
+            physicsEncoder.setBuffer(nextSpawnSlotCounterBuffer, offset: 0, index: 6)
+            primordialSoupLifecycleFrameIndex &+= 1
+            var params = PrimordialSoupLifecycleApplyParams(
+                particleCount: UInt32(activeParticleCount),
+                particleTypeCount: UInt32(max(1, primordialSoupLifecycleSettings.activeTypeCount)),
+                initialActiveCount: UInt32(primordialSoupLifecycleInitialActiveCount),
+                spawnRecordCapacity: UInt32(primordialSoupLifecycleSpawnRecordCapacity),
+                randomSeed: primordialSoupLifecycleFrameIndex,
+                deltaTime: fixedTimeStep * currentSimulationState.timeScale,
+                dampingEnabled: primordialSoupLifecycleSettings.dampingEnabled ? 1 : 0,
+                momentumEnabled: primordialSoupLifecycleSettings.momentumEnabled ? 1 : 0,
+                speedLimitEnabled: primordialSoupLifecycleSettings.speedLimitEnabled ? 1 : 0,
+                dampingStrength: Float(primordialSoupLifecycleSettings.dampingStrength),
+                momentumStrength: Float(primordialSoupLifecycleSettings.momentumStrength),
+                speedLimit: Float(primordialSoupLifecycleSettings.speedLimit)
+            )
+            physicsEncoder.setBytes(&params, length: MemoryLayout<PrimordialSoupLifecycleApplyParams>.stride, index: 7)
+            let threadsPerGroup = MTLSize(
+                width: min(primordialSoupLifecycleApplyPipeline.maxTotalThreadsPerThreadgroup, physicsThreadsPerGroup),
+                height: 1,
+                depth: 1
+            )
+            let threadCount = MTLSize(width: activeParticleCount, height: 1, depth: 1)
+            physicsEncoder.dispatchThreads(threadCount, threadsPerThreadgroup: threadsPerGroup)
+            physicsEncoder.endEncoding()
         } else if isTemplatePhysicsActive {
             physicsEncoder.setComputePipelineState(templatePhysicsApplyPipeline)
             physicsEncoder.setBuffer(sourceParticleBuffer, offset: 0, index: 0)
@@ -1212,6 +1458,48 @@ final class SimulationRuntime: @unchecked Sendable {
         metricsAccumulator.recordPhysicsStep(at: now)
     }
 
+    private func resetPrimordialSoupLifecycleFrameSpawnCounter(in commandBuffer: MTLCommandBuffer) {
+        guard let frameSpawnCounterBuffer = primordialSoupLifecycleFrameSpawnCounterBuffer,
+              let blitEncoder = commandBuffer.makeBlitCommandEncoder() else { return }
+        blitEncoder.fill(
+            buffer: frameSpawnCounterBuffer,
+            range: 0..<MemoryLayout<UInt32>.stride,
+            value: 0
+        )
+        blitEncoder.endEncoding()
+    }
+
+    private func encodePrimordialSoupLifecycleSpawnResolve(
+        into encoder: MTLComputeCommandEncoder,
+        destinationParticleBuffer: MTLBuffer
+    ) {
+        guard primordialSoupLifecycleSpawnRecordCapacity > 0,
+              let lifecycleSidecarBackBuffer = primordialSoupLifecycleSidecarBackBuffer,
+              let spawnRecordsBuffer = primordialSoupLifecycleSpawnRecordsBuffer,
+              let frameSpawnCounterBuffer = primordialSoupLifecycleFrameSpawnCounterBuffer else {
+            encoder.endEncoding()
+            return
+        }
+        encoder.setComputePipelineState(primordialSoupLifecycleResolveSpawnsPipeline)
+        encoder.setBuffer(destinationParticleBuffer, offset: 0, index: 0)
+        encoder.setBuffer(lifecycleSidecarBackBuffer, offset: 0, index: 1)
+        encoder.setBuffer(spawnRecordsBuffer, offset: 0, index: 2)
+        encoder.setBuffer(frameSpawnCounterBuffer, offset: 0, index: 3)
+        var params = PrimordialSoupLifecycleSpawnResolveParams(
+            particleCount: UInt32(activeParticleCount),
+            spawnRecordCapacity: UInt32(primordialSoupLifecycleSpawnRecordCapacity)
+        )
+        encoder.setBytes(&params, length: MemoryLayout<PrimordialSoupLifecycleSpawnResolveParams>.stride, index: 4)
+        let threadsPerGroup = MTLSize(
+            width: min(primordialSoupLifecycleResolveSpawnsPipeline.maxTotalThreadsPerThreadgroup, physicsThreadsPerGroup),
+            height: 1,
+            depth: 1
+        )
+        let threadCount = MTLSize(width: primordialSoupLifecycleSpawnRecordCapacity, height: 1, depth: 1)
+        encoder.dispatchThreads(threadCount, threadsPerThreadgroup: threadsPerGroup)
+        encoder.endEncoding()
+    }
+
     private func appendLeaderCommunicationLogEntry(
         now: TimeInterval,
         firstTargetIndex: Int,
@@ -1262,7 +1550,27 @@ final class SimulationRuntime: @unchecked Sendable {
             || interactionRangesBuffer == nil
             || interactionIndicesBuffer == nil else { return true }
 
-        let spawnData = DefaultPhysicsModuleRuntime.rebuildParticles(from: currentSimulationState)
+        let spawnData: DefaultPhysicsModuleRuntime.SpawnData
+        if isPrimordialSoupLifecyclePhysicsActive {
+            let capacity = max(1, currentSimulationState.particleCount)
+            let initialActiveCount = max(
+                1,
+                min(
+                    capacity,
+                    Int((Double(capacity) * primordialSoupLifecycleSettings.initialPopulationPercent).rounded())
+                )
+            )
+            primordialSoupLifecycleInitialActiveCount = initialActiveCount
+            spawnData = DefaultPhysicsModuleRuntime.rebuildParticles(
+                particleCapacity: capacity,
+                activeCount: initialActiveCount,
+                typeCount: primordialSoupLifecycleSettings.activeTypeCount,
+                randomDistribution: primordialSoupLifecycleSettings.randomDistribution
+            )
+        } else {
+            primordialSoupLifecycleInitialActiveCount = 0
+            spawnData = DefaultPhysicsModuleRuntime.rebuildParticles(from: currentSimulationState)
+        }
         let particles = spawnData.particles
 
         let particleLength = max(1, MemoryLayout<ParticleState>.stride * particles.count)
@@ -1298,6 +1606,59 @@ final class SimulationRuntime: @unchecked Sendable {
             typeMatrixSidecarBackBuffer = existing
         } else {
             typeMatrixSidecarBackBuffer = device.makeBuffer(bytes: zeroSidecar, length: sidecarLength)
+        }
+
+        if isPrimordialSoupLifecyclePhysicsActive {
+            let lifecycleSidecar = particles.map {
+                $0.active == 0
+                    ? PrimordialSoupLifecycleSidecarState.inactive
+                    : PrimordialSoupLifecycleSidecarState(
+                        energy: 1,
+                        age: 0,
+                        reproductionCooldownRemaining: 0,
+                        interactionEnergyDelta: 0
+                    )
+            }
+            let lifecycleSidecarLength = max(1, MemoryLayout<PrimordialSoupLifecycleSidecarState>.stride * particles.count)
+            if let existing = primordialSoupLifecycleSidecarFrontBuffer, existing.length >= lifecycleSidecarLength {
+                let pointer = existing.contents().bindMemory(to: PrimordialSoupLifecycleSidecarState.self, capacity: particles.count)
+                pointer.update(from: lifecycleSidecar, count: particles.count)
+                primordialSoupLifecycleSidecarFrontBuffer = existing
+            } else {
+                primordialSoupLifecycleSidecarFrontBuffer = device.makeBuffer(bytes: lifecycleSidecar, length: lifecycleSidecarLength)
+            }
+
+            if let existing = primordialSoupLifecycleSidecarBackBuffer, existing.length >= lifecycleSidecarLength {
+                let pointer = existing.contents().bindMemory(to: PrimordialSoupLifecycleSidecarState.self, capacity: particles.count)
+                pointer.update(from: lifecycleSidecar, count: particles.count)
+                primordialSoupLifecycleSidecarBackBuffer = existing
+            } else {
+                primordialSoupLifecycleSidecarBackBuffer = device.makeBuffer(bytes: lifecycleSidecar, length: lifecycleSidecarLength)
+            }
+
+            primordialSoupLifecycleSpawnRecordCapacity = min(max(64, particles.count / 8), 8192)
+            let spawnRecordLength = max(
+                1,
+                MemoryLayout<PrimordialSoupLifecycleSpawnRecord>.stride * primordialSoupLifecycleSpawnRecordCapacity
+            )
+            if primordialSoupLifecycleSpawnRecordsBuffer == nil
+                || (primordialSoupLifecycleSpawnRecordsBuffer?.length ?? 0) < spawnRecordLength {
+                primordialSoupLifecycleSpawnRecordsBuffer = device.makeBuffer(length: spawnRecordLength)
+            }
+
+            var zeroCounter: UInt32 = 0
+            let counterLength = MemoryLayout<UInt32>.stride
+            primordialSoupLifecycleFrameSpawnCounterBuffer = device.makeBuffer(bytes: &zeroCounter, length: counterLength)
+            primordialSoupLifecycleNextSpawnSlotCounterBuffer = device.makeBuffer(bytes: &zeroCounter, length: counterLength)
+            primordialSoupLifecycleFrameIndex = 0
+        } else {
+            primordialSoupLifecycleSidecarFrontBuffer = nil
+            primordialSoupLifecycleSidecarBackBuffer = nil
+            primordialSoupLifecycleSpawnRecordsBuffer = nil
+            primordialSoupLifecycleFrameSpawnCounterBuffer = nil
+            primordialSoupLifecycleNextSpawnSlotCounterBuffer = nil
+            primordialSoupLifecycleSpawnRecordCapacity = 0
+            primordialSoupLifecycleFrameIndex = 0
         }
 
         activeParticleCount = spawnData.activeCount
@@ -1720,10 +2081,18 @@ final class SimulationRuntime: @unchecked Sendable {
         let previousTypeMatrixSidecarFront = typeMatrixSidecarFrontBuffer
         typeMatrixSidecarFrontBuffer = typeMatrixSidecarBackBuffer
         typeMatrixSidecarBackBuffer = previousTypeMatrixSidecarFront
+
+        let previousPrimordialSoupLifecycleSidecarFront = primordialSoupLifecycleSidecarFrontBuffer
+        primordialSoupLifecycleSidecarFrontBuffer = primordialSoupLifecycleSidecarBackBuffer
+        primordialSoupLifecycleSidecarBackBuffer = previousPrimordialSoupLifecycleSidecarFront
     }
 
     private var isTypeMatrixPhysicsActive: Bool {
         activeModules.physics.name == TypeMatrixLocalPhysicsSettings.moduleName
+    }
+
+    private var isPrimordialSoupLifecyclePhysicsActive: Bool {
+        activeModules.physics.name == PrimordialSoupLifecycleSettings.moduleName
     }
 
     private var isToyPlaybackActive: Bool {
@@ -1772,5 +2141,47 @@ final class SimulationRuntime: @unchecked Sendable {
         // Never mutate the live GPU matrix buffer in place. Swapping in a fresh buffer
         // lets in-flight command buffers keep their old snapshot safely.
         typeMatrixInteractionBuffer = device.makeBuffer(bytes: matrix, length: length)
+    }
+
+    private func uploadPrimordialSoupLifecycleBehaviorSpace(_ behaviorSpace: PrimordialSoupLifecycleBehaviorSpace) {
+        let repaired = PrimordialSoupLifecycleSettings.repairedBehaviorSpace(behaviorSpace)
+        let typeProfiles = repaired.typeProfiles.map {
+            PrimordialSoupLifecycleTypeProfileGPU(
+                maxSpeed: Float($0.maxSpeed),
+                motility: Float($0.motility),
+                innerRadius: Float(PrimordialSoupLifecycleSettings.worldUnits(fromCentimeters: $0.innerRadiusCentimeters)),
+                middleRadius: Float(PrimordialSoupLifecycleSettings.worldUnits(fromCentimeters: $0.middleRadiusCentimeters)),
+                outerRadius: Float(PrimordialSoupLifecycleSettings.worldUnits(fromCentimeters: $0.outerRadiusCentimeters)),
+                energyDecayRate: Float($0.energyDecayRate),
+                reproductionEnergyThreshold: Float($0.reproductionEnergyThreshold),
+                reproductionEnergyCost: Float($0.reproductionEnergyCost),
+                childEnergyFraction: Float($0.childEnergyFraction),
+                reproductionCooldown: Float($0.reproductionCooldown),
+                threatSensitivity: Float($0.threatSensitivity)
+            )
+        }
+        let relationships = repaired.relationships.map {
+            PrimordialSoupLifecycleRelationshipGPU(
+                signedForce: Float($0.signedForce),
+                energyCost: Float($0.energyCost),
+                threatContribution: Float($0.threatContribution)
+            )
+        }
+        primordialSoupLifecycleTypeProfileBuffer = makeBuffer(from: typeProfiles)
+        primordialSoupLifecycleRelationshipBuffer = makeBuffer(from: relationships)
+    }
+
+    private func makeBuffer<T>(from values: [T]) -> MTLBuffer? {
+        let storedCount = max(1, values.count)
+        let length = max(1, MemoryLayout<T>.stride * storedCount)
+        if values.isEmpty {
+            return device.makeBuffer(length: length)
+        }
+        return values.withUnsafeBytes { rawBuffer in
+            guard let baseAddress = rawBuffer.baseAddress else {
+                return device.makeBuffer(length: length)
+            }
+            return device.makeBuffer(bytes: baseAddress, length: length)
+        }
     }
 }

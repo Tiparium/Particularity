@@ -8,12 +8,27 @@ enum DefaultPhysicsModuleRuntime {
     }
 
     static func rebuildParticles(from state: SimulationViewportState) -> SpawnData {
-        let count = max(1, state.particleCount)
-        let typeCount = max(1, state.particleTypes)
+        rebuildParticles(
+            particleCapacity: state.particleCount,
+            activeCount: state.particleCount,
+            typeCount: state.particleTypes,
+            randomDistribution: state.randomDistribution
+        )
+    }
+
+    static func rebuildParticles(
+        particleCapacity: Int,
+        activeCount requestedActiveCount: Int,
+        typeCount requestedTypeCount: Int,
+        randomDistribution: Bool
+    ) -> SpawnData {
+        let count = max(1, particleCapacity)
+        let activeCount = min(max(0, requestedActiveCount), count)
+        let typeCount = max(1, requestedTypeCount)
         var particles: [ParticleState] = []
         particles.reserveCapacity(count)
 
-        if state.randomDistribution {
+        if randomDistribution {
             var generator = SeededGenerator(seed: UInt64(count * 37 + typeCount * 101))
             for index in 0..<count {
                 let position = SIMD3<Float>(
@@ -26,7 +41,7 @@ enum DefaultPhysicsModuleRuntime {
                         position: position,
                         type: UInt32(index % typeCount),
                         particleID: UInt32(index),
-                        active: 1
+                        active: index < activeCount ? 1 : 0
                     )
                 )
             }
@@ -52,7 +67,7 @@ enum DefaultPhysicsModuleRuntime {
                         position: position,
                         type: UInt32(emitted % typeCount),
                         particleID: UInt32(emitted),
-                        active: 1
+                        active: emitted < activeCount ? 1 : 0
                     )
                 )
             }

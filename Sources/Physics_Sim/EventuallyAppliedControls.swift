@@ -773,6 +773,231 @@ struct EventuallyAppliedSlider: View {
     }
 }
 
+struct EventuallyAppliedRangeSlider: View {
+    let title: String
+    @Binding var lowerValue: Double
+    @Binding var upperValue: Double
+    let range: ClosedRange<Double>
+    let step: Double
+    let displayScale: Double
+    let suffix: String
+    let delay: TimeInterval
+
+    @State private var lowerText: String
+    @State private var upperText: String
+    @State private var draftLower: Double
+    @State private var draftUpper: Double
+    @State private var deferredCommit = DeferredActionHandler()
+
+    init(
+        title: String,
+        lowerValue: Binding<Double>,
+        upperValue: Binding<Double>,
+        range: ClosedRange<Double>,
+        step: Double,
+        displayScale: Double = 1,
+        suffix: String = "",
+        delay: TimeInterval = 1.0
+    ) {
+        self.title = title
+        _lowerValue = lowerValue
+        _upperValue = upperValue
+        self.range = range
+        self.step = step
+        self.displayScale = displayScale
+        self.suffix = suffix
+        self.delay = delay
+        _draftLower = State(initialValue: lowerValue.wrappedValue)
+        _draftUpper = State(initialValue: upperValue.wrappedValue)
+        _lowerText = State(initialValue: Self.editingText(for: lowerValue.wrappedValue, displayScale: displayScale))
+        _upperText = State(initialValue: Self.editingText(for: upperValue.wrappedValue, displayScale: displayScale))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                Spacer()
+                InlineEditableValueLabel(text: $lowerText, width: 54, commit: commitLowerTextEntry)
+                Text("to")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                InlineEditableValueLabel(text: $upperText, width: 54, commit: commitUpperTextEntry)
+                if !suffix.isEmpty {
+                    Text(suffix)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            AppRangeSliderControl(
+                lowerValue: Binding(
+                    get: { min(max(draftLower, range.lowerBound), draftUpper) },
+                    set: {
+                        draftLower = min(max(snapped($0), range.lowerBound), draftUpper)
+                        lowerText = Self.editingText(for: draftLower, displayScale: displayScale)
+                        scheduleCommit()
+                    }
+                ),
+                upperValue: Binding(
+                    get: { max(min(draftUpper, range.upperBound), draftLower) },
+                    set: {
+                        draftUpper = max(min(snapped($0), range.upperBound), draftLower)
+                        upperText = Self.editingText(for: draftUpper, displayScale: displayScale)
+                        scheduleCommit()
+                    }
+                ),
+                range: range,
+                onEditingEnded: flushCommit
+            )
+        }
+        .padding(.vertical, 2)
+        .onChange(of: lowerValue) { _, nextValue in
+            draftLower = min(max(nextValue, range.lowerBound), range.upperBound)
+            lowerText = Self.editingText(for: draftLower, displayScale: displayScale)
+        }
+        .onChange(of: upperValue) { _, nextValue in
+            draftUpper = min(max(nextValue, range.lowerBound), range.upperBound)
+            upperText = Self.editingText(for: draftUpper, displayScale: displayScale)
+        }
+    }
+
+    private func commitLowerTextEntry() {
+        guard let parsed = Self.parseNumericText(lowerText) else {
+            lowerText = Self.editingText(for: lowerValue, displayScale: displayScale)
+            return
+        }
+        draftLower = min(max(snapped(parsed / displayScale), range.lowerBound), draftUpper)
+        deferredCommit.cancel()
+        commitNow()
+    }
+
+    private func commitUpperTextEntry() {
+        guard let parsed = Self.parseNumericText(upperText) else {
+            upperText = Self.editingText(for: upperValue, displayScale: displayScale)
+            return
+        }
+        draftUpper = max(min(snapped(parsed / displayScale), range.upperBound), draftLower)
+        deferredCommit.cancel()
+        commitNow()
+    }
+
+    private func scheduleCommit() {
+        deferredCommit.schedule(after: delay) {
+            commitNow()
+        }
+    }
+
+    private func flushCommit() {
+        deferredCommit.flush {
+            commitNow()
+        }
+    }
+
+    private func commitNow() {
+        let orderedLower = min(draftLower, draftUpper)
+        let orderedUpper = max(draftLower, draftUpper)
+        lowerValue = orderedLower
+        upperValue = orderedUpper
+        lowerText = Self.editingText(for: orderedLower, displayScale: displayScale)
+        upperText = Self.editingText(for: orderedUpper, displayScale: displayScale)
+    }
+
+    private func snapped(_ value: Double) -> Double {
+        guard step > 0 else { return value }
+        let snappedValue = ((value - range.lowerBound) / step).rounded() * step + range.lowerBound
+        return min(max(snappedValue, range.lowerBound), range.upperBound)
+    }
+
+    private static func editingText(for value: Double, displayScale: Double) -> String {
+        String(format: "%.1f", value * displayScale)
+    }
+
+    private static func parseNumericText(_ text: String) -> Double? {
+        let filtered = text
+            .replacingOccurrences(of: ",", with: "")
+            .filter { $0.isNumber || $0 == "." || $0 == "-" }
+        guard !filtered.isEmpty else { return nil }
+        return Double(filtered)
+    }
+}
+
+private struct AppRangeSliderControl: View {
+    @Binding var lowerValue: Double
+    @Binding var upperValue: Double
+    let range: ClosedRange<Double>
+    let onEditingEnded: () -> Void
+
+    var body: some View {
+        GeometryReader { proxy in
+            let width = max(1, proxy.size.width)
+            let lowerX = position(for: lowerValue, width: width)
+            let upperX = position(for: upperValue, width: width)
+
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Color.secondary.opacity(0.22))
+                    .frame(height: 5)
+                    .position(x: width / 2, y: 12)
+
+                Capsule()
+                    .fill(Color.accentColor.opacity(0.85))
+                    .frame(width: max(0, upperX - lowerX), height: 5)
+                    .position(x: lowerX + max(0, upperX - lowerX) / 2, y: 12)
+
+                handle(x: lowerX, width: width, value: $lowerValue, upperBound: upperValue)
+                handle(x: upperX, width: width, value: $upperValue, lowerBound: lowerValue)
+            }
+        }
+        .frame(height: 24)
+    }
+
+    private func handle(
+        x: CGFloat,
+        width: CGFloat,
+        value: Binding<Double>,
+        lowerBound: Double? = nil,
+        upperBound: Double? = nil
+    ) -> some View {
+        Circle()
+            .fill(Color.primary.opacity(0.92))
+            .frame(width: 16, height: 16)
+            .shadow(color: .black.opacity(0.25), radius: 2, x: 0, y: 1)
+            .position(x: x, y: 12)
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { gesture in
+                        var next = valueFor(position: gesture.location.x, width: width)
+                        if let lowerBound {
+                            next = max(next, lowerBound)
+                        }
+                        if let upperBound {
+                            next = min(next, upperBound)
+                        }
+                        value.wrappedValue = next
+                    }
+                    .onEnded { _ in
+                        onEditingEnded()
+                    }
+            )
+    }
+
+    private func normalized(_ value: Double) -> Double {
+        guard range.upperBound > range.lowerBound else { return 0 }
+        return min(max((value - range.lowerBound) / (range.upperBound - range.lowerBound), 0), 1)
+    }
+
+    private func position(for value: Double, width: CGFloat) -> CGFloat {
+        CGFloat(normalized(value)) * width
+    }
+
+    private func valueFor(position: CGFloat, width: CGFloat) -> Double {
+        let t = min(max(Double(position / max(width, 1)), 0), 1)
+        return range.lowerBound + (range.upperBound - range.lowerBound) * t
+    }
+}
+
 struct EventuallyAppliedToggle: View {
     let title: String
     let field: RuntimeValidationField?

@@ -29,7 +29,8 @@ final class SimulationRuntimeConfigCoordinator: ObservableObject {
         let initialConfiguration = SimulationConfigurationDerivation.resolvedRuntimeConfiguration(
             editorState: editorSettingsStore.editorState,
             transportState: .stopped,
-            availableBundles: moduleCatalogStore.availableBundles
+            availableBundles: moduleCatalogStore.availableBundles,
+            physicsModuleSettingsSnapshot: physicsModuleSettingsStore.snapshot
         )
         self.resolvedConfiguration = initialConfiguration
         self.transportState = .stopped
@@ -63,6 +64,13 @@ final class SimulationRuntimeConfigCoordinator: ObservableObject {
                 self.session.updateTypeMatrixLocalSettings(
                     self.physicsModuleSettingsStore.typeMatrixLocalSettings(from: snapshot)
                 )
+                self.session.updatePrimordialSoupLifecycleSettings(
+                    self.physicsModuleSettingsStore.primordialSoupLifecycleSettings(from: snapshot)
+                )
+                self.recomputeAndApply(
+                    editorState: self.editorSettingsStore.editorState,
+                    availableBundles: self.moduleCatalogStore.availableBundles
+                )
             }
             .store(in: &cancellables)
 
@@ -72,6 +80,7 @@ final class SimulationRuntimeConfigCoordinator: ObservableObject {
             availableBundles: moduleCatalogStore.availableBundles
         )
         session.updateTypeMatrixLocalSettings(physicsModuleSettingsStore.typeMatrixLocalSettings())
+        session.updatePrimordialSoupLifecycleSettings(physicsModuleSettingsStore.primordialSoupLifecycleSettings())
     }
 
     func refreshModules() {
@@ -139,7 +148,8 @@ final class SimulationRuntimeConfigCoordinator: ObservableObject {
         let nextConfiguration = SimulationConfigurationDerivation.resolvedRuntimeConfiguration(
             editorState: editorState,
             transportState: transportState,
-            availableBundles: availableBundles
+            availableBundles: availableBundles,
+            physicsModuleSettingsSnapshot: physicsModuleSettingsStore.snapshot
         )
 
         resolvedConfiguration = nextConfiguration
