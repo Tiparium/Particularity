@@ -181,20 +181,39 @@ struct PrimordialSoupLifecycleSettingsPanel: View {
                 .foregroundStyle(.secondary)
 
             ExpandableSettingsSection(title: "Advanced Generation Ranges", isExpanded: $advancedGenerationExpanded, accessory: { EmptyView() }) {
+                Text("v0.1 Interaction Foundation")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
                 rangeEditor("Signed Force", \.signedForceRange, range: -8...8)
-                rangeEditor("Energy Cost", \.energyCostRange, range: -1...1)
-                rangeEditor("Threat Contribution", \.threatContributionRange, range: 0...4)
-                rangeEditor("Max Speed", \.maxSpeedRange, range: 0.1...12)
-                rangeEditor("Motility", \.motilityRange, range: 0...0.25, displayScale: 1000, suffix: "x1000")
                 rangeEditor("Inner Radius", \.innerRadiusRangeCentimeters, range: 0.5...12, suffix: "cm")
                 rangeEditor("Middle Radius", \.middleRadiusRangeCentimeters, range: 0...12, suffix: "cm")
                 rangeEditor("Outer Radius", \.outerRadiusRangeCentimeters, range: 0...16, suffix: "cm")
-                rangeEditor("Energy Decay", \.energyDecayRange, range: 0...0.08, displayScale: 1000, suffix: "x1000")
-                rangeEditor("Reproduction Threshold", \.reproductionThresholdRange, range: 0...4)
-                rangeEditor("Reproduction Cost", \.reproductionCostRange, range: 0...4)
-                rangeEditor("Child Energy Fraction", \.childEnergyFractionRange, range: 0...1)
-                rangeEditor("Reproduction Cooldown", \.reproductionCooldownRange, range: 0...2)
-                rangeEditor("Threat Sensitivity", \.threatSensitivityRange, range: 0...4)
+
+                Divider()
+
+                Text("v0.2 Lifecycle Additions")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                HStack {
+                    Button("All On") {
+                        setFeatureGates(.allEnabled)
+                    }
+                    .buttonStyle(AppFramedButtonStyle())
+                    Button("All Off") {
+                        setFeatureGates(.v01Baseline)
+                    }
+                    .buttonStyle(AppFramedButtonStyle())
+                }
+                rangeEditor("Energy Cost", \.energyCostRange, enabled: \.energyCostEnabled, range: -1...1)
+                rangeEditor("Threat Contribution", \.threatContributionRange, enabled: \.threatContributionEnabled, range: 0...4)
+                rangeEditor("Max Speed", \.maxSpeedRange, enabled: \.maxSpeedEnabled, range: 0.1...12)
+                rangeEditor("Motility", \.motilityRange, enabled: \.motilityEnabled, range: 0...0.25, displayScale: 1000, suffix: "x1000")
+                rangeEditor("Energy Decay", \.energyDecayRange, enabled: \.energyDecayEnabled, range: 0...0.08, displayScale: 1000, suffix: "x1000")
+                rangeEditor("Reproduction Threshold", \.reproductionThresholdRange, enabled: \.reproductionThresholdEnabled, range: 0...4)
+                rangeEditor("Reproduction Cost", \.reproductionCostRange, enabled: \.reproductionCostEnabled, range: 0...4)
+                rangeEditor("Child Energy Fraction", \.childEnergyFractionRange, enabled: \.childEnergyFractionEnabled, range: 0...1)
+                rangeEditor("Reproduction Cooldown", \.reproductionCooldownRange, enabled: \.reproductionCooldownEnabled, range: 0...2)
+                rangeEditor("Threat Sensitivity", \.threatSensitivityRange, enabled: \.threatSensitivityEnabled, range: 0...4)
             }
         }
     }
@@ -273,6 +292,37 @@ struct PrimordialSoupLifecycleSettingsPanel: View {
         )
     }
 
+    private func rangeEditor(
+        _ title: String,
+        _ keyPath: WritableKeyPath<PrimordialSoupLifecycleGenerationSettings, PrimordialSoupLifecycleRange>,
+        enabled enabledKeyPath: WritableKeyPath<PrimordialSoupLifecycleFeatureGates, Bool>,
+        range: ClosedRange<Double>,
+        displayScale: Double = 1,
+        suffix: String = ""
+    ) -> some View {
+        let enabled = settings.featureGates[keyPath: enabledKeyPath]
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                AppCheckboxToggle(isOn: featureGateBinding(enabledKeyPath))
+                Text("Use \(title)")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(enabled ? .primary : .secondary)
+                Spacer()
+            }
+            EventuallyAppliedRangeSlider(
+                title: title,
+                lowerValue: generationRangeBinding(keyPath, \.minimum),
+                upperValue: generationRangeBinding(keyPath, \.maximum),
+                range: range,
+                step: 0.1 / max(displayScale, 1),
+                displayScale: displayScale,
+                suffix: suffix
+            )
+            .disabled(!enabled)
+            .opacity(enabled ? 1 : 0.45)
+        }
+    }
+
     private func behaviorControlRow(
         title: String,
         enabled enabledKeyPath: WritableKeyPath<PrimordialSoupLifecycleSettings, Bool>,
@@ -310,6 +360,25 @@ struct PrimordialSoupLifecycleSettingsPanel: View {
             set: {
                 var next = settings
                 next[keyPath: keyPath] = $0
+                physicsModuleSettingsStore.setPrimordialSoupLifecycleSettings(next)
+            }
+        )
+    }
+
+    private func setFeatureGates(_ featureGates: PrimordialSoupLifecycleFeatureGates) {
+        var next = settings
+        next.featureGates = featureGates
+        physicsModuleSettingsStore.setPrimordialSoupLifecycleSettings(next)
+    }
+
+    private func featureGateBinding(
+        _ keyPath: WritableKeyPath<PrimordialSoupLifecycleFeatureGates, Bool>
+    ) -> Binding<Bool> {
+        Binding(
+            get: { settings.featureGates[keyPath: keyPath] },
+            set: {
+                var next = settings
+                next.featureGates[keyPath: keyPath] = $0
                 physicsModuleSettingsStore.setPrimordialSoupLifecycleSettings(next)
             }
         )

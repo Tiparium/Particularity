@@ -187,6 +187,39 @@ struct ModuleCompatibilityTests {
         #expect(resolved.simulationState.particleTypes == 9)
     }
 
+    @Test("persists Primordial Soup v0.2 feature gates")
+    func persistsPrimordialSoupV02FeatureGates() throws {
+        var settings = PrimordialSoupLifecycleSettings()
+        settings.featureGates.energyCostEnabled = false
+        settings.featureGates.innerRadiusEnabled = false
+        settings.featureGates.reproductionCooldownEnabled = false
+
+        let data = try JSONEncoder().encode(settings)
+        let decoded = try JSONDecoder().decode(PrimordialSoupLifecycleSettings.self, from: data)
+
+        #expect(decoded.featureGates.energyCostEnabled == false)
+        #expect(decoded.featureGates.innerRadiusEnabled == true)
+        #expect(decoded.featureGates.reproductionCooldownEnabled == false)
+        #expect(decoded.featureGates.signedForceEnabled == true)
+
+        let legacyData = Data(#"{"initialPopulationPercent":0.42}"#.utf8)
+        let legacyDecoded = try JSONDecoder().decode(PrimordialSoupLifecycleSettings.self, from: legacyData)
+        #expect(legacyDecoded.initialPopulationPercent == 0.42)
+        #expect(legacyDecoded.featureGates.energyCostEnabled == true)
+
+        #expect(PrimordialSoupLifecycleFeatureGates.v01Baseline.signedForceEnabled == true)
+        #expect(PrimordialSoupLifecycleFeatureGates.v01Baseline.innerRadiusEnabled == true)
+        #expect(PrimordialSoupLifecycleFeatureGates.v01Baseline.energyCostEnabled == false)
+        #expect(PrimordialSoupLifecycleFeatureGates.v01Baseline.threatSensitivityEnabled == false)
+
+        var frozenLegacyGates = PrimordialSoupLifecycleFeatureGates.v01Baseline
+        frozenLegacyGates.signedForceEnabled = false
+        frozenLegacyGates.innerRadiusEnabled = false
+        let repairedGates = frozenLegacyGates.sanitized()
+        #expect(repairedGates.signedForceEnabled == true)
+        #expect(repairedGates.innerRadiusEnabled == true)
+    }
+
     @Test("matches toy playback trinity from its module trio")
     func matchesToyPlaybackTrinity() {
         let modules = ActiveModuleSet(

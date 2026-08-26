@@ -46,6 +46,14 @@ struct PrimordialSoupLifecycleAccumulateParams {
     float outerRadiusMultiplier;
     float attractionMultiplier;
     float repulsionMultiplier;
+    uint signedForceEnabled;
+    uint energyCostEnabled;
+    uint threatContributionEnabled;
+    uint motilityEnabled;
+    uint innerRadiusEnabled;
+    uint middleRadiusEnabled;
+    uint outerRadiusEnabled;
+    uint _padding1;
 };
 
 struct PrimordialSoupLifecycleApplyParams {
@@ -61,6 +69,14 @@ struct PrimordialSoupLifecycleApplyParams {
     float dampingStrength;
     float momentumStrength;
     float speedLimit;
+    uint maxSpeedEnabled;
+    uint energyDecayEnabled;
+    uint reproductionThresholdEnabled;
+    uint reproductionCostEnabled;
+    uint childEnergyFractionEnabled;
+    uint reproductionCooldownEnabled;
+    uint threatSensitivityEnabled;
+    uint _padding0;
 };
 
 struct PrimordialSoupLifecycleSpawnResolveParams {
@@ -176,9 +192,15 @@ kernel void primordial_soup_lifecycle_accumulate_impulse(
     PrimordialSoupLifecycleTypeProfile sourceProfile = typeProfiles[sourceType];
     PrimordialSoupLifecycleSidecarState nextSidecar = sourceSidecar[id];
     nextSidecar.interactionEnergyDelta = 0.0;
-    float innerLimit = sourceProfile.innerRadius * params.innerRadiusMultiplier;
-    float middleWidth = sourceProfile.middleRadius * params.middleRadiusMultiplier;
-    float outerWidth = sourceProfile.outerRadius * params.outerRadiusMultiplier;
+    float innerLimit = params.innerRadiusEnabled != 0
+        ? sourceProfile.innerRadius * params.innerRadiusMultiplier
+        : 0.0;
+    float middleWidth = params.middleRadiusEnabled != 0
+        ? sourceProfile.middleRadius * params.middleRadiusMultiplier
+        : 0.0;
+    float outerWidth = params.outerRadiusEnabled != 0
+        ? sourceProfile.outerRadius * params.outerRadiusMultiplier
+        : 0.0;
     float middleLimit = innerLimit + middleWidth;
     float outerLimit = middleLimit + outerWidth;
     if (outerLimit <= 0.000001) {
@@ -243,7 +265,7 @@ kernel void primordial_soup_lifecycle_accumulate_impulse(
             } else {
                 uint targetType = min(particle_type(target), params.particleTypeCount - 1);
                 PrimordialSoupLifecycleRelationship relationship = relationships[sourceType * params.particleTypeCount + targetType];
-                float signedForce = relationship.signedForce;
+                float signedForce = params.signedForceEnabled != 0 ? relationship.signedForce : 0.0;
                 if (signedForce > 0.0) {
                     signedForce *= params.attractionMultiplier;
                 } else if (signedForce < 0.0) {
@@ -261,11 +283,16 @@ kernel void primordial_soup_lifecycle_accumulate_impulse(
                     contribution = relationshipVector;
                 }
                 float energyT = 1.0 - normalized_falloff_primordial_lifecycle(distance - innerLimit, interactionSpan);
-                nextSidecar.interactionEnergyDelta -= relationship.energyCost * max(0.0, energyT);
+                if (params.energyCostEnabled != 0) {
+                    nextSidecar.interactionEnergyDelta -= relationship.energyCost * max(0.0, energyT);
+                }
                 hadNonZeroInteraction = hadNonZeroInteraction || length_squared(contribution) > 0.000001;
             }
 
-            accumulatedImpulse += contribution * max(0.0, sourceProfile.motility + 1.0);
+            float motilityMultiplier = params.motilityEnabled != 0
+                ? max(0.0, sourceProfile.motility + 1.0)
+                : 1.0;
+            accumulatedImpulse += contribution * motilityMultiplier;
         }
     }
 
@@ -308,7 +335,9 @@ kernel void primordial_soup_lifecycle_apply_impulse(
         nextSidecar.reproductionCooldownRemaining - params.deltaTime
     );
     nextSidecar.energy += nextSidecar.interactionEnergyDelta;
-    nextSidecar.energy -= profile.energyDecayRate * params.deltaTime * 60.0;
+    if (params.energyDecayEnabled != 0) {
+        nextSidecar.energy -= profile.energyDecayRate * params.deltaTime * 60.0;
+    }
     nextSidecar.interactionEnergyDelta = 0.0;
 
     if (nextSidecar.energy <= 0.0) {
@@ -333,7 +362,9 @@ kernel void primordial_soup_lifecycle_apply_impulse(
     }
     if (params.speedLimitEnabled != 0) {
         float speed = length(nextVelocity);
-        float typeSpeedLimit = max(0.000001, min(params.speedLimit, profile.maxSpeed));
+        float typeSpeedLimit = params.maxSpeedEnabled != 0
+            ? max(0.000001, min(params.speedLimit, profile.maxSpeed))
+            : max(0.000001, params.speedLimit);
         if (speed > typeSpeedLimit) {
             nextVelocity = (nextVelocity / speed) * typeSpeedLimit;
         }
@@ -351,18 +382,20 @@ kernel void primordial_soup_lifecycle_apply_impulse(
     destinationParticles[id].impulse = float4(0.0);
     sidecar[id] = nextSidecar;
 
-    float threshold = max(0.000001, profile.reproductionEnergyThreshold);
+    float threshold = params.reproductionThresholdEnabled != 0
+        ? max(0.000001, profile.reproductionEnergyThreshold)
+        : 1.0;
     float surplus = max(0.0, nextSidecar.energy - threshold);
-    if (surplus <= 0.0 || profile.reproductionEnergyCost <= 0.0) {
+    if (surplus <= 0.0) {
         return;
     }
 
-    float cooldownWindow = max(0.000001, profile.reproductionCooldown);
-    float cooldownReadiness = 1.0 - clamp(
-        nextSidecar.reproductionCooldownRemaining / cooldownWindow,
-        0.0,
-        1.0
-    );
+    float cooldownWindow = params.reproductionCooldownEnabled != 0
+        ? max(0.000001, profile.reproductionCooldown)
+        : 0.0;
+    float cooldownReadiness = params.reproductionCooldownEnabled != 0
+        ? 1.0 - clamp(nextSidecar.reproductionCooldownRemaining / max(0.000001, cooldownWindow), 0.0, 1.0)
+        : 1.0;
     float surplusReadiness = clamp(surplus / threshold, 0.0, 1.0);
     float reproductionProbability = 0.045 * params.deltaTime * 60.0 * cooldownReadiness * surplusReadiness;
     uint rollSeed = particle_id(particle)
@@ -390,8 +423,17 @@ kernel void primordial_soup_lifecycle_apply_impulse(
     }
 
     PrimordialSoupLifecycleSidecarState parentSidecar = sidecar[id];
-    float childEnergy = max(0.02, profile.reproductionEnergyCost * clamp(profile.childEnergyFraction, 0.0, 1.0));
-    parentSidecar.energy = max(0.0, parentSidecar.energy - profile.reproductionEnergyCost);
+    float reproductionCost = params.reproductionCostEnabled != 0
+        ? max(0.0, profile.reproductionEnergyCost)
+        : 0.0;
+    float childFraction = params.childEnergyFractionEnabled != 0
+        ? clamp(profile.childEnergyFraction, 0.0, 1.0)
+        : 0.5;
+    float childEnergyBase = params.reproductionCostEnabled != 0
+        ? max(reproductionCost, 0.02)
+        : threshold * 0.5;
+    float childEnergy = max(0.02, childEnergyBase * childFraction);
+    parentSidecar.energy = max(0.0, parentSidecar.energy - reproductionCost);
     parentSidecar.reproductionCooldownRemaining = cooldownWindow;
     sidecar[id] = parentSidecar;
 

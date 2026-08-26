@@ -565,7 +565,107 @@ private struct InlineEditableValueLabel: View {
     }
 }
 
-private struct AppSliderControl: NSViewRepresentable {
+private enum AppSliderVisuals {
+    static let trackHeight: CGFloat = 5
+    static let handleSize: CGFloat = 16
+    static let verticalCenter: CGFloat = 12
+    static let controlHeight: CGFloat = 24
+}
+
+private struct AppSliderHandle: View {
+    var body: some View {
+        Circle()
+            .fill(Color.primary.opacity(0.92))
+            .frame(width: AppSliderVisuals.handleSize, height: AppSliderVisuals.handleSize)
+            .shadow(color: .black.opacity(0.25), radius: 2, x: 0, y: 1)
+    }
+}
+
+private struct AppSliderHandleDescriptor: Identifiable {
+    let id: Int
+    let value: Double
+    let lowerBound: Double?
+    let upperBound: Double?
+    let onChange: (Double) -> Void
+}
+
+private struct AppSliderTrackControl: View {
+    let range: ClosedRange<Double>
+    let activeLowerValue: Double
+    let activeUpperValue: Double
+    let tickMarkCount: Int?
+    let handles: [AppSliderHandleDescriptor]
+    let onEditingEnded: () -> Void
+
+    var body: some View {
+        GeometryReader { proxy in
+            let width = max(1, proxy.size.width)
+            let activeLowerX = position(for: activeLowerValue, width: width)
+            let activeUpperX = position(for: activeUpperValue, width: width)
+
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Color.secondary.opacity(0.22))
+                    .frame(height: AppSliderVisuals.trackHeight)
+                    .position(x: width / 2, y: AppSliderVisuals.verticalCenter)
+
+                Capsule()
+                    .fill(Color.accentColor.opacity(0.85))
+                    .frame(width: max(0, activeUpperX - activeLowerX), height: AppSliderVisuals.trackHeight)
+                    .position(x: activeLowerX + max(0, activeUpperX - activeLowerX) / 2, y: AppSliderVisuals.verticalCenter)
+
+                if let tickMarkCount {
+                    ForEach(0..<tickMarkCount, id: \.self) { index in
+                        let denominator = max(1, tickMarkCount - 1)
+                        let x = CGFloat(index) / CGFloat(denominator) * width
+                        Capsule()
+                            .fill(Color.secondary.opacity(0.35))
+                            .frame(width: 1, height: 5)
+                            .position(x: x, y: AppSliderVisuals.verticalCenter + 8)
+                    }
+                }
+
+                ForEach(handles) { handle in
+                    AppSliderHandle()
+                        .position(x: position(for: handle.value, width: width), y: AppSliderVisuals.verticalCenter)
+                        .gesture(
+                            DragGesture(minimumDistance: 0)
+                                .onChanged { gesture in
+                                    var next = valueFor(position: gesture.location.x, width: width)
+                                    if let lowerBound = handle.lowerBound {
+                                        next = max(next, lowerBound)
+                                    }
+                                    if let upperBound = handle.upperBound {
+                                        next = min(next, upperBound)
+                                    }
+                                    handle.onChange(next)
+                                }
+                                .onEnded { _ in
+                                    onEditingEnded()
+                                }
+                        )
+                }
+            }
+        }
+        .frame(height: AppSliderVisuals.controlHeight)
+    }
+
+    private func normalized(_ value: Double) -> Double {
+        guard range.upperBound > range.lowerBound else { return 0 }
+        return min(max((value - range.lowerBound) / (range.upperBound - range.lowerBound), 0), 1)
+    }
+
+    private func position(for value: Double, width: CGFloat) -> CGFloat {
+        CGFloat(normalized(value)) * width
+    }
+
+    private func valueFor(position: CGFloat, width: CGFloat) -> Double {
+        let t = min(max(Double(position / max(width, 1)), 0), 1)
+        return range.lowerBound + (range.upperBound - range.lowerBound) * t
+    }
+}
+
+private struct AppSliderControl: View {
     @Binding var value: Double
     let range: ClosedRange<Double>
     let step: Double
@@ -573,38 +673,25 @@ private struct AppSliderControl: NSViewRepresentable {
     let helpText: String?
     let onEditingEnded: () -> Void
 
-    func makeCoordinator() -> Coordinator {
-        Coordinator(self)
-    }
-
-    func makeNSView(context: Context) -> NSSlider {
-        let slider = NSSlider(value: value, minValue: range.lowerBound, maxValue: range.upperBound, target: context.coordinator, action: #selector(Coordinator.valueChanged(_:)))
-        slider.controlSize = .small
-        slider.isContinuous = true
-        slider.sendAction(on: [.leftMouseDragged, .leftMouseUp])
-        configure(slider)
-        return slider
-    }
-
-    func updateNSView(_ slider: NSSlider, context: Context) {
-        context.coordinator.parent = self
-        slider.minValue = range.lowerBound
-        slider.maxValue = range.upperBound
-        slider.doubleValue = clampedAndSnapped(value)
-        slider.toolTip = helpText
-        configure(slider)
-    }
-
-    private func configure(_ slider: NSSlider) {
-        if let tickMarkCount {
-            slider.numberOfTickMarks = tickMarkCount
-            slider.tickMarkPosition = .below
-            slider.allowsTickMarkValuesOnly = true
-        } else {
-            slider.numberOfTickMarks = 0
-            slider.allowsTickMarkValuesOnly = false
-        }
-        slider.toolTip = helpText
+    var body: some View {
+        let snappedValue = clampedAndSnapped(value)
+        AppSliderTrackControl(
+            range: range,
+            activeLowerValue: range.lowerBound,
+            activeUpperValue: snappedValue,
+            tickMarkCount: tickMarkCount,
+            handles: [
+                AppSliderHandleDescriptor(
+                    id: 0,
+                    value: snappedValue,
+                    lowerBound: range.lowerBound,
+                    upperBound: range.upperBound,
+                    onChange: { value = clampedAndSnapped($0) }
+                ),
+            ],
+            onEditingEnded: onEditingEnded
+        )
+        .help(helpText ?? "")
     }
 
     private var tickMarkCount: Int? {
@@ -618,26 +705,39 @@ private struct AppSliderControl: NSViewRepresentable {
         let snapped = ((clamped - range.lowerBound) / step).rounded() * step + range.lowerBound
         return min(max(snapped, range.lowerBound), range.upperBound)
     }
+}
 
-    @MainActor
-    final class Coordinator: NSObject {
-        var parent: AppSliderControl
+private struct SliderValueHeader<ValueContent: View>: View {
+    let title: String
+    let titleFont: Font
+    let titleColor: Color
+    @ViewBuilder var valueContent: () -> ValueContent
 
-        init(_ parent: AppSliderControl) {
-            self.parent = parent
-        }
-
-        @objc func valueChanged(_ sender: NSSlider) {
-            let nextValue = parent.clampedAndSnapped(sender.doubleValue)
-            if abs(sender.doubleValue - nextValue) > 0.000_001 {
-                sender.doubleValue = nextValue
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                titleText
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                valueContent()
             }
-            parent.value = nextValue
 
-            if let eventType = NSApp.currentEvent?.type, eventType == .leftMouseUp {
-                parent.onEditingEnded()
+            VStack(alignment: .leading, spacing: 4) {
+                titleText
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack {
+                    Spacer(minLength: 0)
+                    valueContent()
+                }
             }
         }
+    }
+
+    private var titleText: some View {
+        Text(title)
+            .font(titleFont)
+            .foregroundStyle(titleColor)
     }
 }
 
@@ -685,11 +785,11 @@ struct EventuallyAppliedSlider: View {
     var body: some View {
         let issue = validationIssue
         VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(title)
-                    .font(.caption)
-                    .foregroundStyle(issue == nil ? Color.primary : Color.red.opacity(0.95))
-                Spacer()
+            SliderValueHeader(
+                title: title,
+                titleFont: .caption,
+                titleColor: issue == nil ? Color.primary : Color.red.opacity(0.95)
+            ) {
                 InlineEditableValueLabel(
                     text: $draftText,
                     width: 72,
@@ -815,10 +915,12 @@ struct EventuallyAppliedRangeSlider: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Text(title)
-                    .font(.caption.weight(.semibold))
-                Spacer()
+            SliderValueHeader(
+                title: title,
+                titleFont: .caption.weight(.semibold),
+                titleColor: .primary
+            ) {
+                HStack(spacing: 6) {
                 InlineEditableValueLabel(text: $lowerText, width: 54, commit: commitLowerTextEntry)
                 Text("to")
                     .font(.caption2)
@@ -828,6 +930,7 @@ struct EventuallyAppliedRangeSlider: View {
                     Text(suffix)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
+                }
                 }
             }
 
@@ -930,71 +1033,29 @@ private struct AppRangeSliderControl: View {
     let onEditingEnded: () -> Void
 
     var body: some View {
-        GeometryReader { proxy in
-            let width = max(1, proxy.size.width)
-            let lowerX = position(for: lowerValue, width: width)
-            let upperX = position(for: upperValue, width: width)
-
-            ZStack(alignment: .leading) {
-                Capsule()
-                    .fill(Color.secondary.opacity(0.22))
-                    .frame(height: 5)
-                    .position(x: width / 2, y: 12)
-
-                Capsule()
-                    .fill(Color.accentColor.opacity(0.85))
-                    .frame(width: max(0, upperX - lowerX), height: 5)
-                    .position(x: lowerX + max(0, upperX - lowerX) / 2, y: 12)
-
-                handle(x: lowerX, width: width, value: $lowerValue, upperBound: upperValue)
-                handle(x: upperX, width: width, value: $upperValue, lowerBound: lowerValue)
-            }
-        }
-        .frame(height: 24)
-    }
-
-    private func handle(
-        x: CGFloat,
-        width: CGFloat,
-        value: Binding<Double>,
-        lowerBound: Double? = nil,
-        upperBound: Double? = nil
-    ) -> some View {
-        Circle()
-            .fill(Color.primary.opacity(0.92))
-            .frame(width: 16, height: 16)
-            .shadow(color: .black.opacity(0.25), radius: 2, x: 0, y: 1)
-            .position(x: x, y: 12)
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { gesture in
-                        var next = valueFor(position: gesture.location.x, width: width)
-                        if let lowerBound {
-                            next = max(next, lowerBound)
-                        }
-                        if let upperBound {
-                            next = min(next, upperBound)
-                        }
-                        value.wrappedValue = next
-                    }
-                    .onEnded { _ in
-                        onEditingEnded()
-                    }
-            )
-    }
-
-    private func normalized(_ value: Double) -> Double {
-        guard range.upperBound > range.lowerBound else { return 0 }
-        return min(max((value - range.lowerBound) / (range.upperBound - range.lowerBound), 0), 1)
-    }
-
-    private func position(for value: Double, width: CGFloat) -> CGFloat {
-        CGFloat(normalized(value)) * width
-    }
-
-    private func valueFor(position: CGFloat, width: CGFloat) -> Double {
-        let t = min(max(Double(position / max(width, 1)), 0), 1)
-        return range.lowerBound + (range.upperBound - range.lowerBound) * t
+        AppSliderTrackControl(
+            range: range,
+            activeLowerValue: lowerValue,
+            activeUpperValue: upperValue,
+            tickMarkCount: nil,
+            handles: [
+                AppSliderHandleDescriptor(
+                    id: 0,
+                    value: lowerValue,
+                    lowerBound: range.lowerBound,
+                    upperBound: upperValue,
+                    onChange: { lowerValue = $0 }
+                ),
+                AppSliderHandleDescriptor(
+                    id: 1,
+                    value: upperValue,
+                    lowerBound: lowerValue,
+                    upperBound: range.upperBound,
+                    onChange: { upperValue = $0 }
+                ),
+            ],
+            onEditingEnded: onEditingEnded
+        )
     }
 }
 

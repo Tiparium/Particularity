@@ -97,6 +97,51 @@ struct PrimordialSoupLifecycleGenerationSettings: Codable, Equatable, Sendable {
     }
 }
 
+struct PrimordialSoupLifecycleFeatureGates: Codable, Equatable, Sendable {
+    var signedForceEnabled = true
+    var energyCostEnabled = true
+    var threatContributionEnabled = true
+    var maxSpeedEnabled = true
+    var motilityEnabled = true
+    var innerRadiusEnabled = true
+    var middleRadiusEnabled = true
+    var outerRadiusEnabled = true
+    var energyDecayEnabled = true
+    var reproductionThresholdEnabled = true
+    var reproductionCostEnabled = true
+    var childEnergyFractionEnabled = true
+    var reproductionCooldownEnabled = true
+    var threatSensitivityEnabled = true
+
+    static let allEnabled = PrimordialSoupLifecycleFeatureGates()
+
+    static let v01Baseline = PrimordialSoupLifecycleFeatureGates(
+        signedForceEnabled: true,
+        energyCostEnabled: false,
+        threatContributionEnabled: false,
+        maxSpeedEnabled: false,
+        motilityEnabled: false,
+        innerRadiusEnabled: true,
+        middleRadiusEnabled: true,
+        outerRadiusEnabled: true,
+        energyDecayEnabled: false,
+        reproductionThresholdEnabled: false,
+        reproductionCostEnabled: false,
+        childEnergyFractionEnabled: false,
+        reproductionCooldownEnabled: false,
+        threatSensitivityEnabled: false
+    )
+
+    func sanitized() -> PrimordialSoupLifecycleFeatureGates {
+        var next = self
+        next.signedForceEnabled = true
+        next.innerRadiusEnabled = true
+        next.middleRadiusEnabled = true
+        next.outerRadiusEnabled = true
+        return next
+    }
+}
+
 struct PrimordialSoupLifecycleSettings: Codable, Equatable, Sendable {
     static let moduleName = "PrimordialSoupLifecycleProcessor"
     static let maxParticleTypes = 32
@@ -127,12 +172,102 @@ struct PrimordialSoupLifecycleSettings: Codable, Equatable, Sendable {
     var teleportationAccumulation: Double = 0.08
     var teleportationRecoveryRate: Double = 0.18
     var teleportationMinimumDistanceCentimeters: Double = 24.0
+    var featureGates = PrimordialSoupLifecycleFeatureGates()
     var pendingGenerationSettings = PrimordialSoupLifecycleGenerationSettings.defaults
     var activeBehaviorSpace: PrimordialSoupLifecycleBehaviorSpace = PrimordialSoupLifecycleBehaviorSpaceGenerator.generate(
         settings: PrimordialSoupLifecycleGenerationSettings.defaults
     )
     var savedBehaviorSpaces: [PrimordialSoupLifecycleBehaviorSpace] = []
     var regenerationNonce: UInt64 = 0
+
+    init() {}
+
+    private enum CodingKeys: String, CodingKey {
+        case randomDistribution
+        case initialPopulationPercent
+        case innerRadiusMultiplier
+        case middleRadiusMultiplier
+        case outerRadiusMultiplier
+        case attractionMultiplier
+        case repulsionMultiplier
+        case dampingEnabled
+        case dampingStrength
+        case momentumEnabled
+        case momentumStrength
+        case speedLimitEnabled
+        case speedLimit
+        case teleportationEnabled
+        case teleportationGeneralInteractionBudget
+        case teleportationSelfInteractionBudgetLinked
+        case teleportationSelfInteractionBudget
+        case teleportationAccumulation
+        case teleportationRecoveryRate
+        case teleportationMinimumDistanceCentimeters
+        case featureGates
+        case pendingGenerationSettings
+        case activeBehaviorSpace
+        case savedBehaviorSpaces
+        case regenerationNonce
+    }
+
+    init(from decoder: Decoder) throws {
+        let defaults = Self()
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        randomDistribution = try container.decodeIfPresent(Bool.self, forKey: .randomDistribution) ?? defaults.randomDistribution
+        initialPopulationPercent = try container.decodeIfPresent(Double.self, forKey: .initialPopulationPercent) ?? defaults.initialPopulationPercent
+        innerRadiusMultiplier = try container.decodeIfPresent(Double.self, forKey: .innerRadiusMultiplier) ?? defaults.innerRadiusMultiplier
+        middleRadiusMultiplier = try container.decodeIfPresent(Double.self, forKey: .middleRadiusMultiplier) ?? defaults.middleRadiusMultiplier
+        outerRadiusMultiplier = try container.decodeIfPresent(Double.self, forKey: .outerRadiusMultiplier) ?? defaults.outerRadiusMultiplier
+        attractionMultiplier = try container.decodeIfPresent(Double.self, forKey: .attractionMultiplier) ?? defaults.attractionMultiplier
+        repulsionMultiplier = try container.decodeIfPresent(Double.self, forKey: .repulsionMultiplier) ?? defaults.repulsionMultiplier
+        dampingEnabled = try container.decodeIfPresent(Bool.self, forKey: .dampingEnabled) ?? defaults.dampingEnabled
+        dampingStrength = try container.decodeIfPresent(Double.self, forKey: .dampingStrength) ?? defaults.dampingStrength
+        momentumEnabled = try container.decodeIfPresent(Bool.self, forKey: .momentumEnabled) ?? defaults.momentumEnabled
+        momentumStrength = try container.decodeIfPresent(Double.self, forKey: .momentumStrength) ?? defaults.momentumStrength
+        speedLimitEnabled = try container.decodeIfPresent(Bool.self, forKey: .speedLimitEnabled) ?? defaults.speedLimitEnabled
+        speedLimit = try container.decodeIfPresent(Double.self, forKey: .speedLimit) ?? defaults.speedLimit
+        teleportationEnabled = try container.decodeIfPresent(Bool.self, forKey: .teleportationEnabled) ?? defaults.teleportationEnabled
+        teleportationGeneralInteractionBudget = try container.decodeIfPresent(Int.self, forKey: .teleportationGeneralInteractionBudget) ?? defaults.teleportationGeneralInteractionBudget
+        teleportationSelfInteractionBudgetLinked = try container.decodeIfPresent(Bool.self, forKey: .teleportationSelfInteractionBudgetLinked) ?? defaults.teleportationSelfInteractionBudgetLinked
+        teleportationSelfInteractionBudget = try container.decodeIfPresent(Int.self, forKey: .teleportationSelfInteractionBudget) ?? defaults.teleportationSelfInteractionBudget
+        teleportationAccumulation = try container.decodeIfPresent(Double.self, forKey: .teleportationAccumulation) ?? defaults.teleportationAccumulation
+        teleportationRecoveryRate = try container.decodeIfPresent(Double.self, forKey: .teleportationRecoveryRate) ?? defaults.teleportationRecoveryRate
+        teleportationMinimumDistanceCentimeters = try container.decodeIfPresent(Double.self, forKey: .teleportationMinimumDistanceCentimeters) ?? defaults.teleportationMinimumDistanceCentimeters
+        featureGates = (try container.decodeIfPresent(PrimordialSoupLifecycleFeatureGates.self, forKey: .featureGates) ?? defaults.featureGates).sanitized()
+        pendingGenerationSettings = try container.decodeIfPresent(PrimordialSoupLifecycleGenerationSettings.self, forKey: .pendingGenerationSettings) ?? defaults.pendingGenerationSettings
+        activeBehaviorSpace = try container.decodeIfPresent(PrimordialSoupLifecycleBehaviorSpace.self, forKey: .activeBehaviorSpace) ?? defaults.activeBehaviorSpace
+        savedBehaviorSpaces = try container.decodeIfPresent([PrimordialSoupLifecycleBehaviorSpace].self, forKey: .savedBehaviorSpaces) ?? defaults.savedBehaviorSpaces
+        regenerationNonce = try container.decodeIfPresent(UInt64.self, forKey: .regenerationNonce) ?? defaults.regenerationNonce
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(randomDistribution, forKey: .randomDistribution)
+        try container.encode(initialPopulationPercent, forKey: .initialPopulationPercent)
+        try container.encode(innerRadiusMultiplier, forKey: .innerRadiusMultiplier)
+        try container.encode(middleRadiusMultiplier, forKey: .middleRadiusMultiplier)
+        try container.encode(outerRadiusMultiplier, forKey: .outerRadiusMultiplier)
+        try container.encode(attractionMultiplier, forKey: .attractionMultiplier)
+        try container.encode(repulsionMultiplier, forKey: .repulsionMultiplier)
+        try container.encode(dampingEnabled, forKey: .dampingEnabled)
+        try container.encode(dampingStrength, forKey: .dampingStrength)
+        try container.encode(momentumEnabled, forKey: .momentumEnabled)
+        try container.encode(momentumStrength, forKey: .momentumStrength)
+        try container.encode(speedLimitEnabled, forKey: .speedLimitEnabled)
+        try container.encode(speedLimit, forKey: .speedLimit)
+        try container.encode(teleportationEnabled, forKey: .teleportationEnabled)
+        try container.encode(teleportationGeneralInteractionBudget, forKey: .teleportationGeneralInteractionBudget)
+        try container.encode(teleportationSelfInteractionBudgetLinked, forKey: .teleportationSelfInteractionBudgetLinked)
+        try container.encode(teleportationSelfInteractionBudget, forKey: .teleportationSelfInteractionBudget)
+        try container.encode(teleportationAccumulation, forKey: .teleportationAccumulation)
+        try container.encode(teleportationRecoveryRate, forKey: .teleportationRecoveryRate)
+        try container.encode(teleportationMinimumDistanceCentimeters, forKey: .teleportationMinimumDistanceCentimeters)
+        try container.encode(featureGates, forKey: .featureGates)
+        try container.encode(pendingGenerationSettings, forKey: .pendingGenerationSettings)
+        try container.encode(activeBehaviorSpace, forKey: .activeBehaviorSpace)
+        try container.encode(savedBehaviorSpaces, forKey: .savedBehaviorSpaces)
+        try container.encode(regenerationNonce, forKey: .regenerationNonce)
+    }
 
     var hasPendingBehaviorSpaceChanges: Bool {
         pendingGenerationSettings.sanitized() != activeBehaviorSpace.generationSettings.sanitized()
@@ -157,6 +292,7 @@ struct PrimordialSoupLifecycleSettings: Codable, Equatable, Sendable {
             max(0, next.teleportationMinimumDistanceCentimeters),
             TypeMatrixLocalPhysicsSettings.teleportationMinimumDistanceUICapCentimeters
         )
+        next.featureGates = next.featureGates.sanitized()
         next.pendingGenerationSettings = next.pendingGenerationSettings.sanitized()
         next.activeBehaviorSpace = Self.repairedBehaviorSpace(next.activeBehaviorSpace)
         next.savedBehaviorSpaces = Array(next.savedBehaviorSpaces

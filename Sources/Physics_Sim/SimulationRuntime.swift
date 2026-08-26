@@ -124,6 +124,14 @@ private struct PrimordialSoupLifecycleAccumulateParams {
     var outerRadiusMultiplier: Float
     var attractionMultiplier: Float
     var repulsionMultiplier: Float
+    var signedForceEnabled: UInt32
+    var energyCostEnabled: UInt32
+    var threatContributionEnabled: UInt32
+    var motilityEnabled: UInt32
+    var innerRadiusEnabled: UInt32
+    var middleRadiusEnabled: UInt32
+    var outerRadiusEnabled: UInt32
+    var padding1: UInt32 = 0
 }
 
 private struct PrimordialSoupLifecycleApplyParams {
@@ -139,6 +147,14 @@ private struct PrimordialSoupLifecycleApplyParams {
     var dampingStrength: Float
     var momentumStrength: Float
     var speedLimit: Float
+    var maxSpeedEnabled: UInt32
+    var energyDecayEnabled: UInt32
+    var reproductionThresholdEnabled: UInt32
+    var reproductionCostEnabled: UInt32
+    var childEnergyFractionEnabled: UInt32
+    var reproductionCooldownEnabled: UInt32
+    var threatSensitivityEnabled: UInt32
+    var padding0: UInt32 = 0
 }
 
 private struct PrimordialSoupLifecycleSpawnResolveParams {
@@ -1208,6 +1224,7 @@ final class SimulationRuntime: @unchecked Sendable {
             physicsEncoder.setBuffer(typeProfileBuffer, offset: 0, index: 10)
             physicsEncoder.setBuffer(lifecycleSidecarFrontBuffer, offset: 0, index: 11)
             physicsEncoder.setBuffer(lifecycleSidecarBackBuffer, offset: 0, index: 12)
+            let featureGates = primordialSoupLifecycleSettings.featureGates
             var params = PrimordialSoupLifecycleAccumulateParams(
                 particleCount: UInt32(activeParticleCount),
                 particleTypeCount: UInt32(max(1, primordialSoupLifecycleSettings.activeTypeCount)),
@@ -1216,7 +1233,14 @@ final class SimulationRuntime: @unchecked Sendable {
                 middleRadiusMultiplier: Float(primordialSoupLifecycleSettings.middleRadiusMultiplier),
                 outerRadiusMultiplier: Float(primordialSoupLifecycleSettings.outerRadiusMultiplier),
                 attractionMultiplier: Float(primordialSoupLifecycleSettings.attractionMultiplier),
-                repulsionMultiplier: Float(primordialSoupLifecycleSettings.repulsionMultiplier)
+                repulsionMultiplier: Float(primordialSoupLifecycleSettings.repulsionMultiplier),
+                signedForceEnabled: featureGates.signedForceEnabled ? 1 : 0,
+                energyCostEnabled: featureGates.energyCostEnabled ? 1 : 0,
+                threatContributionEnabled: featureGates.threatContributionEnabled ? 1 : 0,
+                motilityEnabled: featureGates.motilityEnabled ? 1 : 0,
+                innerRadiusEnabled: featureGates.innerRadiusEnabled ? 1 : 0,
+                middleRadiusEnabled: featureGates.middleRadiusEnabled ? 1 : 0,
+                outerRadiusEnabled: featureGates.outerRadiusEnabled ? 1 : 0
             )
             physicsEncoder.setBytes(&params, length: MemoryLayout<PrimordialSoupLifecycleAccumulateParams>.stride, index: 13)
             let threadsPerGroup = MTLSize(
@@ -1370,6 +1394,7 @@ final class SimulationRuntime: @unchecked Sendable {
             physicsEncoder.setBuffer(frameSpawnCounterBuffer, offset: 0, index: 5)
             physicsEncoder.setBuffer(nextSpawnSlotCounterBuffer, offset: 0, index: 6)
             primordialSoupLifecycleFrameIndex &+= 1
+            let featureGates = primordialSoupLifecycleSettings.featureGates
             var params = PrimordialSoupLifecycleApplyParams(
                 particleCount: UInt32(activeParticleCount),
                 particleTypeCount: UInt32(max(1, primordialSoupLifecycleSettings.activeTypeCount)),
@@ -1382,7 +1407,14 @@ final class SimulationRuntime: @unchecked Sendable {
                 speedLimitEnabled: primordialSoupLifecycleSettings.speedLimitEnabled ? 1 : 0,
                 dampingStrength: Float(primordialSoupLifecycleSettings.dampingStrength),
                 momentumStrength: Float(primordialSoupLifecycleSettings.momentumStrength),
-                speedLimit: Float(primordialSoupLifecycleSettings.speedLimit)
+                speedLimit: Float(primordialSoupLifecycleSettings.speedLimit),
+                maxSpeedEnabled: featureGates.maxSpeedEnabled ? 1 : 0,
+                energyDecayEnabled: featureGates.energyDecayEnabled ? 1 : 0,
+                reproductionThresholdEnabled: featureGates.reproductionThresholdEnabled ? 1 : 0,
+                reproductionCostEnabled: featureGates.reproductionCostEnabled ? 1 : 0,
+                childEnergyFractionEnabled: featureGates.childEnergyFractionEnabled ? 1 : 0,
+                reproductionCooldownEnabled: featureGates.reproductionCooldownEnabled ? 1 : 0,
+                threatSensitivityEnabled: featureGates.threatSensitivityEnabled ? 1 : 0
             )
             physicsEncoder.setBytes(&params, length: MemoryLayout<PrimordialSoupLifecycleApplyParams>.stride, index: 7)
             let threadsPerGroup = MTLSize(
