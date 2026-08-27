@@ -54,15 +54,15 @@ struct PrimordialSoupLifecycleGenerationSettings: Codable, Equatable, Sendable {
     var typeCount: Int = 6
     var stability: Double = 0.65
     var complexity: Double = 0.35
-    var forceComplexity: Double = 0.72
+    var forceComplexity: Double = 0.67
     var signedForceRange = PrimordialSoupLifecycleRange(minimum: -1, maximum: 1)
     var energyCostRange = PrimordialSoupLifecycleRange(minimum: -0.08, maximum: 0.10)
     var threatContributionRange = PrimordialSoupLifecycleRange(minimum: 0, maximum: 1)
     var maxSpeedRange = PrimordialSoupLifecycleRange(minimum: 1.2, maximum: 3.2)
-    var motilityRange = PrimordialSoupLifecycleRange(minimum: 0.0, maximum: 0.035)
-    var innerRadiusRangeCentimeters = PrimordialSoupLifecycleRange(minimum: 1.8, maximum: 3.4)
-    var middleRadiusRangeCentimeters = PrimordialSoupLifecycleRange(minimum: 0.8, maximum: 2.4)
-    var outerRadiusRangeCentimeters = PrimordialSoupLifecycleRange(minimum: 2.0, maximum: 5.5)
+    var motilityRange = PrimordialSoupLifecycleRange(minimum: 0.0, maximum: 0.006)
+    var innerRadiusRangeCentimeters = PrimordialSoupLifecycleRange(minimum: 2.5, maximum: 2.5)
+    var middleRadiusRangeCentimeters = PrimordialSoupLifecycleRange(minimum: 1.5, maximum: 1.5)
+    var outerRadiusRangeCentimeters = PrimordialSoupLifecycleRange(minimum: 2.5, maximum: 2.5)
     var energyDecayRange = PrimordialSoupLifecycleRange(minimum: 0.002, maximum: 0.012)
     var reproductionThresholdRange = PrimordialSoupLifecycleRange(minimum: 0.65, maximum: 1.2)
     var reproductionCostRange = PrimordialSoupLifecycleRange(minimum: 0.18, maximum: 0.36)
@@ -172,7 +172,7 @@ struct PrimordialSoupLifecycleSettings: Codable, Equatable, Sendable {
     var teleportationAccumulation: Double = 0.08
     var teleportationRecoveryRate: Double = 0.18
     var teleportationMinimumDistanceCentimeters: Double = 24.0
-    var featureGates = PrimordialSoupLifecycleFeatureGates()
+    var featureGates = PrimordialSoupLifecycleFeatureGates.v01Baseline
     var pendingGenerationSettings = PrimordialSoupLifecycleGenerationSettings.defaults
     var activeBehaviorSpace: PrimordialSoupLifecycleBehaviorSpace = PrimordialSoupLifecycleBehaviorSpaceGenerator.generate(
         settings: PrimordialSoupLifecycleGenerationSettings.defaults

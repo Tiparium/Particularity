@@ -96,12 +96,14 @@ private struct PrimordialSoupLifecycleSidecarState {
     var age: Float
     var reproductionCooldownRemaining: Float
     var interactionEnergyDelta: Float
+    var teleportAccumulation: Float
 
     static let inactive = PrimordialSoupLifecycleSidecarState(
         energy: 0,
         age: 0,
         reproductionCooldownRemaining: 0,
-        interactionEnergyDelta: 0
+        interactionEnergyDelta: 0,
+        teleportAccumulation: 0
     )
 }
 
@@ -131,6 +133,12 @@ private struct PrimordialSoupLifecycleAccumulateParams {
     var innerRadiusEnabled: UInt32
     var middleRadiusEnabled: UInt32
     var outerRadiusEnabled: UInt32
+    var teleportationEnabled: UInt32
+    var teleportationGeneralBudget: UInt32
+    var teleportationSelfBudget: UInt32
+    var teleportationSelfBudgetLinked: UInt32
+    var teleportationAccumulation: Float
+    var teleportationRecoveryRate: Float
     var padding1: UInt32 = 0
 }
 
@@ -154,7 +162,12 @@ private struct PrimordialSoupLifecycleApplyParams {
     var childEnergyFractionEnabled: UInt32
     var reproductionCooldownEnabled: UInt32
     var threatSensitivityEnabled: UInt32
+    var reproductionEnabled: UInt32
+    var motilityEnabled: UInt32
+    var teleportationEnabled: UInt32
     var padding0: UInt32 = 0
+    var teleportationMinimumDistance: Float
+    var padding1: SIMD3<Float> = .zero
 }
 
 private struct PrimordialSoupLifecycleSpawnResolveParams {
@@ -1240,7 +1253,15 @@ final class SimulationRuntime: @unchecked Sendable {
                 motilityEnabled: featureGates.motilityEnabled ? 1 : 0,
                 innerRadiusEnabled: featureGates.innerRadiusEnabled ? 1 : 0,
                 middleRadiusEnabled: featureGates.middleRadiusEnabled ? 1 : 0,
-                outerRadiusEnabled: featureGates.outerRadiusEnabled ? 1 : 0
+                outerRadiusEnabled: featureGates.outerRadiusEnabled ? 1 : 0,
+                teleportationEnabled: primordialSoupLifecycleSettings.teleportationEnabled ? 1 : 0,
+                teleportationGeneralBudget: UInt32(primordialSoupLifecycleSettings.teleportationGeneralInteractionBudget),
+                teleportationSelfBudget: UInt32(primordialSoupLifecycleSettings.teleportationSelfInteractionBudgetLinked
+                    ? primordialSoupLifecycleSettings.teleportationGeneralInteractionBudget
+                    : primordialSoupLifecycleSettings.teleportationSelfInteractionBudget),
+                teleportationSelfBudgetLinked: primordialSoupLifecycleSettings.teleportationSelfInteractionBudgetLinked ? 1 : 0,
+                teleportationAccumulation: Float(primordialSoupLifecycleSettings.teleportationAccumulation),
+                teleportationRecoveryRate: Float(primordialSoupLifecycleSettings.teleportationRecoveryRate)
             )
             physicsEncoder.setBytes(&params, length: MemoryLayout<PrimordialSoupLifecycleAccumulateParams>.stride, index: 13)
             let threadsPerGroup = MTLSize(
@@ -1414,7 +1435,14 @@ final class SimulationRuntime: @unchecked Sendable {
                 reproductionCostEnabled: featureGates.reproductionCostEnabled ? 1 : 0,
                 childEnergyFractionEnabled: featureGates.childEnergyFractionEnabled ? 1 : 0,
                 reproductionCooldownEnabled: featureGates.reproductionCooldownEnabled ? 1 : 0,
-                threatSensitivityEnabled: featureGates.threatSensitivityEnabled ? 1 : 0
+                threatSensitivityEnabled: featureGates.threatSensitivityEnabled ? 1 : 0,
+                reproductionEnabled: featureGates.reproductionThresholdEnabled
+                    || featureGates.reproductionCostEnabled
+                    || featureGates.childEnergyFractionEnabled
+                    || featureGates.reproductionCooldownEnabled ? 1 : 0,
+                motilityEnabled: featureGates.motilityEnabled ? 1 : 0,
+                teleportationEnabled: primordialSoupLifecycleSettings.teleportationEnabled ? 1 : 0,
+                teleportationMinimumDistance: Float(primordialSoupLifecycleSettings.teleportationMinimumDistanceWorldUnits)
             )
             physicsEncoder.setBytes(&params, length: MemoryLayout<PrimordialSoupLifecycleApplyParams>.stride, index: 7)
             let threadsPerGroup = MTLSize(
@@ -1648,7 +1676,8 @@ final class SimulationRuntime: @unchecked Sendable {
                         energy: 1,
                         age: 0,
                         reproductionCooldownRemaining: 0,
-                        interactionEnergyDelta: 0
+                        interactionEnergyDelta: 0,
+                        teleportAccumulation: 0
                     )
             }
             let lifecycleSidecarLength = max(1, MemoryLayout<PrimordialSoupLifecycleSidecarState>.stride * particles.count)

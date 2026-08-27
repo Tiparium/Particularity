@@ -207,7 +207,7 @@ struct PrimordialSoupLifecycleSettingsPanel: View {
                 rangeEditor("Energy Cost", \.energyCostRange, enabled: \.energyCostEnabled, range: -1...1)
                 rangeEditor("Threat Contribution", \.threatContributionRange, enabled: \.threatContributionEnabled, range: 0...4)
                 rangeEditor("Max Speed", \.maxSpeedRange, enabled: \.maxSpeedEnabled, range: 0.1...12)
-                rangeEditor("Motility", \.motilityRange, enabled: \.motilityEnabled, range: 0...0.25, displayScale: 1000, suffix: "x1000")
+                rangeEditor("Motility", \.motilityRange, enabled: \.motilityEnabled, range: 0...0.02, displayScale: 1000, suffix: "x1000")
                 rangeEditor("Energy Decay", \.energyDecayRange, enabled: \.energyDecayEnabled, range: 0...0.08, displayScale: 1000, suffix: "x1000")
                 rangeEditor("Reproduction Threshold", \.reproductionThresholdRange, enabled: \.reproductionThresholdEnabled, range: 0...4)
                 rangeEditor("Reproduction Cost", \.reproductionCostRange, enabled: \.reproductionCostEnabled, range: 0...4)

@@ -25,6 +25,7 @@ struct PrimordialSoupLifecycleSidecarState {
     float age;
     float reproductionCooldownRemaining;
     float interactionEnergyDelta;
+    float teleportAccumulation;
 };
 
 struct PrimordialSoupLifecycleSpawnRecord {
@@ -53,6 +54,12 @@ struct PrimordialSoupLifecycleAccumulateParams {
     uint innerRadiusEnabled;
     uint middleRadiusEnabled;
     uint outerRadiusEnabled;
+    uint teleportationEnabled;
+    uint teleportationGeneralBudget;
+    uint teleportationSelfBudget;
+    uint teleportationSelfBudgetLinked;
+    float teleportationAccumulation;
+    float teleportationRecoveryRate;
     uint _padding1;
 };
 
@@ -76,7 +83,12 @@ struct PrimordialSoupLifecycleApplyParams {
     uint childEnergyFractionEnabled;
     uint reproductionCooldownEnabled;
     uint threatSensitivityEnabled;
+    uint reproductionEnabled;
+    uint motilityEnabled;
+    uint teleportationEnabled;
     uint _padding0;
+    float teleportationMinimumDistance;
+    float3 _padding1;
 };
 
 struct PrimordialSoupLifecycleSpawnResolveParams {
@@ -141,6 +153,14 @@ static float3 random_unit_direction_primordial_lifecycle(uint seed) {
     return normalize(candidate);
 }
 
+static float3 random_position_primordial_lifecycle(uint seed) {
+    return float3(
+        hash_to_unit_float_primordial_lifecycle(seed * 3u + 11u) * 2.0 - 1.0,
+        hash_to_unit_float_primordial_lifecycle(seed * 3u + 17u) * 2.0 - 1.0,
+        hash_to_unit_float_primordial_lifecycle(seed * 3u + 23u) * 2.0 - 1.0
+    );
+}
+
 static float normalized_falloff_primordial_lifecycle(float value, float range) {
     if (range <= 0.000001) {
         return 0.0;
@@ -183,6 +203,7 @@ kernel void primordial_soup_lifecycle_accumulate_impulse(
         inactiveSidecar.age = 0.0;
         inactiveSidecar.reproductionCooldownRemaining = 0.0;
         inactiveSidecar.interactionEnergyDelta = 0.0;
+        inactiveSidecar.teleportAccumulation = 0.0;
         destinationSidecar[id] = inactiveSidecar;
         destinationParticles[id].impulse = float4(0.0);
         return;
@@ -192,6 +213,7 @@ kernel void primordial_soup_lifecycle_accumulate_impulse(
     PrimordialSoupLifecycleTypeProfile sourceProfile = typeProfiles[sourceType];
     PrimordialSoupLifecycleSidecarState nextSidecar = sourceSidecar[id];
     nextSidecar.interactionEnergyDelta = 0.0;
+    float persistentTeleportAccumulation = params.teleportationEnabled != 0 ? nextSidecar.teleportAccumulation : 0.0;
     float innerLimit = params.innerRadiusEnabled != 0
         ? sourceProfile.innerRadius * params.innerRadiusMultiplier
         : 0.0;
@@ -211,6 +233,9 @@ kernel void primordial_soup_lifecycle_accumulate_impulse(
 
     float3 sourcePosition = source.position.xyz;
     float3 accumulatedImpulse = float3(0.0);
+    uint sameTypeInteractionCount = 0;
+    uint nonSelfInteractionCount = 0;
+    uint overBudgetInteractionCount = 0;
     bool hadNonZeroInteraction = false;
 
     uint groupIndex = interactionGroupIndices[id];
@@ -289,13 +314,47 @@ kernel void primordial_soup_lifecycle_accumulate_impulse(
                 hadNonZeroInteraction = hadNonZeroInteraction || length_squared(contribution) > 0.000001;
             }
 
-            float motilityMultiplier = params.motilityEnabled != 0
-                ? max(0.0, sourceProfile.motility + 1.0)
-                : 1.0;
-            accumulatedImpulse += contribution * motilityMultiplier;
+            if (params.teleportationEnabled != 0) {
+                uint targetType = min(particle_type(target), params.particleTypeCount - 1);
+                bool sameTypeInteraction = targetType == sourceType;
+                if (sameTypeInteraction) {
+                    sameTypeInteractionCount += 1;
+                    if (sameTypeInteractionCount > params.teleportationSelfBudget) {
+                        overBudgetInteractionCount += 1;
+                    }
+                } else {
+                    nonSelfInteractionCount += 1;
+                    if (nonSelfInteractionCount > params.teleportationGeneralBudget) {
+                        overBudgetInteractionCount += 1;
+                    }
+                }
+            }
+
+            accumulatedImpulse += contribution;
         }
     }
 
+    if (params.teleportationEnabled != 0) {
+        if (overBudgetInteractionCount > 0) {
+            for (uint count = 0; count < overBudgetInteractionCount; ++count) {
+                if (persistentTeleportAccumulation <= 0.000001) {
+                    persistentTeleportAccumulation = clamp(params.teleportationAccumulation, 0.0, 1.0);
+                } else {
+                    persistentTeleportAccumulation = clamp(
+                        persistentTeleportAccumulation * (1.0 + params.teleportationAccumulation),
+                        0.0,
+                        1.0
+                    );
+                }
+            }
+        } else {
+            persistentTeleportAccumulation = max(0.0, persistentTeleportAccumulation - params.teleportationRecoveryRate);
+        }
+    } else {
+        persistentTeleportAccumulation = 0.0;
+    }
+
+    nextSidecar.teleportAccumulation = persistentTeleportAccumulation;
     destinationSidecar[id] = nextSidecar;
     destinationParticles[id].impulse = float4(accumulatedImpulse, hadNonZeroInteraction ? 0.0 : 1.0);
 }
@@ -323,6 +382,7 @@ kernel void primordial_soup_lifecycle_apply_impulse(
         sidecar[id].age = 0.0;
         sidecar[id].reproductionCooldownRemaining = 0.0;
         sidecar[id].interactionEnergyDelta = 0.0;
+        sidecar[id].teleportAccumulation = 0.0;
         return;
     }
 
@@ -347,12 +407,31 @@ kernel void primordial_soup_lifecycle_apply_impulse(
         destinationParticles[id].impulse = float4(0.0);
         nextSidecar.energy = 0.0;
         nextSidecar.reproductionCooldownRemaining = 0.0;
+        nextSidecar.teleportAccumulation = 0.0;
         sidecar[id] = nextSidecar;
         return;
     }
 
     float3 previousVelocity = particle.velocity.xyz;
     float3 nextVelocity = previousVelocity + destinationParticles[id].impulse.xyz;
+
+    if (params.motilityEnabled != 0 && profile.motility > 0.000001) {
+        uint motilitySeed = particle_id(particle)
+            ^ hash_uint_primordial_lifecycle(as_type<uint>(particle.position.x) + 101u)
+            ^ hash_uint_primordial_lifecycle(as_type<uint>(particle.position.y) + 211u)
+            ^ hash_uint_primordial_lifecycle(as_type<uint>(particle.position.z) + 307u)
+            ^ hash_uint_primordial_lifecycle(as_type<uint>(previousVelocity.x) + 401u)
+            ^ hash_uint_primordial_lifecycle(as_type<uint>(previousVelocity.y) + 503u)
+            ^ hash_uint_primordial_lifecycle(as_type<uint>(previousVelocity.z) + 601u);
+        float3 randomDirection = random_unit_direction_primordial_lifecycle(motilitySeed);
+        float previousSpeedSquared = dot(previousVelocity, previousVelocity);
+        float3 weightedDirection = randomDirection;
+        if (previousSpeedSquared > 0.000001) {
+            float3 momentumDirection = normalize(previousVelocity);
+            weightedDirection = normalize(mix(randomDirection, momentumDirection, 0.72));
+        }
+        nextVelocity += weightedDirection * profile.motility;
+    }
 
     if (params.dampingEnabled != 0) {
         nextVelocity *= params.dampingStrength;
@@ -371,6 +450,40 @@ kernel void primordial_soup_lifecycle_apply_impulse(
     }
 
     float3 nextPosition = particle.position.xyz + nextVelocity * params.deltaTime;
+
+    if (params.teleportationEnabled != 0) {
+        float teleportProbability = clamp(nextSidecar.teleportAccumulation, 0.0, 1.0);
+        if (teleportProbability > 0.000001) {
+            uint seedBase = particle_id(particle)
+                ^ hash_uint_primordial_lifecycle(as_type<uint>(nextPosition.x))
+                ^ hash_uint_primordial_lifecycle(as_type<uint>(nextPosition.y) + 31u)
+                ^ hash_uint_primordial_lifecycle(as_type<uint>(nextPosition.z) + 73u);
+            float teleportRoll = hash_to_unit_float_primordial_lifecycle(seedBase + 97u);
+            if (teleportRoll < teleportProbability) {
+                float minimumDistance = max(0.0, params.teleportationMinimumDistance);
+                float3 chosenPosition = nextPosition;
+                bool foundCandidate = false;
+                for (uint attempt = 0; attempt < 6u; ++attempt) {
+                    float3 candidate = random_position_primordial_lifecycle(seedBase + 131u * (attempt + 1u));
+                    float3 teleportDelta = wrapped_delta_primordial_lifecycle(candidate, particle.position.xyz);
+                    if (length(teleportDelta) >= minimumDistance) {
+                        chosenPosition = candidate;
+                        foundCandidate = true;
+                        break;
+                    }
+                }
+                if (!foundCandidate) {
+                    chosenPosition = random_position_primordial_lifecycle(seedBase + 911u);
+                }
+                nextPosition = chosenPosition;
+                nextVelocity = float3(0.0);
+                nextSidecar.teleportAccumulation = 0.0;
+            }
+        }
+    } else {
+        nextSidecar.teleportAccumulation = 0.0;
+    }
+
     destinationParticles[id] = particle;
     destinationParticles[id].velocity = float4(nextVelocity, 0.0);
     destinationParticles[id].position = float4(
@@ -381,6 +494,10 @@ kernel void primordial_soup_lifecycle_apply_impulse(
     );
     destinationParticles[id].impulse = float4(0.0);
     sidecar[id] = nextSidecar;
+
+    if (params.reproductionEnabled == 0) {
+        return;
+    }
 
     float threshold = params.reproductionThresholdEnabled != 0
         ? max(0.000001, profile.reproductionEnergyThreshold)
@@ -456,6 +573,7 @@ kernel void primordial_soup_lifecycle_apply_impulse(
     childSidecar.age = 0.0;
     childSidecar.reproductionCooldownRemaining = cooldownWindow;
     childSidecar.interactionEnergyDelta = 0.0;
+    childSidecar.teleportAccumulation = 0.0;
 
     spawnRecords[recordIndex].particle = child;
     spawnRecords[recordIndex].sidecar = childSidecar;

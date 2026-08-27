@@ -205,7 +205,9 @@ struct ModuleCompatibilityTests {
         let legacyData = Data(#"{"initialPopulationPercent":0.42}"#.utf8)
         let legacyDecoded = try JSONDecoder().decode(PrimordialSoupLifecycleSettings.self, from: legacyData)
         #expect(legacyDecoded.initialPopulationPercent == 0.42)
-        #expect(legacyDecoded.featureGates.energyCostEnabled == true)
+        #expect(legacyDecoded.featureGates.energyCostEnabled == false)
+        #expect(legacyDecoded.featureGates.motilityEnabled == false)
+        #expect(legacyDecoded.featureGates.signedForceEnabled == true)
 
         #expect(PrimordialSoupLifecycleFeatureGates.v01Baseline.signedForceEnabled == true)
         #expect(PrimordialSoupLifecycleFeatureGates.v01Baseline.innerRadiusEnabled == true)
