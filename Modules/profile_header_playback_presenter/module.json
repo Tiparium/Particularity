@@ -1,0 +1,30 @@
+{
+  "id": "particularity.playback.presenter.profile_header_presenter",
+  "name": "ProfileHeaderPlaybackPresenter",
+  "kind": "visual",
+  "executionModel": "playback",
+  "pipelineStage": "presenter",
+  "moduleFamilyID": "particularity.playback.family.profile_header_v1",
+  "version": 1,
+  "consumesContracts": ["particularity.presentation.profile_header_graph.v1"],
+  "entryPoints": {},
+  "settings": {
+    "sections": [{
+      "id": "nodes",
+      "title": "Nodes",
+      "controls": [
+        { "id": "nodeColor", "title": "Node Color", "type": "color", "defaultValue": "#f4f7ff" },
+        { "id": "nodeSizeFloor", "title": "Size Floor", "type": "slider", "defaultValue": 0.004, "minimum": 0.001, "maximum": 0.02, "step": 0.001 },
+        { "id": "nodeSizeCeiling", "title": "Size Ceiling", "type": "slider", "defaultValue": 0.010, "minimum": 0.002, "maximum": 0.04, "step": 0.001 }
+      ]
+    }, {
+      "id": "verts",
+      "title": "Verts",
+      "controls": [
+        { "id": "vertColor", "title": "Vert Color", "type": "color", "defaultValue": "#86a4ff" },
+        { "id": "vertThickness", "title": "Thickness", "type": "slider", "defaultValue": 0.32, "minimum": 0, "maximum": 1, "step": 0.01 },
+        { "id": "vertThicknessVariance", "title": "Thickness Variance", "type": "slider", "defaultValue": 0.35, "minimum": 0, "maximum": 1, "step": 0.01 }
+      ]
+    }]
+  }
+}

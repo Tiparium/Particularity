@@ -137,6 +137,18 @@ struct ModuleCompatibilityTests {
         #expect(TrinityCatalog.matching(modules)?.id == TrinityCatalog.mlTrainingPlayback.id)
     }
 
+    @Test("accepts profile header playback trio")
+    func acceptsProfileHeaderPlaybackTrio() {
+        let modules = ActiveModuleSet(
+            physics: ModuleCatalog.knownModulesByName["ProfileHeaderPlaybackProcessor"]!,
+            visual: ModuleCatalog.knownModulesByName["ProfileHeaderPlaybackPresenter"]!,
+            optimization: ModuleCatalog.knownModulesByName["ProfileHeaderPlaybackReader"]!
+        )
+
+        #expect(ModuleCompatibility.incompatibilityReason(for: modules, state: viewportState()) == nil)
+        #expect(TrinityCatalog.matching(modules)?.id == TrinityCatalog.profileHeaderPlayback.id)
+    }
+
     @Test("persists selected trinity and local settings")
     func persistsSelectedTrinityAndLocalSettings() throws {
         var editorState = SimulationEditorState()
@@ -583,6 +595,7 @@ struct ModuleCompatibilityTests {
             playbackRate: 1,
             playbackLooping: true,
             mlPlayback: MLPlaybackViewportSettings(),
+            profileHeader: ProfileHeaderViewportSettings(),
             fixedGridSubdivisions: 1,
             fixedGridSubspaceCap: 1,
             fixedGridNeighborReadMode: .scratch

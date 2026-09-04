@@ -42,7 +42,9 @@ final class Renderer: NSObject, MTKViewDelegate {
     private let session: SimulationSession
     private let viewportStateStore: MainWindowViewportStateStore
     private let linePipeline: MTLRenderPipelineState
+    private let vertRibbonPipeline: MTLRenderPipelineState
     private let particlePipeline: MTLRenderPipelineState
+    private let profileHeaderParticlePipeline: MTLRenderPipelineState
     private let meshPipeline: MTLRenderPipelineState
     private let playbackMeshSmoothPipeline: MTLComputePipelineState
     private let depthState: MTLDepthStencilState
@@ -99,6 +101,10 @@ final class Renderer: NSObject, MTKViewDelegate {
             let lineFragmentFunction = library.makeFunction(name: "line_fs"),
             let particleVertexFunction = library.makeFunction(name: "particle_vs"),
             let particleFragmentFunction = library.makeFunction(name: "particle_fs"),
+            let profileHeaderVertexFunction = library.makeFunction(name: "profile_header_particle_vs"),
+            let profileHeaderFragmentFunction = library.makeFunction(name: "profile_header_particle_fs"),
+            let profileHeaderVertVertexFunction = library.makeFunction(name: "profile_header_vert_vs"),
+            let profileHeaderVertFragmentFunction = library.makeFunction(name: "profile_header_vert_fs"),
             let meshVertexFunction = library.makeFunction(name: "ml_playback_surface_mesh_vs"),
             let meshFragmentFunction = library.makeFunction(name: "ml_playback_surface_mesh_fs"),
             let playbackMeshSmoothFunction = library.makeFunction(name: "ml_playback_surface_mesh_smooth")
@@ -128,6 +134,18 @@ final class Renderer: NSObject, MTKViewDelegate {
         lineVertexDescriptor.layouts[0].stride = MemoryLayout<LineVertex>.stride
         lineDescriptor.vertexDescriptor = lineVertexDescriptor
 
+        let vertRibbonDescriptor = MTLRenderPipelineDescriptor()
+        vertRibbonDescriptor.vertexFunction = profileHeaderVertVertexFunction
+        vertRibbonDescriptor.fragmentFunction = profileHeaderVertFragmentFunction
+        vertRibbonDescriptor.colorAttachments[0].pixelFormat = mtkView.colorPixelFormat
+        vertRibbonDescriptor.depthAttachmentPixelFormat = mtkView.depthStencilPixelFormat
+        vertRibbonDescriptor.inputPrimitiveTopology = .triangle
+        vertRibbonDescriptor.colorAttachments[0].isBlendingEnabled = true
+        vertRibbonDescriptor.colorAttachments[0].sourceRGBBlendFactor = .sourceAlpha
+        vertRibbonDescriptor.colorAttachments[0].destinationRGBBlendFactor = .oneMinusSourceAlpha
+        vertRibbonDescriptor.colorAttachments[0].sourceAlphaBlendFactor = .sourceAlpha
+        vertRibbonDescriptor.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
+
         let particleDescriptor = MTLRenderPipelineDescriptor()
         particleDescriptor.vertexFunction = particleVertexFunction
         particleDescriptor.fragmentFunction = particleFragmentFunction
@@ -141,6 +159,10 @@ final class Renderer: NSObject, MTKViewDelegate {
         particleDescriptor.colorAttachments[0].sourceAlphaBlendFactor = .sourceAlpha
         particleDescriptor.colorAttachments[0].destinationRGBBlendFactor = .oneMinusSourceAlpha
         particleDescriptor.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
+
+        let profileHeaderDescriptor = particleDescriptor.copy() as! MTLRenderPipelineDescriptor
+        profileHeaderDescriptor.vertexFunction = profileHeaderVertexFunction
+        profileHeaderDescriptor.fragmentFunction = profileHeaderFragmentFunction
 
         let meshDescriptor = MTLRenderPipelineDescriptor()
         meshDescriptor.vertexFunction = meshVertexFunction
@@ -174,7 +196,9 @@ final class Renderer: NSObject, MTKViewDelegate {
 
         do {
             linePipeline = try device.makeRenderPipelineState(descriptor: lineDescriptor)
+            vertRibbonPipeline = try device.makeRenderPipelineState(descriptor: vertRibbonDescriptor)
             particlePipeline = try device.makeRenderPipelineState(descriptor: particleDescriptor)
+            profileHeaderParticlePipeline = try device.makeRenderPipelineState(descriptor: profileHeaderDescriptor)
             meshPipeline = try device.makeRenderPipelineState(descriptor: meshDescriptor)
         } catch {
             throw RendererError.renderPipelineCreationFailed(error.localizedDescription)
@@ -319,6 +343,16 @@ final class Renderer: NSObject, MTKViewDelegate {
             indexBufferOffset: 0
         )
 
+        if let presentationLineBuffer = renderState.presentationLineBuffer,
+           renderState.presentationLineVertexCount > 0 {
+            var presentationUniforms = LineUniforms(mvp: mvp, color: simulationState.profileHeader.vertColor)
+            encoder.setRenderPipelineState(vertRibbonPipeline)
+            encoder.setDepthStencilState(particleReadOnlyDepthState)
+            encoder.setVertexBuffer(presentationLineBuffer, offset: 0, index: 0)
+            encoder.setVertexBytes(&presentationUniforms, length: MemoryLayout<LineUniforms>.stride, index: 1)
+            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: renderState.presentationLineVertexCount)
+        }
+
         if renderState.activeParticleCount > 0,
            let particleBuffer = renderState.particleBuffer {
             var particleUniforms = ParticleUniforms(
@@ -366,11 +400,20 @@ final class Renderer: NSObject, MTKViewDelegate {
                     )
                 }
             } else {
+                if simulationState.profileHeader.isActive {
+                    var headerUniforms = ProfileHeaderParticleUniforms(mvp: mvp, nodeColor: simulationState.profileHeader.nodeColor, nodeSizeFloor: simulationState.profileHeader.nodeSizeFloor, nodeSizeCeiling: simulationState.profileHeader.nodeSizeCeiling, viewportHeight: Float(max(size.height, 1)), projectionYScale: projectionYScale)
+                    encoder.setRenderPipelineState(profileHeaderParticlePipeline)
+                    encoder.setDepthStencilState(particleReadOnlyDepthState)
+                    encoder.setVertexBuffer(particleBuffer, offset: 0, index: 0)
+                    encoder.setVertexBytes(&headerUniforms, length: MemoryLayout<ProfileHeaderParticleUniforms>.stride, index: 1)
+                    encoder.drawPrimitives(type: .point, vertexStart: 0, vertexCount: renderState.activeParticleCount)
+                } else {
                 encoder.setRenderPipelineState(particlePipeline)
                 encoder.setDepthStencilState(simulationState.showOptimizationInfo ? particleReadOnlyDepthState : depthState)
                 encoder.setVertexBuffer(particleBuffer, offset: 0, index: 0)
                 encoder.setVertexBytes(&particleUniforms, length: MemoryLayout<ParticleUniforms>.stride, index: 1)
                 encoder.drawPrimitives(type: .point, vertexStart: 0, vertexCount: renderState.activeParticleCount)
+                }
             }
         }
 

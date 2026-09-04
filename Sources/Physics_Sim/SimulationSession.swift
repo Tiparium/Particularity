@@ -126,7 +126,9 @@ final class SimulationSession {
             activeParticleCount: 0,
             particleCapacity: 0,
             debugLineBuffer: nil,
-            debugRenderSegments: []
+            debugRenderSegments: [],
+            presentationLineBuffer: nil,
+            presentationLineVertexCount: 0
         )
     }
 
@@ -279,6 +281,7 @@ final class SimulationSession {
                 SimulationMetalSharedSource.source,
                 DefaultVisualModuleRuntime.shaderSource,
                 MLTrainingPlaybackPresenterRuntime.shaderSource,
+                ProfileHeaderPlaybackPresenterRuntime.shaderSource,
                 defaultPhysicsSource,
                 packagedPhysicsSources.joined(separator: "\n\n"),
                 DefaultOptimizationModuleRuntime.computeShaderSource,

@@ -295,6 +295,7 @@ enum ModuleSettingControlType: String, Decodable, Equatable, Sendable {
     case intSlider
     case segmented
     case text
+    case color
 }
 
 struct ModuleSettingControl: Decodable, Equatable, Sendable, Identifiable {
@@ -557,11 +558,29 @@ enum TrinityCatalog {
         defaultSettings: .default
     )
 
+    static let profileHeaderPlayback = TrinityDefinition(
+        id: "particularity.trinity.profile_header_playback",
+        name: "Profile Header Playback",
+        executionModel: .playback,
+        moduleIDs: [
+            .optimization: "particularity.playback.producer.profile_header_reader",
+            .physics: "particularity.playback.processor.profile_header_processor",
+            .visual: "particularity.playback.presenter.profile_header_presenter",
+        ],
+        assignedModuleIDs: [
+            ModuleKind.optimization.rawValue: "particularity.playback.producer.profile_header_reader",
+            ModuleKind.physics.rawValue: "particularity.playback.processor.profile_header_processor",
+            ModuleKind.visual.rawValue: "particularity.playback.presenter.profile_header_presenter",
+        ],
+        defaultSettings: .default
+    )
+
     static let all: [TrinityDefinition] = [
         defaultRealtime,
         primordialSoup,
         toyPlayback,
         mlTrainingPlayback,
+        profileHeaderPlayback,
     ]
 
     static func definition(id: String?) -> TrinityDefinition? {
@@ -793,6 +812,9 @@ enum ModuleCatalog {
     static let mlPlaybackFamilyID = "particularity.playback.family.ml_training_v1"
     static let mlPlaybackSourceContract = "particularity.playback.ml_training_source.v1"
     static let mlPlaybackParticleSurfaceContract = "particularity.presentation.ml_training_particle_surface.v1"
+    static let profileHeaderPlaybackFamilyID = "particularity.playback.family.profile_header_v1"
+    static let profileHeaderPlaybackSourceContract = "particularity.playback.profile_header_source.v1"
+    static let profileHeaderPlaybackGraphContract = "particularity.presentation.profile_header_graph.v1"
 
     static let defaultPhysics = ModuleDescriptor(
         moduleID: "internal.realtime.processor.default_physics_slide_loop",
@@ -959,6 +981,50 @@ enum ModuleCatalog {
             supportsLeaderCommunicationLog: false,
             moduleFamilyID: mlPlaybackFamilyID,
             consumesContracts: [mlPlaybackParticleSurfaceContract],
+            executionModel: .playback,
+            pipelineStage: .presenter
+        ),
+        "ProfileHeaderPlaybackReader": ModuleDescriptor(
+            moduleID: "particularity.playback.producer.profile_header_reader",
+            kind: "optimization",
+            name: "ProfileHeaderPlaybackReader",
+            visibility: .production,
+            isDefaultFallback: false,
+            acceptsOptimizationDebugInfo: false,
+            providesOptimizationDebugInfo: false,
+            supportsLeaderCommunicationLog: false,
+            moduleFamilyID: profileHeaderPlaybackFamilyID,
+            producesContracts: [profileHeaderPlaybackSourceContract],
+            executionModel: .playback,
+            pipelineStage: .producer
+        ),
+        "ProfileHeaderPlaybackProcessor": ModuleDescriptor(
+            moduleID: "particularity.playback.processor.profile_header_processor",
+            kind: "physics",
+            name: "ProfileHeaderPlaybackProcessor",
+            visibility: .production,
+            isDefaultFallback: false,
+            acceptsOptimizationDebugInfo: false,
+            providesOptimizationDebugInfo: false,
+            supportsLeaderCommunicationLog: false,
+            moduleFamilyID: profileHeaderPlaybackFamilyID,
+            consumesContracts: [profileHeaderPlaybackSourceContract],
+            producesContracts: [profileHeaderPlaybackGraphContract],
+            executionModel: .playback,
+            pipelineStage: .processor,
+            timeScale: .playbackDefault
+        ),
+        "ProfileHeaderPlaybackPresenter": ModuleDescriptor(
+            moduleID: "particularity.playback.presenter.profile_header_presenter",
+            kind: "visual",
+            name: "ProfileHeaderPlaybackPresenter",
+            visibility: .production,
+            isDefaultFallback: false,
+            acceptsOptimizationDebugInfo: false,
+            providesOptimizationDebugInfo: false,
+            supportsLeaderCommunicationLog: false,
+            moduleFamilyID: profileHeaderPlaybackFamilyID,
+            consumesContracts: [profileHeaderPlaybackGraphContract],
             executionModel: .playback,
             pipelineStage: .presenter
         ),
@@ -1191,9 +1257,25 @@ struct SimulationViewportState: Equatable {
     var playbackRate: Float
     var playbackLooping: Bool
     var mlPlayback: MLPlaybackViewportSettings
+    var profileHeader: ProfileHeaderViewportSettings
     var fixedGridSubdivisions: Int
     var fixedGridSubspaceCap: Int
     var fixedGridNeighborReadMode: FixedGridNeighborReadMode
+}
+
+struct ProfileHeaderViewportSettings: Equatable {
+    var isActive = false
+    var text = "Nainoa Faulkner-Jackson"
+    var nodeCount = 3_200
+    var motionRadius: Float = 0.018
+    var vertCoverage: Float = 0.45
+    var connectionsPerNode = 1
+    var nodeColor = SIMD4<Float>(0.96, 0.97, 1.0, 1.0)
+    var vertColor = SIMD4<Float>(0.53, 0.64, 1.0, 0.65)
+    var nodeSizeFloor: Float = 0.004
+    var nodeSizeCeiling: Float = 0.010
+    var vertThickness: Float = 0.32
+    var vertThicknessVariance: Float = 0.35
 }
 
 enum MLPlaybackSurfaceSelectionMode: String, Equatable, Hashable {

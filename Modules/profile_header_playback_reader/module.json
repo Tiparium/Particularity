@@ -1,0 +1,21 @@
+{
+  "id": "particularity.playback.producer.profile_header_reader",
+  "name": "ProfileHeaderPlaybackReader",
+  "kind": "optimization",
+  "executionModel": "playback",
+  "pipelineStage": "producer",
+  "moduleFamilyID": "particularity.playback.family.profile_header_v1",
+  "version": 1,
+  "producesContracts": ["particularity.playback.profile_header_source.v1"],
+  "entryPoints": {},
+  "settings": {
+    "sections": [{
+      "id": "source",
+      "title": "Wordmark",
+      "controls": [
+        { "id": "text", "title": "Text", "type": "text", "defaultValue": "Nainoa Faulkner-Jackson" },
+        { "id": "nodeCount", "title": "Node Count", "type": "intSlider", "defaultValue": 3200, "minimum": 400, "maximum": 8000, "step": 100 }
+      ]
+    }]
+  }
+}

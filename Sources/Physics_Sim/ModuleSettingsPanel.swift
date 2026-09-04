@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct ModuleSettingsPanelView: View {
@@ -208,6 +209,12 @@ private struct GenericModuleSettingsSchemaView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+        case .color:
+            ModuleColorSettingControl(
+                title: control.title,
+                value: textBinding(for: control),
+                helpText: control.helpText
+            )
         }
     }
 
@@ -272,6 +279,63 @@ private struct GenericModuleSettingsSchemaView: View {
                     value: .text($0)
                 )
             }
+        )
+    }
+}
+
+/// A schema-driven color field for module-owned visual settings.
+struct ModuleColorSettingControl: View {
+    let title: String
+    @Binding var value: String
+    let helpText: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 8) {
+                Text(title)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                ColorPicker(title, selection: colorBinding, supportsOpacity: false)
+                    .labelsHidden()
+                TextField("#RRGGBB", text: $value)
+                    .font(.caption.monospaced())
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 84)
+                    .onSubmit { value = Self.hex(for: Self.color(from: value)) }
+            }
+            if let helpText {
+                Text(helpText)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var colorBinding: Binding<Color> {
+        Binding(
+            get: { Self.color(from: value) },
+            set: { value = Self.hex(for: $0) }
+        )
+    }
+
+    private static func color(from hex: String) -> Color {
+        let digits = hex.trimmingCharacters(in: CharacterSet(charactersIn: "# "))
+        guard digits.count == 6, let value = UInt64(digits, radix: 16) else { return .white }
+        return Color(
+            red: Double((value >> 16) & 0xFF) / 255,
+            green: Double((value >> 8) & 0xFF) / 255,
+            blue: Double(value & 0xFF) / 255
+        )
+    }
+
+    private static func hex(for color: Color) -> String {
+        let nsColor = NSColor(color).usingColorSpace(.sRGB) ?? .white
+        return String(
+            format: "#%02X%02X%02X",
+            Int((nsColor.redComponent * 255).rounded()),
+            Int((nsColor.greenComponent * 255).rounded()),
+            Int((nsColor.blueComponent * 255).rounded())
         )
     }
 }

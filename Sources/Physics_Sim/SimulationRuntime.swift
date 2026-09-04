@@ -138,6 +138,8 @@ final class SimulationRuntime: @unchecked Sendable {
         let particleCapacity: Int
         let debugLineBuffer: MTLBuffer?
         let debugRenderSegments: [SimulationDebugRenderSegment]
+        let presentationLineBuffer: MTLBuffer?
+        let presentationLineVertexCount: Int
 
         var particlePositionBuffer: MTLBuffer? { particleBuffer }
         var particleColorBuffer: MTLBuffer? { nil }
@@ -191,12 +193,15 @@ final class SimulationRuntime: @unchecked Sendable {
     private var customStandardPhysicsApplyPipeline: MTLComputePipelineState?
     private var toyPlaybackRuntime: ToyPlaybackRuntime?
     private var mlPlaybackRuntime: MLPlaybackRuntime?
+    private var profileHeaderPlaybackRuntime: ProfileHeaderPlaybackRuntime?
     private var mlPlaybackRuntimeLoadAttempted = false
     private var playbackCurrentSeconds: Double = 0
     private var playbackLastUptime: TimeInterval?
     private var playbackCurrentSampleIndex: Int?
     private var debugLineBuffer: MTLBuffer?
     private var debugLineSegmentBuffer: MTLBuffer?
+    private var presentationLineBuffer: MTLBuffer?
+    private var presentationLineVertexCount = 0
     private var activeParticleCount = 0
     private var particleCapacity = 0
     private var debugHistory = SimulationDebugHistory(historyCapacity: 8, visibilityDuration: 0.11)
@@ -221,6 +226,7 @@ final class SimulationRuntime: @unchecked Sendable {
         playbackRate: 1.0,
         playbackLooping: true,
         mlPlayback: MLPlaybackViewportSettings(),
+        profileHeader: ProfileHeaderViewportSettings(),
         fixedGridSubdivisions: FixedGridOptimizationModuleRuntime.defaultSubdivisions,
         fixedGridSubspaceCap: 2,
         fixedGridNeighborReadMode: .scratch
@@ -236,7 +242,9 @@ final class SimulationRuntime: @unchecked Sendable {
         activeParticleCount: 0,
         particleCapacity: 0,
         debugLineBuffer: nil,
-        debugRenderSegments: []
+        debugRenderSegments: [],
+        presentationLineBuffer: nil,
+        presentationLineVertexCount: 0
     )
     private var simulationStateSnapshot = SimulationViewportState(
         transportState: .stopped,
@@ -253,6 +261,7 @@ final class SimulationRuntime: @unchecked Sendable {
         playbackRate: 1.0,
         playbackLooping: true,
         mlPlayback: MLPlaybackViewportSettings(),
+        profileHeader: ProfileHeaderViewportSettings(),
         fixedGridSubdivisions: FixedGridOptimizationModuleRuntime.defaultSubdivisions,
         fixedGridSubspaceCap: 2,
         fixedGridNeighborReadMode: .scratch
@@ -430,6 +439,7 @@ final class SimulationRuntime: @unchecked Sendable {
                 || previousModules.completeModuleFamilyID != nextModules.completeModuleFamilyID {
                 toyPlaybackRuntime = nil
                 mlPlaybackRuntime = nil
+                profileHeaderPlaybackRuntime = nil
                 mlPlaybackRuntimeLoadAttempted = false
                 playbackCurrentSeconds = 0
                 playbackLastUptime = nil
@@ -567,7 +577,9 @@ final class SimulationRuntime: @unchecked Sendable {
                 activeParticleCount: activeParticleCount,
                 particleCapacity: particleCapacity,
                 debugLineBuffer: debugLineBuffer,
-                debugRenderSegments: debugHistory.renderSegments
+                debugRenderSegments: debugHistory.renderSegments,
+                presentationLineBuffer: presentationLineBuffer,
+                presentationLineVertexCount: presentationLineVertexCount
             )
         )
         Task { @MainActor in
@@ -673,12 +685,15 @@ final class SimulationRuntime: @unchecked Sendable {
         typeMatrixSidecarBackBuffer = nil
         toyPlaybackRuntime = nil
         mlPlaybackRuntime = nil
+        profileHeaderPlaybackRuntime = nil
         mlPlaybackRuntimeLoadAttempted = false
         playbackCurrentSeconds = 0
         playbackLastUptime = nil
         playbackCurrentSampleIndex = nil
         debugLineBuffer = nil
         debugLineSegmentBuffer = nil
+        presentationLineBuffer = nil
+        presentationLineVertexCount = 0
         activeParticleCount = 0
         particleCapacity = 0
         debugHistory.reset()
@@ -859,10 +874,22 @@ final class SimulationRuntime: @unchecked Sendable {
         if let mlPlaybackRuntime = playbackRuntime as? MLPlaybackRuntime {
             mlPlaybackRuntime.updateSettings(currentSimulationState.mlPlayback)
         }
+        if let profileRuntime = playbackRuntime as? ProfileHeaderPlaybackRuntime {
+            profileRuntime.motionRadius = currentSimulationState.profileHeader.motionRadius
+        }
 
         let frame = playbackRuntime.frame(at: playbackCurrentSeconds)
         playbackCurrentSampleIndex = frame.sampleIndex
         uploadPlaybackParticles(frame.particles)
+        if let profileRuntime = playbackRuntime as? ProfileHeaderPlaybackRuntime {
+            uploadProfileHeaderVerts(
+                for: frame.particles,
+                connections: profileRuntime.connectionPairs(
+                    coverage: currentSimulationState.profileHeader.vertCoverage,
+                    maxConnections: currentSimulationState.profileHeader.connectionsPerNode
+                )
+            )
+        }
         metricsAccumulator.recordPhysicsStep(at: now)
         publishSnapshots()
     }
@@ -873,6 +900,9 @@ final class SimulationRuntime: @unchecked Sendable {
         }
         if isMLPlaybackActive {
             return ensureMLPlaybackRuntime()
+        }
+        if isProfileHeaderPlaybackActive {
+            return ensureProfileHeaderPlaybackRuntime()
         }
         return nil
     }
@@ -906,6 +936,24 @@ final class SimulationRuntime: @unchecked Sendable {
         RuntimeEventLogger.log(
             "ml_playback loaded duration=\(String(format: "%.3f", runtime.timeline.durationSeconds)) samples=\(runtime.timeline.sampleCount ?? 0)"
         )
+        return runtime
+    }
+
+    private func ensureProfileHeaderPlaybackRuntime() -> ProfileHeaderPlaybackRuntime {
+        let settings = currentSimulationState.profileHeader
+        if let profileHeaderPlaybackRuntime,
+           profileHeaderPlaybackRuntime.sourceText == settings.text,
+           profileHeaderPlaybackRuntime.sourceNodeCount == settings.nodeCount {
+            return profileHeaderPlaybackRuntime
+        }
+        let runtime = ProfileHeaderPlaybackRuntime(
+            text: settings.text,
+            nodeCount: settings.nodeCount,
+            motionRadius: settings.motionRadius,
+            durationSeconds: 15
+        )
+        profileHeaderPlaybackRuntime = runtime
+        RuntimeEventLogger.log("profile_header_playback loaded nodes=\(runtime.frame(at: 0).particles.count)")
         return runtime
     }
 
@@ -956,6 +1004,64 @@ final class SimulationRuntime: @unchecked Sendable {
         particleCapacity = (particleFrontBuffer?.length ?? 0) / MemoryLayout<ParticleState>.stride
         debugHistory.reset()
         clearLeaderCommunicationLog()
+    }
+
+    private func uploadProfileHeaderVerts(
+        for particles: [ParticleState],
+        connections: [(source: Int, target: Int)]
+    ) {
+        let settings = currentSimulationState.profileHeader
+        guard settings.vertCoverage > 0, settings.vertThickness > 0, !connections.isEmpty else {
+            presentationLineBuffer = nil
+            presentationLineVertexCount = 0
+            return
+        }
+        var vertices: [ProfileHeaderVertVertex] = []
+        vertices.reserveCapacity(connections.count * 6)
+        for connection in connections {
+            let sourceIndex = connection.source
+            let targetIndex = connection.target
+            guard particles.indices.contains(sourceIndex), particles.indices.contains(targetIndex) else { continue }
+            let sourcePosition = particles[sourceIndex].position
+            let source = SIMD3<Float>(sourcePosition.x, sourcePosition.y, sourcePosition.z)
+            let targetPosition = particles[targetIndex].position
+            let target = SIMD3<Float>(targetPosition.x, targetPosition.y, targetPosition.z)
+            let delta = target - source
+            let distance = simd_length(delta)
+            guard distance > 0.000_001 else { continue }
+            let direction = delta / distance
+            let sourceT = min(max((particles[sourceIndex].impulse.x - 0.004) / 0.006, 0), 1)
+            let targetT = min(max((particles[targetIndex].impulse.x - 0.004) / 0.006, 0), 1)
+            let sourceRadius = simd_mix(settings.nodeSizeFloor, settings.nodeSizeCeiling, sourceT)
+            let targetRadius = simd_mix(settings.nodeSizeFloor, settings.nodeSizeCeiling, targetT)
+            let smallerRadius = min(sourceRadius, targetRadius)
+            let hash = ProfileHeaderVertGeometry.varianceSample(
+                sourceIndex: sourceIndex,
+                targetIndex: targetIndex
+            )
+            let varianceScale = 1 - settings.vertThicknessVariance * hash
+            let halfWidth = smallerRadius * 0.46 * settings.vertThickness * varianceScale
+            let perpendicular = SIMD3<Float>(-direction.z, 0, direction.x) * halfWidth
+            let start = source + direction * (smallerRadius * 0.25)
+            let end = target - direction * (smallerRadius * 0.25)
+            let a = start + perpendicular
+            let b = start - perpendicular
+            let c = end + perpendicular
+            let d = end - perpendicular
+            vertices.append(contentsOf: [
+                ProfileHeaderVertVertex(a), ProfileHeaderVertVertex(b), ProfileHeaderVertVertex(c),
+                ProfileHeaderVertVertex(b), ProfileHeaderVertVertex(d), ProfileHeaderVertVertex(c),
+            ])
+        }
+        presentationLineVertexCount = vertices.count
+        guard !vertices.isEmpty else { presentationLineBuffer = nil; return }
+        let byteCount = MemoryLayout<ProfileHeaderVertVertex>.stride * vertices.count
+        if presentationLineBuffer?.length ?? 0 < byteCount {
+            presentationLineBuffer = device.makeBuffer(length: byteCount, options: .storageModeShared)
+        }
+        vertices.withUnsafeBytes { bytes in
+            presentationLineBuffer?.contents().copyMemory(from: bytes.baseAddress!, byteCount: byteCount)
+        }
     }
 
     private func encodePhysicsAccumulate(
@@ -1331,7 +1437,9 @@ final class SimulationRuntime: @unchecked Sendable {
             activeParticleCount: activeParticleCount,
             particleCapacity: particleCapacity,
             debugLineBuffer: debugLineBuffer,
-            debugRenderSegments: debugHistory.renderSegments
+            debugRenderSegments: debugHistory.renderSegments,
+            presentationLineBuffer: presentationLineBuffer,
+            presentationLineVertexCount: presentationLineVertexCount
         )
         let simulationState = currentSimulationState
 
@@ -1736,8 +1844,12 @@ final class SimulationRuntime: @unchecked Sendable {
         activeModules.completeModuleFamilyID == ModuleCatalog.mlPlaybackFamilyID
     }
 
+    private var isProfileHeaderPlaybackActive: Bool {
+        activeModules.completeModuleFamilyID == ModuleCatalog.profileHeaderPlaybackFamilyID
+    }
+
     private var isPlaybackRuntimeActive: Bool {
-        isToyPlaybackActive || isMLPlaybackActive
+        isToyPlaybackActive || isMLPlaybackActive || isProfileHeaderPlaybackActive
     }
 
     private var isTemplatePhysicsActive: Bool {

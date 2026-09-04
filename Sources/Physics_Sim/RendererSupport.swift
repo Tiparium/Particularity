@@ -18,6 +18,30 @@ struct ParticleUniforms {
     var padding: UInt32 = 0
 }
 
+struct ProfileHeaderParticleUniforms {
+    var mvp: float4x4
+    var nodeColor: SIMD4<Float>
+    var nodeSizeFloor: Float
+    var nodeSizeCeiling: Float
+    var viewportHeight: Float
+    var projectionYScale: Float
+}
+
+struct ProfileHeaderVertVertex {
+    var position: SIMD4<Float>
+
+    init(_ position: SIMD3<Float>) {
+        self.position = SIMD4<Float>(position.x, position.y, position.z, 1)
+    }
+}
+
+enum ProfileHeaderVertGeometry {
+    static func varianceSample(sourceIndex: Int, targetIndex: Int) -> Float {
+        let mixed = (sourceIndex &* 73_856_093) ^ (targetIndex &* 19_349_663)
+        return Float(mixed & 0xFFFF) / 65_535
+    }
+}
+
 struct MLPlaybackSurfaceUniforms {
     var mvp: float4x4
     var spectrumOffset: Float

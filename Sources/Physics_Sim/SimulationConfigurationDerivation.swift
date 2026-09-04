@@ -74,6 +74,7 @@ enum SimulationConfigurationDerivation {
                 editorState: editorState,
                 activeModules: activeModules
             ),
+            profileHeader: profileHeaderSettings(editorState: editorState, activeModules: activeModules),
             fixedGridSubdivisions: max(1, editorState.optimizationState.fixedGridSubdivisions),
             fixedGridSubspaceCap: max(
                 1,
@@ -84,6 +85,34 @@ enum SimulationConfigurationDerivation {
             ),
             fixedGridNeighborReadMode: editorState.optimizationState.fixedGridNeighborReadMode
         )
+    }
+
+    private static func profileHeaderSettings(editorState: SimulationEditorState, activeModules: ActiveModuleSet) -> ProfileHeaderViewportSettings {
+        guard activeModules.completeModuleFamilyID == ModuleCatalog.profileHeaderPlaybackFamilyID else { return ProfileHeaderViewportSettings() }
+        let producerSettings = editorState.moduleSettings[activeModules.optimization.moduleID] ?? [:]
+        let processorSettings = editorState.moduleSettings[activeModules.physics.moduleID] ?? [:]
+        let presenterSettings = editorState.moduleSettings[activeModules.visual.moduleID] ?? [:]
+        return ProfileHeaderViewportSettings(
+            isActive: true,
+            text: producerSettings["text"]?.textValue ?? "Nainoa Faulkner-Jackson",
+            nodeCount: min(max(Int(producerSettings["nodeCount"]?.numberValue ?? 3_200), 400), 8_000),
+            motionRadius: Float(min(max(processorSettings["motionRadius"]?.numberValue ?? 0.018, 0), 0.08)),
+            vertCoverage: Float(min(max(processorSettings["vertCoverage"]?.numberValue ?? 0.45, 0), 1)),
+            connectionsPerNode: min(max(Int(processorSettings["connectionsPerNode"]?.numberValue ?? 1), 1), 6),
+            nodeColor: color(presenterSettings["nodeColor"]?.textValue, fallback: SIMD4<Float>(0.96, 0.97, 1, 1)),
+            vertColor: color(presenterSettings["vertColor"]?.textValue, fallback: SIMD4<Float>(0.53, 0.64, 1, 0.65)),
+            nodeSizeFloor: Float(presenterSettings["nodeSizeFloor"]?.numberValue ?? 0.004),
+            nodeSizeCeiling: Float(presenterSettings["nodeSizeCeiling"]?.numberValue ?? 0.010),
+            vertThickness: Float(min(max(presenterSettings["vertThickness"]?.numberValue ?? 0.32, 0), 1)),
+            vertThicknessVariance: Float(min(max(presenterSettings["vertThicknessVariance"]?.numberValue ?? 0.35, 0), 1))
+        )
+    }
+
+    private static func color(_ text: String?, fallback: SIMD4<Float>) -> SIMD4<Float> {
+        guard let text else { return fallback }
+        let digits = text.trimmingCharacters(in: CharacterSet(charactersIn: "# "))
+        guard digits.count == 6, let value = UInt32(digits, radix: 16) else { return fallback }
+        return SIMD4<Float>(Float((value >> 16) & 255) / 255, Float((value >> 8) & 255) / 255, Float(value & 255) / 255, fallback.w)
     }
 
     private static func mlPlaybackSettings(

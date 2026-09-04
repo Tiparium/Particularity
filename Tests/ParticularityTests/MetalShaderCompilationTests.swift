@@ -14,6 +14,7 @@ struct MetalShaderCompilationTests {
             SimulationMetalSharedSource.source,
             DefaultVisualModuleRuntime.shaderSource,
             MLTrainingPlaybackPresenterRuntime.shaderSource,
+            ProfileHeaderPlaybackPresenterRuntime.shaderSource,
             try PhysicsShaderSourceFiles.defaultPhysicsSource(),
             try PhysicsShaderSourceFiles.packagedPhysicsSources().joined(separator: "\n\n"),
             DefaultOptimizationModuleRuntime.computeShaderSource,
@@ -24,5 +25,9 @@ struct MetalShaderCompilationTests {
         #expect(library.makeFunction(name: "ml_playback_surface_mesh_vs") != nil)
         #expect(library.makeFunction(name: "ml_playback_surface_mesh_fs") != nil)
         #expect(library.makeFunction(name: "ml_playback_surface_mesh_smooth") != nil)
+        #expect(library.makeFunction(name: "profile_header_particle_vs") != nil)
+        #expect(library.makeFunction(name: "profile_header_particle_fs") != nil)
+        #expect(library.makeFunction(name: "profile_header_vert_vs") != nil)
+        #expect(library.makeFunction(name: "profile_header_vert_fs") != nil)
     }
 }
