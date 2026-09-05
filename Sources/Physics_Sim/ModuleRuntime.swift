@@ -1266,9 +1266,11 @@ struct SimulationViewportState: Equatable {
 struct ProfileHeaderViewportSettings: Equatable {
     var isActive = false
     var text = "Nainoa Faulkner-Jackson"
-    var nodeCount = 3_200
+    var nodesPerCharacter = 500
+    var textScale: Float = 0.5
     var motionRadius: Float = 0.018
     var vertCoverage: Float = 0.45
+    var geometryAdherence: Float = 0.35
     var connectionsPerNode = 1
     var nodeColor = SIMD4<Float>(0.96, 0.97, 1.0, 1.0)
     var vertColor = SIMD4<Float>(0.53, 0.64, 1.0, 0.65)

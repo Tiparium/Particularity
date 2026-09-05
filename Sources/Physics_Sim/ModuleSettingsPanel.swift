@@ -197,18 +197,11 @@ private struct GenericModuleSettingsSchemaView: View {
                 }
             }
         case .text:
-            VStack(alignment: .leading, spacing: 4) {
-                Text(control.title)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                TextField(control.title, text: textBinding(for: control))
-                    .textFieldStyle(.roundedBorder)
-                if let helpText = control.helpText {
-                    Text(helpText)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-            }
+            ModuleDebouncedTextSettingControl(
+                title: control.title,
+                value: textBinding(for: control),
+                helpText: control.helpText
+            )
         case .color:
             ModuleColorSettingControl(
                 title: control.title,
@@ -280,6 +273,58 @@ private struct GenericModuleSettingsSchemaView: View {
                 )
             }
         )
+    }
+}
+
+/// Keeps typing local while delaying potentially expensive module reconfiguration.
+private struct ModuleDebouncedTextSettingControl: View {
+    let title: String
+    @Binding var value: String
+    let helpText: String?
+    @State private var draft: String
+
+    init(title: String, value: Binding<String>, helpText: String?) {
+        self.title = title
+        _value = value
+        self.helpText = helpText
+        _draft = State(initialValue: value.wrappedValue)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            TextField(title, text: $draft)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit(commit)
+            if let helpText {
+                Text(helpText)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .task(id: draft) {
+            guard draft != value else { return }
+            do {
+                try await Task.sleep(for: .milliseconds(400))
+            } catch {
+                return
+            }
+            commit()
+        }
+        .onChange(of: value) { _, nextValue in
+            if nextValue != draft {
+                draft = nextValue
+            }
+        }
+        .onDisappear(perform: commit)
+    }
+
+    private func commit() {
+        if value != draft {
+            value = draft
+        }
     }
 }
 

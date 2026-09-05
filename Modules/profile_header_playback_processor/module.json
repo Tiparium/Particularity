@@ -17,6 +17,7 @@
       "controls": [
         { "id": "motionRadius", "title": "Motion Radius", "type": "slider", "defaultValue": 0.018, "minimum": 0.0, "maximum": 0.08, "step": 0.002 },
         { "id": "vertCoverage", "title": "Vert Density", "type": "slider", "defaultValue": 0.45, "minimum": 0, "maximum": 1, "step": 0.01 },
+        { "id": "geometryAdherence", "title": "Geometry Adherence", "type": "slider", "defaultValue": 0.35, "minimum": 0, "maximum": 1, "step": 0.01 },
         { "id": "connectionsPerNode", "title": "Connections Per Node", "type": "intSlider", "defaultValue": 1, "minimum": 1, "maximum": 6, "step": 1 }
       ]
     }]

@@ -95,9 +95,11 @@ enum SimulationConfigurationDerivation {
         return ProfileHeaderViewportSettings(
             isActive: true,
             text: producerSettings["text"]?.textValue ?? "Nainoa Faulkner-Jackson",
-            nodeCount: min(max(Int(producerSettings["nodeCount"]?.numberValue ?? 3_200), 400), 8_000),
+            nodesPerCharacter: min(max(Int(producerSettings["nodesPerCharacter"]?.numberValue ?? 500), 50), 1_000),
+            textScale: Float(min(max(producerSettings["textScale"]?.numberValue ?? 0.5, 0.2), 2)),
             motionRadius: Float(min(max(processorSettings["motionRadius"]?.numberValue ?? 0.018, 0), 0.08)),
             vertCoverage: Float(min(max(processorSettings["vertCoverage"]?.numberValue ?? 0.45, 0), 1)),
+            geometryAdherence: Float(min(max(processorSettings["geometryAdherence"]?.numberValue ?? 0.35, 0), 1)),
             connectionsPerNode: min(max(Int(processorSettings["connectionsPerNode"]?.numberValue ?? 1), 1), 6),
             nodeColor: color(presenterSettings["nodeColor"]?.textValue, fallback: SIMD4<Float>(0.96, 0.97, 1, 1)),
             vertColor: color(presenterSettings["vertColor"]?.textValue, fallback: SIMD4<Float>(0.53, 0.64, 1, 0.65)),

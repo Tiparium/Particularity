@@ -886,6 +886,7 @@ final class SimulationRuntime: @unchecked Sendable {
                 for: frame.particles,
                 connections: profileRuntime.connectionPairs(
                     coverage: currentSimulationState.profileHeader.vertCoverage,
+                    geometryAdherence: currentSimulationState.profileHeader.geometryAdherence,
                     maxConnections: currentSimulationState.profileHeader.connectionsPerNode
                 )
             )
@@ -943,12 +944,14 @@ final class SimulationRuntime: @unchecked Sendable {
         let settings = currentSimulationState.profileHeader
         if let profileHeaderPlaybackRuntime,
            profileHeaderPlaybackRuntime.sourceText == settings.text,
-           profileHeaderPlaybackRuntime.sourceNodeCount == settings.nodeCount {
+           profileHeaderPlaybackRuntime.sourceNodesPerCharacter == settings.nodesPerCharacter,
+           profileHeaderPlaybackRuntime.sourceTextScale == settings.textScale {
             return profileHeaderPlaybackRuntime
         }
         let runtime = ProfileHeaderPlaybackRuntime(
             text: settings.text,
-            nodeCount: settings.nodeCount,
+            nodesPerCharacter: settings.nodesPerCharacter,
+            textScale: settings.textScale,
             motionRadius: settings.motionRadius,
             durationSeconds: 15
         )

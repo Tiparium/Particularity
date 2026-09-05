@@ -16,16 +16,36 @@ struct ProfileHeaderPlaybackRuntimeTests {
         }
     }
 
-    @Test("connects only nearby glyph nodes")
-    func connectsOnlyNearbyGlyphNodes() {
+    @Test("assigns one ownership region per rendered glyph")
+    func assignsOneOwnershipRegionPerRenderedGlyph() {
         let runtime = ProfileHeaderPlaybackRuntime(
-            text: "Nainoa Faulkner-Jackson",
-            nodeCount: 1_200,
+            text: "oo",
+            nodesPerCharacter: 300,
+            textScale: 1,
             motionRadius: 0,
             durationSeconds: 15
         )
         let particles = runtime.frame(at: 0).particles
-        let connections = runtime.connectionPairs(coverage: 1, maxConnections: 2)
+        let owners = Set(particles.indices.compactMap(runtime.glyphOwner(ofNodeAt:)))
+
+        #expect(owners.count == 2)
+    }
+
+    @Test("connects only nearby glyph nodes")
+    func connectsOnlyNearbyGlyphNodes() {
+        let runtime = ProfileHeaderPlaybackRuntime(
+            text: "Nainoa Faulkner-Jackson",
+            nodesPerCharacter: 60,
+            textScale: 0.5,
+            motionRadius: 0,
+            durationSeconds: 15
+        )
+        let particles = runtime.frame(at: 0).particles
+        let connections = runtime.connectionPairs(
+            coverage: 1,
+            geometryAdherence: 0.35,
+            maxConnections: 2
+        )
 
         #expect(!connections.isEmpty)
         #expect(connections.allSatisfy { connection in
@@ -34,25 +54,32 @@ struct ProfileHeaderPlaybackRuntimeTests {
                 particles[connection.target].position
             ) < 0.075
         })
+        let crossGlyphCount = connections.count { connection in
+            runtime.glyphOwner(ofNodeAt: connection.source)
+                != runtime.glyphOwner(ofNodeAt: connection.target)
+        }
+        #expect(Float(crossGlyphCount) / Float(connections.count) < 0.05)
     }
 
-    @Test("honors requested node count")
-    func honorsRequestedNodeCount() {
+    @Test("derives node count from visible characters")
+    func derivesNodeCountFromVisibleCharacters() {
         let runtime = ProfileHeaderPlaybackRuntime(
-            text: "Nainoa Faulkner-Jackson",
-            nodeCount: 1_200,
+            text: "AB CD",
+            nodesPerCharacter: 200,
+            textScale: 1,
             motionRadius: 0.018,
             durationSeconds: 15
         )
 
-        #expect(runtime.frame(at: 0).particles.count == 1_200)
+        #expect(runtime.frame(at: 0).particles.count == 800)
     }
 
     @Test("closes its deterministic loop")
     func closesDeterministicLoop() {
         let runtime = ProfileHeaderPlaybackRuntime(
             text: "Nainoa",
-            nodeCount: 600,
+            nodesPerCharacter: 100,
+            textScale: 1,
             motionRadius: 0.018,
             durationSeconds: 15
         )

@@ -1,4 +1,5 @@
 import AppKit
+import CoreText
 import Foundation
 import simd
 
@@ -14,6 +15,19 @@ final class ProfileHeaderPlaybackRuntime: ParticlePlaybackRuntime {
         let x: Int
         let y: Int
         let seed: Float
+        let glyphOwner: Int
+    }
+
+    private struct GlyphInterval {
+        let owner: Int
+        let lowerX: CGFloat
+        let upperX: CGFloat
+
+        func distance(to x: CGFloat) -> CGFloat {
+            if x < lowerX { return lowerX - x }
+            if x > upperX { return x - upperX }
+            return 0
+        }
     }
 
     private struct Anchor {
@@ -23,25 +37,30 @@ final class ProfileHeaderPlaybackRuntime: ParticlePlaybackRuntime {
         let radius: Float
         let tangent: SIMD2<Float>
         let tangentConfidence: Float
+        let glyphOwner: Int
     }
 
     private struct GeneratedProfile {
         let anchors: [Anchor]
-        let connectionCandidates: [[Int]]
+        let connectionCandidates: [[(index: Int, distance: Float)]]
+        let maximumConnectionDistance: Float
     }
 
     private struct ConnectionRequest: Equatable {
         let coverage: Float
+        let geometryAdherence: Float
         let maxConnections: Int
     }
 
     private let durationSeconds: Double
     private let anchors: [Anchor]
-    private let connectionCandidates: [[Int]]
+    private let connectionCandidates: [[(index: Int, distance: Float)]]
+    private let maximumConnectionDistance: Float
     private var cachedConnectionRequest: ConnectionRequest?
     private var cachedConnectionPairs: [(source: Int, target: Int)] = []
     let sourceText: String
-    let sourceNodeCount: Int
+    let sourceNodesPerCharacter: Int
+    let sourceTextScale: Float
     var motionRadius: Float
 
     var timeline: PlaybackTimelineState {
@@ -55,14 +74,26 @@ final class ProfileHeaderPlaybackRuntime: ParticlePlaybackRuntime {
         )
     }
 
-    init(text: String, nodeCount: Int, motionRadius: Float, durationSeconds: Double) {
+    init(
+        text: String,
+        nodesPerCharacter: Int,
+        textScale: Float,
+        motionRadius: Float,
+        durationSeconds: Double
+    ) {
         self.durationSeconds = max(4, durationSeconds)
         sourceText = text
-        sourceNodeCount = nodeCount
+        sourceNodesPerCharacter = nodesPerCharacter
+        sourceTextScale = textScale
         self.motionRadius = motionRadius
-        let generated = Self.makeProfile(text: text, nodeCount: nodeCount)
+        let generated = Self.makeProfile(
+            text: text,
+            nodesPerCharacter: nodesPerCharacter,
+            textScale: textScale
+        )
         anchors = generated.anchors
         connectionCandidates = generated.connectionCandidates
+        maximumConnectionDistance = generated.maximumConnectionDistance
     }
 
     func frame(at seconds: Double) -> PlaybackParticleFrame {
@@ -91,9 +122,17 @@ final class ProfileHeaderPlaybackRuntime: ParticlePlaybackRuntime {
         )
     }
 
-    func connectionPairs(coverage: Float, maxConnections: Int) -> [(source: Int, target: Int)] {
+    func connectionPairs(
+        coverage: Float,
+        geometryAdherence: Float,
+        maxConnections: Int
+    ) -> [(source: Int, target: Int)] {
         guard coverage > 0, maxConnections > 0 else { return [] }
-        let request = ConnectionRequest(coverage: min(coverage, 1), maxConnections: maxConnections)
+        let request = ConnectionRequest(
+            coverage: min(coverage, 1),
+            geometryAdherence: min(max(geometryAdherence, 0), 1),
+            maxConnections: maxConnections
+        )
         if cachedConnectionRequest == request {
             return cachedConnectionPairs
         }
@@ -106,7 +145,23 @@ final class ProfileHeaderPlaybackRuntime: ParticlePlaybackRuntime {
             guard sourceSample < request.coverage else { continue }
 
             var sourceConnectionCount = 0
-            for targetIndex in connectionCandidates[sourceIndex] {
+            let rankedCandidates = connectionCandidates[sourceIndex].sorted {
+                let left = connectionScore(
+                    sourceIndex: sourceIndex,
+                    targetIndex: $0.index,
+                    geometryAdherence: request.geometryAdherence
+                )
+                let right = connectionScore(
+                    sourceIndex: sourceIndex,
+                    targetIndex: $1.index,
+                    geometryAdherence: request.geometryAdherence
+                )
+                if left != right { return left < right }
+                if $0.distance != $1.distance { return $0.distance < $1.distance }
+                return $0.index < $1.index
+            }
+            for candidate in rankedCandidates {
+                let targetIndex = candidate.index
                 let lower = min(sourceIndex, targetIndex)
                 let upper = max(sourceIndex, targetIndex)
                 let key = (UInt64(lower) << 32) | UInt64(upper)
@@ -121,8 +176,55 @@ final class ProfileHeaderPlaybackRuntime: ParticlePlaybackRuntime {
         return cachedConnectionPairs
     }
 
-    private static func makeProfile(text: String, nodeCount: Int) -> GeneratedProfile {
-        let canvas = NSSize(width: 1800, height: 520)
+    func glyphOwner(ofNodeAt index: Int) -> Int? {
+        guard anchors.indices.contains(index) else { return nil }
+        return anchors[index].glyphOwner
+    }
+
+    private func connectionScore(
+        sourceIndex: Int,
+        targetIndex: Int,
+        geometryAdherence: Float
+    ) -> Float {
+        let delta = SIMD2<Float>(
+            anchors[targetIndex].position.x - anchors[sourceIndex].position.x,
+            anchors[targetIndex].position.z - anchors[sourceIndex].position.z
+        )
+        let distance = simd_length(delta)
+        guard distance > 0 else { return .greatestFiniteMagnitude }
+        let direction = delta / distance
+        let sourceAlignment = abs(simd_dot(direction, anchors[sourceIndex].tangent))
+        let targetAlignment = abs(simd_dot(direction, anchors[targetIndex].tangent))
+        let confidenceSum = anchors[sourceIndex].tangentConfidence + anchors[targetIndex].tangentConfidence
+        let alignmentPenalty: Float
+        if confidenceSum > 0.15 {
+            alignmentPenalty = (
+                (1 - sourceAlignment) * anchors[sourceIndex].tangentConfidence
+                    + (1 - targetAlignment) * anchors[targetIndex].tangentConfidence
+            ) / confidenceSum
+        } else {
+            alignmentPenalty = 0
+        }
+        let distanceScore = distance / maximumConnectionDistance
+        let crossesGlyphBoundary = anchors[sourceIndex].glyphOwner != anchors[targetIndex].glyphOwner
+        let ownershipPenalty: Float = crossesGlyphBoundary ? 2 : 0
+        return distanceScore * (1 - geometryAdherence)
+            + alignmentPenalty * geometryAdherence
+            + ownershipPenalty
+    }
+
+    private static func makeProfile(
+        text: String,
+        nodesPerCharacter: Int,
+        textScale: Float
+    ) -> GeneratedProfile {
+        let font = NSFont.systemFont(ofSize: 260, weight: .semibold)
+        let attributes: [NSAttributedString.Key: Any] = [.font: font]
+        let measured = (text as NSString).size(withAttributes: attributes)
+        let canvas = NSSize(
+            width: max(240, ceil(measured.width + 120)),
+            height: 520
+        )
         let bitmap = NSBitmapImageRep(
             bitmapDataPlanes: nil,
             pixelsWide: Int(canvas.width),
@@ -141,15 +243,18 @@ final class ProfileHeaderPlaybackRuntime: ParticlePlaybackRuntime {
         NSColor.clear.setFill()
         NSBezierPath(rect: NSRect(origin: .zero, size: canvas)).fill()
 
-        let baseFont = NSFont.systemFont(ofSize: 260, weight: .semibold)
-        let attributes: [NSAttributedString.Key: Any] = [.font: baseFont]
-        let measured = (text as NSString).size(withAttributes: attributes)
-        let scale = min(1, (canvas.width * 0.90) / max(measured.width, 1))
-        let font = NSFont.systemFont(ofSize: baseFont.pointSize * scale, weight: .semibold)
         let finalAttributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.white]
         let finalSize = (text as NSString).size(withAttributes: finalAttributes)
+        let drawOrigin = NSPoint(
+            x: (canvas.width - finalSize.width) * 0.5,
+            y: (canvas.height - finalSize.height) * 0.5
+        )
+        let textLine = CTLineCreateWithAttributedString(
+            NSAttributedString(string: text, attributes: finalAttributes)
+        )
+        let glyphIntervals = makeGlyphIntervals(for: textLine)
         (text as NSString).draw(
-            at: NSPoint(x: (canvas.width - finalSize.width) * 0.5, y: (canvas.height - finalSize.height) * 0.5),
+            at: drawOrigin,
             withAttributes: finalAttributes
         )
         NSGraphicsContext.restoreGraphicsState()
@@ -164,10 +269,18 @@ final class ProfileHeaderPlaybackRuntime: ParticlePlaybackRuntime {
                 let offset = y * bitmap.bytesPerRow + x * 4
                 guard data[offset + 3] > 96 else { continue }
                 let seed = Float((x &* 73856093) ^ (y &* 19349663))
-                samples.append(RasterSample(x: x, y: y, seed: seed))
+                let localX = CGFloat(x) - drawOrigin.x
+                samples.append(RasterSample(
+                    x: x,
+                    y: y,
+                    seed: seed,
+                    glyphOwner: glyphOwner(at: localX, intervals: glyphIntervals)
+                ))
             }
         }
-        let targetCount = min(max(1, nodeCount), samples.count)
+        let characterCount = max(1, text.count { !$0.isWhitespace })
+        let requestedNodeCount = min(24_000, max(1, nodesPerCharacter) * characterCount)
+        let targetCount = min(requestedNodeCount, samples.count)
         let selectedSamples: [RasterSample]
         if targetCount < samples.count {
             let selectionStep = Double(samples.count) / Double(targetCount)
@@ -184,13 +297,15 @@ final class ProfileHeaderPlaybackRuntime: ParticlePlaybackRuntime {
             spatialGrid[GridCell(x: sample.x / cellSize, y: sample.y / cellSize), default: []].append(index)
         }
 
+        let worldUnitsPerPixel: Float = 3 / 1_800
+        let appliedTextScale = min(max(textScale, 0.2), 2)
         let basePositions = selectedSamples.map { sample -> SIMD3<Float> in
             let jitterX = sin(sample.seed) * Float(gridStep) * 0.18
             let jitterY = cos(sample.seed * 0.73) * Float(gridStep) * 0.18
             return SIMD3<Float>(
-                (Float(sample.x) + jitterX) / Float(width) * 3.0 - 1.5,
+                (Float(sample.x) + jitterX - Float(width) * 0.5) * worldUnitsPerPixel * appliedTextScale,
                 0,
-                0.425 - (Float(sample.y) + jitterY) / Float(height) * 0.85
+                -(Float(sample.y) + jitterY - Float(height) * 0.5) * worldUnitsPerPixel * appliedTextScale
             )
         }
 
@@ -240,15 +355,16 @@ final class ProfileHeaderPlaybackRuntime: ParticlePlaybackRuntime {
                 phaseB: cos(sample.seed * 0.000013) * .pi,
                 radius: 0.004 + abs(sin(sample.seed * 0.00002)) * 0.006,
                 tangent: tangentData[index].0,
-                tangentConfidence: tangentData[index].1
+                tangentConfidence: tangentData[index].1,
+                glyphOwner: sample.glyphOwner
             )
         }
 
-        let maximumConnectionDistance: Float = 0.075
-        let connectionCandidates = anchors.indices.map { sourceIndex -> [Int] in
+        let maximumConnectionDistance: Float = 0.075 * appliedTextScale
+        let connectionCandidates = anchors.indices.map { sourceIndex -> [(index: Int, distance: Float)] in
             let sample = selectedSamples[sourceIndex]
             let cell = GridCell(x: sample.x / cellSize, y: sample.y / cellSize)
-            var scoredCandidates: [(index: Int, score: Float, distance: Float)] = []
+            var candidates: [(index: Int, distance: Float)] = []
 
             for cellY in (cell.y - 1)...(cell.y + 1) {
                 for cellX in (cell.x - 1)...(cell.x + 1) {
@@ -265,36 +381,54 @@ final class ProfileHeaderPlaybackRuntime: ParticlePlaybackRuntime {
                             bitmap: bitmap
                         ) else { continue }
 
-                        let direction = delta / distance
-                        let sourceAlignment = abs(simd_dot(direction, anchors[sourceIndex].tangent))
-                        let targetAlignment = abs(simd_dot(direction, anchors[targetIndex].tangent))
-                        let confidenceSum = anchors[sourceIndex].tangentConfidence + anchors[targetIndex].tangentConfidence
-                        let alignmentPenalty: Float
-                        if confidenceSum > 0.15 {
-                            alignmentPenalty = (
-                                (1 - sourceAlignment) * anchors[sourceIndex].tangentConfidence
-                                    + (1 - targetAlignment) * anchors[targetIndex].tangentConfidence
-                            ) / confidenceSum
-                        } else {
-                            alignmentPenalty = 0
-                        }
-                        let distanceScore = distance / maximumConnectionDistance
-                        let score = distanceScore * 0.65 + alignmentPenalty * 0.35
-                        scoredCandidates.append((targetIndex, score, distance))
+                        candidates.append((targetIndex, distance))
                     }
                 }
             }
 
-            return scoredCandidates
-                .sorted {
-                    if $0.score != $1.score { return $0.score < $1.score }
-                    if $0.distance != $1.distance { return $0.distance < $1.distance }
-                    return $0.index < $1.index
-                }
-                .prefix(16)
-                .map(\.index)
+            return candidates
         }
-        return GeneratedProfile(anchors: anchors, connectionCandidates: connectionCandidates)
+        return GeneratedProfile(
+            anchors: anchors,
+            connectionCandidates: connectionCandidates,
+            maximumConnectionDistance: maximumConnectionDistance
+        )
+    }
+
+    private static func makeGlyphIntervals(for line: CTLine) -> [GlyphInterval] {
+        let runs = CTLineGetGlyphRuns(line) as NSArray
+        var intervals: [GlyphInterval] = []
+        var owner = 0
+
+        for case let run as CTRun in runs {
+            let glyphCount = CTRunGetGlyphCount(run)
+            guard glyphCount > 0 else { continue }
+            var positions = [CGPoint](repeating: .zero, count: glyphCount)
+            var advances = [CGSize](repeating: .zero, count: glyphCount)
+            CTRunGetPositions(run, CFRange(location: 0, length: glyphCount), &positions)
+            CTRunGetAdvances(run, CFRange(location: 0, length: glyphCount), &advances)
+
+            for glyphIndex in 0..<glyphCount {
+                let start = positions[glyphIndex].x
+                let end = start + advances[glyphIndex].width
+                intervals.append(GlyphInterval(
+                    owner: owner,
+                    lowerX: min(start, end),
+                    upperX: max(start, end)
+                ))
+                owner += 1
+            }
+        }
+        return intervals.sorted { $0.lowerX < $1.lowerX }
+    }
+
+    private static func glyphOwner(at x: CGFloat, intervals: [GlyphInterval]) -> Int {
+        intervals.min {
+            let leftDistance = $0.distance(to: x)
+            let rightDistance = $1.distance(to: x)
+            if leftDistance != rightDistance { return leftDistance < rightDistance }
+            return $0.owner < $1.owner
+        }?.owner ?? 0
     }
 
     private static func lineRemainsInsideGlyph(
