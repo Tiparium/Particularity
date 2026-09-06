@@ -53,6 +53,30 @@ struct MediaExportTests {
         #expect(CGImageSourceCreateImageAtIndex(source, 0, nil)?.width == 2)
     }
 
+    @Test("still-image encoders write PNG and JPEG files")
+    func stillImageEncodersWriteSupportedFormats() throws {
+        let image = try solidImage(red: 32, green: 96, blue: 192)
+
+        for format in [MediaExportFormat.png, .jpeg] {
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent(
+                "particularity-export-\(UUID().uuidString).\(format.fileExtension)"
+            )
+            defer { try? FileManager.default.removeItem(at: url) }
+
+            try StillImageMediaEncoder.write(
+                image,
+                to: url,
+                format: format,
+                jpegQuality: 0.75
+            )
+
+            let source = try #require(CGImageSourceCreateWithURL(url as CFURL, nil))
+            #expect(CGImageSourceGetCount(source) == 1)
+            #expect(CGImageSourceCreateImageAtIndex(source, 0, nil)?.width == 2)
+            #expect(CGImageSourceGetType(source) as String? == format.contentType.identifier)
+        }
+    }
+
     @Test("Toy Playback renders through the offscreen GIF path")
     @MainActor
     func toyPlaybackRendersToGIF() async throws {

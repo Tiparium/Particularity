@@ -55,6 +55,7 @@ struct DockPanelRenderContext {
     let editorSettingsStore: MainWindowEditorSettingsStore
     let moduleCatalogStore: MainWindowModuleCatalogStore
     let chromeStateStore: MainWindowChromeStateStore
+    let viewportStateStore: MainWindowViewportStateStore
     let physicsModuleSettingsStore: MainWindowPhysicsModuleSettingsStore
     let runtimeConfigCoordinator: SimulationRuntimeConfigCoordinator
     let diagnosticsStore: MainWindowDiagnosticsStore
@@ -177,6 +178,7 @@ enum DockPanelRegistry {
                     runtimeConfigCoordinator: context.runtimeConfigCoordinator,
                     diagnosticsStore: context.diagnosticsStore,
                     chromeStateStore: context.chromeStateStore,
+                    viewportStateStore: context.viewportStateStore,
                     onStartInteractionSnapshot: context.startInteractionSnapshotRecording,
                     onSetPerformanceReviewLoggingEnabled: { context.performanceReviewLogger.setEnabled($0) }
                 )

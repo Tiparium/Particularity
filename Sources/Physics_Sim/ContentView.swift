@@ -189,7 +189,11 @@ struct MainWindowContentDependencies {
             debugSettingsStore: WindowSimulationSessionStore.shared.mainWindowDebugSettingsStore(),
             interactionSnapshotRecorder: InteractionSnapshotRecorder.shared,
             performanceReviewLogger: PerformanceReviewLogger.shared,
-            mediaExportStore: MediaExportStore(session: session, viewportStateStore: viewportStateStore)
+            mediaExportStore: MediaExportStore(
+                session: session,
+                viewportStateStore: viewportStateStore,
+                runtimeConfigCoordinator: runtimeConfigCoordinator
+            )
         )
     }
 }
@@ -249,6 +253,7 @@ struct ContentView: View {
             editorSettingsStore: editorSettingsStore,
             moduleCatalogStore: moduleCatalogStore,
             chromeStateStore: chromeStateStore,
+            viewportStateStore: viewportStateStore,
             physicsModuleSettingsStore: physicsModuleSettingsStore,
             runtimeConfigCoordinator: runtimeConfigCoordinator,
             diagnosticsStore: diagnosticsStore,
@@ -2215,6 +2220,7 @@ struct InspectorPanel: View {
     @ObservedObject var runtimeConfigCoordinator: SimulationRuntimeConfigCoordinator
     @ObservedObject var diagnosticsStore: MainWindowDiagnosticsStore
     @ObservedObject var chromeStateStore: MainWindowChromeStateStore
+    @ObservedObject var viewportStateStore: MainWindowViewportStateStore
     let onStartInteractionSnapshot: () -> Void
     let onSetPerformanceReviewLoggingEnabled: (Bool) -> Void
 
@@ -2258,6 +2264,14 @@ struct InspectorPanel: View {
             Text("Diagnostics")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
+            AppCheckboxToggle(
+                "Show Simulation Bounds",
+                isOn: Binding(
+                    get: { viewportStateStore.viewportState.showSimulationBounds },
+                    set: { viewportStateStore.setSimulationBoundsVisible($0) }
+                ),
+                helpText: "Show the simulation bounds in the viewport and exported media."
+            )
             AppCheckboxToggle(
                 "Performance Review Logging",
                 isOn: Binding(

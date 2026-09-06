@@ -20,9 +20,40 @@ enum MediaExportError: LocalizedError {
         case .playbackTimelineUnavailable:
             return "Stable render-pass capture currently requires an active playback Trinity."
         case .destinationCreationFailed:
-            return "The GIF destination could not be created."
+            return "The media destination could not be created."
         case .destinationFinalizeFailed:
-            return "The GIF encoder could not finalize the exported file."
+            return "The media encoder could not finalize the exported file."
+        }
+    }
+}
+
+enum MediaExportFormat: String, CaseIterable, Identifiable, Sendable {
+    case png
+    case jpeg
+    case gif
+    case mp4
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .png: return "PNG"
+        case .jpeg: return "JPEG"
+        case .gif: return "GIF"
+        case .mp4: return "MP4"
+        }
+    }
+
+    var fileExtension: String { rawValue == "jpeg" ? "jpg" : rawValue }
+    var isAnimated: Bool { self == .gif || self == .mp4 }
+    var isAvailable: Bool { self != .mp4 }
+
+    var contentType: UTType {
+        switch self {
+        case .png: return .png
+        case .jpeg: return .jpeg
+        case .gif: return .gif
+        case .mp4: return .mpeg4Movie
         }
     }
 }
@@ -41,6 +72,7 @@ enum MediaCaptureTimingMode: String, CaseIterable, Identifiable, Sendable {
 }
 
 struct MediaExportSettings: Equatable, Sendable {
+    var format = MediaExportFormat.gif
     var width = 1800
     var height = 600
     var framesPerSecond = 30
@@ -49,6 +81,7 @@ struct MediaExportSettings: Equatable, Sendable {
     var captureFullPlaybackLoop = true
     var timingMode = MediaCaptureTimingMode.renderPass
     var gifLoopsForever = true
+    var jpegQuality = 0.9
 
     var outputSize: CGSize {
         CGSize(width: max(1, width), height: max(1, height))
@@ -84,12 +117,18 @@ final class MediaExportStore: ObservableObject {
 
     private weak var renderer: Renderer?
     private let session: SimulationSession
+    let runtimeConfigCoordinator: SimulationRuntimeConfigCoordinator
     let viewportStateStore: MainWindowViewportStateStore
     private var exportTask: Task<Void, Never>?
 
-    init(session: SimulationSession, viewportStateStore: MainWindowViewportStateStore) {
+    init(
+        session: SimulationSession,
+        viewportStateStore: MainWindowViewportStateStore,
+        runtimeConfigCoordinator: SimulationRuntimeConfigCoordinator
+    ) {
         self.session = session
         self.viewportStateStore = viewportStateStore
+        self.runtimeConfigCoordinator = runtimeConfigCoordinator
     }
 
     func attach(renderer: Renderer) {
@@ -101,13 +140,18 @@ final class MediaExportStore: ObservableObject {
         self.renderer = nil
     }
 
-    func chooseAndExportGIF() {
+    func chooseAndExport() {
         guard !isExporting else { return }
+        let format = settings.format
+        guard format.isAvailable else {
+            statusMessage = "MP4 export is not implemented yet."
+            return
+        }
         let panel = NSSavePanel()
-        panel.title = "Export GIF"
-        panel.allowedContentTypes = [.gif]
+        panel.title = "Export \(format.title)"
+        panel.allowedContentTypes = [format.contentType]
         panel.canCreateDirectories = true
-        panel.nameFieldStringValue = "Particularity.gif"
+        panel.nameFieldStringValue = "Particularity.\(format.fileExtension)"
 
         let defaultDirectory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
             .appendingPathComponent("Sources/lab/exports/media", isDirectory: true)
@@ -115,14 +159,14 @@ final class MediaExportStore: ObservableObject {
         panel.directoryURL = defaultDirectory
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        startGIFExport(to: url)
+        startExport(to: url)
     }
 
     func cancelExport() {
         exportTask?.cancel()
     }
 
-    private func startGIFExport(to url: URL) {
+    private func startExport(to url: URL) {
         let request = settings
         isExporting = true
         progress = 0
@@ -130,7 +174,7 @@ final class MediaExportStore: ObservableObject {
         exportTask = Task { [weak self] in
             guard let self else { return }
             do {
-                try await self.exportGIF(to: url, settings: request)
+                try await self.export(to: url, settings: request)
                 guard !Task.isCancelled else {
                     self.statusMessage = "Cancelled"
                     self.isExporting = false
@@ -148,19 +192,48 @@ final class MediaExportStore: ObservableObject {
         }
     }
 
+    private func export(to url: URL, settings: MediaExportSettings) async throws {
+        switch settings.format {
+        case .png, .jpeg:
+            try exportStillImage(to: url, settings: settings)
+        case .gif:
+            try await exportGIF(to: url, settings: settings)
+        case .mp4:
+            throw MediaExportError.destinationCreationFailed
+        }
+    }
+
+    private func exportStillImage(to url: URL, settings: MediaExportSettings) throws {
+        guard let renderer else { throw MediaExportError.rendererUnavailable }
+        let image = try renderer.captureImage(
+            size: settings.outputSize,
+            cameraState: viewportStateStore.viewportState.camera,
+            showSimulationBounds: viewportStateStore.viewportState.showSimulationBounds
+        )
+        try StillImageMediaEncoder.write(
+            image,
+            to: url,
+            format: settings.format,
+            jpegQuality: settings.jpegQuality
+        )
+    }
+
     private func exportGIF(to url: URL, settings: MediaExportSettings) async throws {
         guard let renderer else { throw MediaExportError.rendererUnavailable }
         let fps = max(1, settings.framesPerSecond)
         let timeline = session.playbackTimelineState
         let duration: Double
-        let capturesFullLoop = settings.timingMode == .renderPass && settings.captureFullPlaybackLoop
+        let isPlayback = runtimeConfigCoordinator.activeModules.isPlayback
+        let capturesFullLoop = isPlayback
+            && settings.timingMode == .renderPass
+            && settings.captureFullPlaybackLoop
         if capturesFullLoop {
             guard timeline.durationSeconds > 0 else { throw MediaExportError.playbackTimelineUnavailable }
             duration = timeline.durationSeconds
         } else {
             duration = max(1.0 / Double(fps), settings.durationSeconds)
         }
-        if settings.timingMode == .renderPass, timeline.durationSeconds <= 0 {
+        if settings.timingMode == .renderPass, !isPlayback || timeline.durationSeconds <= 0 {
             throw MediaExportError.playbackTimelineUnavailable
         }
 
@@ -192,6 +265,7 @@ final class MediaExportStore: ObservableObject {
 
         let cameraState = viewportStateStore.viewportState.camera
         let showBounds = viewportStateStore.viewportState.showSimulationBounds
+        let playbackStartSeconds = capturesFullLoop ? 0 : timeline.currentSeconds
         let clock = ContinuousClock()
         let startedAt = clock.now
 
@@ -201,7 +275,12 @@ final class MediaExportStore: ObservableObject {
             let playbackTime: Double?
             switch settings.timingMode {
             case .renderPass:
-                playbackTime = framePlan.playbackTime(for: frameIndex)
+                let requestedTime = playbackStartSeconds + framePlan.playbackTime(for: frameIndex)
+                if timeline.isLooping, timeline.durationSeconds > 0 {
+                    playbackTime = requestedTime.truncatingRemainder(dividingBy: timeline.durationSeconds)
+                } else {
+                    playbackTime = min(requestedTime, timeline.durationSeconds)
+                }
             case .live:
                 playbackTime = nil
                 let deadline = startedAt.advanced(by: .seconds(presentationTime))
@@ -245,55 +324,99 @@ struct CapturePreviewOverlay: View {
 
 struct MediaExportPanel: View {
     @ObservedObject var store: MediaExportStore
-    @ObservedObject private var viewportStateStore: MainWindowViewportStateStore
+    @ObservedObject private var runtimeConfigCoordinator: SimulationRuntimeConfigCoordinator
 
     init(store: MediaExportStore) {
         self.store = store
-        _viewportStateStore = ObservedObject(wrappedValue: store.viewportStateStore)
+        _runtimeConfigCoordinator = ObservedObject(wrappedValue: store.runtimeConfigCoordinator)
     }
 
     private var isRenderPass: Bool { store.settings.timingMode == .renderPass }
+    private var isAnimated: Bool { store.settings.format.isAnimated }
+    private var isPlayback: Bool { runtimeConfigCoordinator.activeModules.isPlayback }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Picker("Capture", selection: binding(\.timingMode)) {
-                ForEach(MediaCaptureTimingMode.allCases) { mode in
-                    Text(mode.title).tag(mode)
+            HStack {
+                Text("Format")
+                Spacer()
+                Menu {
+                    ForEach(MediaExportFormat.allCases) { format in
+                        Button(format.isAvailable ? format.title : "\(format.title) - Coming Later") {
+                            var settings = store.settings
+                            settings.format = format
+                            store.settings = settings
+                        }
+                        .disabled(!format.isAvailable)
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Text(store.settings.format.title)
+                        Image(systemName: "chevron.down")
+                            .font(.caption2)
+                    }
                 }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
             }
-            .pickerStyle(.segmented)
+            .font(.caption)
 
             Group {
                 exportIntegerField("Width", value: binding(\.width), range: 1...8192)
                 exportIntegerField("Height", value: binding(\.height), range: 1...8192)
+            }
+
+            if store.settings.format == .jpeg {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("Quality")
+                        Spacer()
+                        Text("\(Int(store.settings.jpegQuality * 100))%")
+                            .foregroundStyle(.secondary)
+                    }
+                    Slider(value: binding(\.jpegQuality), in: 0.05...1)
+                }
+                .font(.caption)
+            }
+
+            if isAnimated {
+                Picker("Capture", selection: binding(\.timingMode)) {
+                    ForEach(MediaCaptureTimingMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+
                 exportIntegerField("Frames / Second", value: binding(\.framesPerSecond), range: 1...120)
                 exportIntegerField("Updates / Second", value: binding(\.updatesPerSecond), range: 1...240)
                     .disabled(!isRenderPass)
+
+                HStack {
+                    Text("Duration")
+                    Spacer()
+                    TextField("Seconds", value: binding(\.durationSeconds), format: .number.precision(.fractionLength(1)))
+                        .frame(width: 72)
+                    Text("sec")
+                        .foregroundStyle(.secondary)
+                }
+                .font(.caption)
+                .disabled(isRenderPass && isPlayback && store.settings.captureFullPlaybackLoop)
+
+                AppCheckboxToggle(
+                    "Capture Full Playback Loop",
+                    isOn: binding(\.captureFullPlaybackLoop),
+                    helpText: "Reset playback to zero and render exactly one complete loop."
+                )
+                .disabled(!isRenderPass || !isPlayback)
+
+                if store.settings.format == .gif {
+                    AppCheckboxToggle(
+                        "Loop GIF",
+                        isOn: binding(\.gifLoopsForever),
+                        helpText: "Repeat the exported GIF indefinitely."
+                    )
+                }
             }
-
-            HStack {
-                Text("Duration")
-                Spacer()
-                TextField("Seconds", value: binding(\.durationSeconds), format: .number.precision(.fractionLength(1)))
-                    .frame(width: 72)
-                Text("sec")
-                    .foregroundStyle(.secondary)
-            }
-            .font(.caption)
-            .disabled(isRenderPass && store.settings.captureFullPlaybackLoop)
-
-            AppCheckboxToggle(
-                "Capture Full Playback Loop",
-                isOn: binding(\.captureFullPlaybackLoop),
-                helpText: "Render exactly one loop, starting at time zero."
-            )
-            .disabled(!isRenderPass)
-
-            AppCheckboxToggle(
-                "Loop GIF",
-                isOn: binding(\.gifLoopsForever),
-                helpText: "Repeat the exported GIF indefinitely."
-            )
 
             Divider()
 
@@ -301,12 +424,6 @@ struct MediaExportPanel: View {
                 "Capture Preview",
                 isOn: $store.capturePreviewEnabled,
                 helpText: "Outline the exact export aspect ratio in the viewport."
-            )
-
-            AppCheckboxToggle(
-                "Show Simulation Bounds",
-                isOn: boundsVisibilityBinding,
-                helpText: "Show the simulation bounds in both the viewport and exported media."
             )
 
             if store.isExporting {
@@ -325,17 +442,10 @@ struct MediaExportPanel: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
-                Button("Export GIF", action: store.chooseAndExportGIF)
+                Button("Export \(store.settings.format.title)", action: store.chooseAndExport)
                     .buttonStyle(AppFramedButtonStyle(.prominent))
             }
         }
-    }
-
-    private var boundsVisibilityBinding: Binding<Bool> {
-        Binding(
-            get: { viewportStateStore.viewportState.showSimulationBounds },
-            set: { viewportStateStore.setSimulationBoundsVisible($0) }
-        )
     }
 
     private func binding<Value>(_ keyPath: WritableKeyPath<MediaExportSettings, Value>) -> Binding<Value> {
@@ -364,6 +474,32 @@ struct MediaExportPanel: View {
                 }
         }
         .font(.caption)
+    }
+}
+
+enum StillImageMediaEncoder {
+    static func write(
+        _ image: CGImage,
+        to url: URL,
+        format: MediaExportFormat,
+        jpegQuality: Double
+    ) throws {
+        guard format == .png || format == .jpeg,
+              let destination = CGImageDestinationCreateWithURL(
+                url as CFURL,
+                format.contentType.identifier as CFString,
+                1,
+                nil
+              ) else {
+            throw MediaExportError.destinationCreationFailed
+        }
+        let properties: CFDictionary? = format == .jpeg
+            ? [kCGImageDestinationLossyCompressionQuality: min(1, max(0, jpegQuality))] as CFDictionary
+            : nil
+        CGImageDestinationAddImage(destination, image, properties)
+        guard CGImageDestinationFinalize(destination) else {
+            throw MediaExportError.destinationFinalizeFailed
+        }
     }
 }
 
