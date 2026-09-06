@@ -479,6 +479,22 @@ final class SimulationRuntime: @unchecked Sendable {
         }
     }
 
+    func preparePlaybackFrameForExport(at seconds: Double) -> Bool {
+        simulationQueue.sync {
+            guard isPlaybackRuntimeActive,
+                  let playbackRuntime = ensureActivePlaybackRuntime() else {
+                return false
+            }
+            playbackCurrentSeconds = min(max(0, seconds), playbackRuntime.timeline.durationSeconds)
+            playbackLastUptime = nil
+            let frame = playbackRuntime.frame(at: playbackCurrentSeconds)
+            playbackCurrentSampleIndex = frame.sampleIndex
+            uploadPlaybackParticles(frame.particles)
+            publishSnapshots()
+            return true
+        }
+    }
+
     private func applySimulationState(_ nextState: SimulationViewportState) {
         if let reason = ModuleCompatibility.incompatibilityReason(for: self.activeModules, state: nextState) {
             if nextState.transportState == .running || nextState.transportState == .paused {

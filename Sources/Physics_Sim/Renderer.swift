@@ -1,6 +1,7 @@
 import Metal
 import MetalKit
 import QuartzCore
+import CoreGraphics
 import simd
 
 enum RendererError: LocalizedError {
@@ -11,6 +12,8 @@ enum RendererError: LocalizedError {
     case computePipelineCreationFailed(String)
     case depthStateCreationFailed(String)
     case vertexBufferCreationFailed(String)
+    case textureCreationFailed(String)
+    case imageCreationFailed
     case incompatibleModules(ActiveModuleSet, String)
 
     var errorDescription: String? {
@@ -29,6 +32,10 @@ enum RendererError: LocalizedError {
             return "Renderer failed to create the depth state '\(label)'."
         case .vertexBufferCreationFailed(let label):
             return "Renderer failed to create the vertex buffer '\(label)'."
+        case .textureCreationFailed(let label):
+            return "Renderer failed to create the texture '\(label)'."
+        case .imageCreationFailed:
+            return "Renderer failed to create an image from the rendered frame."
         case .incompatibleModules(let modules, let reason):
             return "Incompatible active modules: physics=\(modules.physics.name), visual=\(modules.visual.name), optimization=\(modules.optimization.name). \(reason)"
         }
@@ -266,15 +273,131 @@ final class Renderer: NSObject, MTKViewDelegate {
             return
         }
 
+        let size = view.drawableSize
+        guard encodeScene(
+            commandBuffer: commandBuffer,
+            passDescriptor: passDesc,
+            size: size,
+            cameraState: liveCameraState.renderedState,
+            showSimulationBounds: viewportStateStore.viewportState.showSimulationBounds,
+            now: now
+        ) else { return }
+
+        commandBuffer.present(drawable)
+        commandBuffer.commit()
+
+        let currentFPS = frameRateTracker.averageFPS()
+        session.publishFrameMetrics(averageFPS: currentFPS, at: now)
+    }
+
+    func captureImage(
+        size: CGSize,
+        cameraState: ViewportCameraState,
+        showSimulationBounds: Bool,
+        playbackTime: Double? = nil
+    ) throws -> CGImage {
+        let width = max(1, Int(size.width.rounded()))
+        let height = max(1, Int(size.height.rounded()))
+        if let playbackTime {
+            guard session.preparePlaybackFrameForExport(at: playbackTime) else {
+                throw MediaExportError.playbackFrameUnavailable
+            }
+        }
+
+        let colorDescriptor = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .bgra8Unorm,
+            width: width,
+            height: height,
+            mipmapped: false
+        )
+        colorDescriptor.usage = [.renderTarget, .shaderRead]
+        colorDescriptor.storageMode = .shared
+        guard let colorTexture = device.makeTexture(descriptor: colorDescriptor) else {
+            throw RendererError.textureCreationFailed("export-color")
+        }
+
+        let depthDescriptor = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .depth32Float,
+            width: width,
+            height: height,
+            mipmapped: false
+        )
+        depthDescriptor.usage = .renderTarget
+        depthDescriptor.storageMode = .private
+        guard let depthTexture = device.makeTexture(descriptor: depthDescriptor) else {
+            throw RendererError.textureCreationFailed("export-depth")
+        }
+        guard let commandBuffer = queue.makeCommandBuffer() else {
+            throw RendererError.missingCommandQueue
+        }
+
+        let passDescriptor = MTLRenderPassDescriptor()
+        passDescriptor.colorAttachments[0].texture = colorTexture
+        passDescriptor.colorAttachments[0].loadAction = .clear
+        passDescriptor.colorAttachments[0].storeAction = .store
+        passDescriptor.colorAttachments[0].clearColor = MTLClearColor(red: 0.09, green: 0.09, blue: 0.10, alpha: 1)
+        passDescriptor.depthAttachment.texture = depthTexture
+        passDescriptor.depthAttachment.loadAction = .clear
+        passDescriptor.depthAttachment.storeAction = .dontCare
+        passDescriptor.depthAttachment.clearDepth = 1
+
+        guard encodeScene(
+            commandBuffer: commandBuffer,
+            passDescriptor: passDescriptor,
+            size: CGSize(width: width, height: height),
+            cameraState: cameraState,
+            showSimulationBounds: showSimulationBounds,
+            now: ProcessInfo.processInfo.systemUptime
+        ) else {
+            throw RendererError.imageCreationFailed
+        }
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        if let error = commandBuffer.error { throw error }
+
+        let bytesPerRow = width * 4
+        var bytes = [UInt8](repeating: 0, count: bytesPerRow * height)
+        colorTexture.getBytes(
+            &bytes,
+            bytesPerRow: bytesPerRow,
+            from: MTLRegionMake2D(0, 0, width, height),
+            mipmapLevel: 0
+        )
+        guard let provider = CGDataProvider(data: Data(bytes) as CFData),
+              let image = CGImage(
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bitsPerPixel: 32,
+                bytesPerRow: bytesPerRow,
+                space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                bitmapInfo: [.byteOrder32Little, CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue)],
+                provider: provider,
+                decode: nil,
+                shouldInterpolate: false,
+                intent: .defaultIntent
+              ) else {
+            throw RendererError.imageCreationFailed
+        }
+        return image
+    }
+
+    @discardableResult
+    private func encodeScene(
+        commandBuffer: MTLCommandBuffer,
+        passDescriptor: MTLRenderPassDescriptor,
+        size: CGSize,
+        cameraState: ViewportCameraState,
+        showSimulationBounds: Bool,
+        now: TimeInterval
+    ) -> Bool {
         let renderState = session.renderState
         let simulationState = session.simulationState
-
-        let size = view.drawableSize
         let aspect = Float(size.width / max(size.height, 1))
         let projection = float4x4.perspective(fovY: 60.0 * .pi / 180.0, aspect: aspect, near: 0.1, far: 100.0)
         let projectionYScale = projection.columns.1.y
         let model = float4x4.identity()
-        let mvp = projection * liveCameraState.viewMatrix() * model
+        let mvp = projection * CameraMath.viewMatrix(for: cameraState) * model
         let mlSurfaceParticleCount: Int? = {
             guard simulationState.mlPlayback.isActive else { return nil }
             let surfaceCount = max(1, simulationState.mlPlayback.surfaceCount)
@@ -302,22 +425,22 @@ final class Renderer: NSObject, MTKViewDelegate {
             )
         }
 
-        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: passDesc) else {
-            return
-        }
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: passDescriptor) else { return false }
 
-        var lineUniforms = LineUniforms(mvp: mvp, color: SIMD4<Float>(0.78, 0.78, 0.80, 1.0))
-        encoder.setRenderPipelineState(linePipeline)
-        encoder.setDepthStencilState(depthState)
-        encoder.setVertexBuffer(lineVertexBuffer, offset: 0, index: 0)
-        encoder.setVertexBytes(&lineUniforms, length: MemoryLayout<LineUniforms>.stride, index: 1)
-        encoder.drawIndexedPrimitives(
-            type: .line,
-            indexCount: lineIndexCount,
-            indexType: .uint16,
-            indexBuffer: lineIndexBuffer,
-            indexBufferOffset: 0
-        )
+        if showSimulationBounds {
+            var lineUniforms = LineUniforms(mvp: mvp, color: SIMD4<Float>(0.78, 0.78, 0.80, 1.0))
+            encoder.setRenderPipelineState(linePipeline)
+            encoder.setDepthStencilState(depthState)
+            encoder.setVertexBuffer(lineVertexBuffer, offset: 0, index: 0)
+            encoder.setVertexBytes(&lineUniforms, length: MemoryLayout<LineUniforms>.stride, index: 1)
+            encoder.drawIndexedPrimitives(
+                type: .line,
+                indexCount: lineIndexCount,
+                indexType: .uint16,
+                indexBuffer: lineIndexBuffer,
+                indexBufferOffset: 0
+            )
+        }
 
         if renderState.activeParticleCount > 0,
            let particleBuffer = renderState.particleBuffer {
@@ -392,11 +515,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
 
         encoder.endEncoding()
-        commandBuffer.present(drawable)
-        commandBuffer.commit()
-
-        let currentFPS = frameRateTracker.averageFPS()
-        session.publishFrameMetrics(averageFPS: currentFPS, at: now)
+        return true
     }
 
     private func updateKeyboardCamera(deltaTime: Float) {

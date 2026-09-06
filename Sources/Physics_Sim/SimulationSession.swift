@@ -184,6 +184,10 @@ final class SimulationSession {
         runtime?.seekPlayback(to: seconds)
     }
 
+    func preparePlaybackFrameForExport(at seconds: Double) -> Bool {
+        runtime?.preparePlaybackFrameForExport(at: seconds) ?? false
+    }
+
     func publishFrameMetrics(averageFPS: Double, at now: TimeInterval) {
         runtime?.publishFrameMetrics(averageFPS: averageFPS, at: now)
     }

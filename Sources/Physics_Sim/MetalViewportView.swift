@@ -228,6 +228,7 @@ private final class WindowLifecycleObserver {
 final class MetalViewportCoordinator: NSObject, InputMTKViewDelegate {
     var session: SimulationSession?
     var renderer: Renderer?
+    weak var mediaExportStore: MediaExportStore?
     fileprivate weak var metalView: InputMTKView?
     fileprivate weak var axisHostView: NSHostingView<ViewportAxisIndicator>?
     fileprivate let axisModel = ViewportAxisModel()
@@ -268,6 +269,7 @@ final class MetalViewportCoordinator: NSObject, InputMTKViewDelegate {
 
     func tearDownViewport() {
         renderer?.commitCameraState()
+        mediaExportStore?.detach(renderer: renderer)
         if isViewportAttached {
             session?.detachViewport()
             isViewportAttached = false
@@ -299,6 +301,7 @@ struct MetalViewportView: NSViewRepresentable {
     let transportState: SimulationTransportState
     let diagnosticsStore: MainWindowDiagnosticsStore
     let debugSettingsStore: MainWindowDebugSettingsStore
+    let mediaExportStore: MediaExportStore
 
     func makeCoordinator() -> MetalViewportCoordinator {
         MetalViewportCoordinator()
@@ -344,6 +347,8 @@ struct MetalViewportView: NSViewRepresentable {
             return container
         }
         context.coordinator.renderer = renderer
+        context.coordinator.mediaExportStore = mediaExportStore
+        mediaExportStore.attach(renderer: renderer)
         context.coordinator.session = session
         context.coordinator.metalView = metalView
         context.coordinator.axisHostView = axisHostView

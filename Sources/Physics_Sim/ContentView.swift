@@ -153,6 +153,7 @@ struct MainWindowContentDependencies {
     let debugSettingsStore: MainWindowDebugSettingsStore
     let interactionSnapshotRecorder: InteractionSnapshotRecorder
     let performanceReviewLogger: PerformanceReviewLogger
+    let mediaExportStore: MediaExportStore
 
     @MainActor
     static func load(
@@ -175,18 +176,20 @@ struct MainWindowContentDependencies {
 
         progress?(.finalizingUI)
         await Task.yield()
+        let viewportStateStore = WindowSimulationSessionStore.shared.mainWindowViewportStateStore()
         return MainWindowContentDependencies(
             session: session,
             chromeStateStore: WindowSimulationSessionStore.shared.mainWindowChromeStateStore(),
             editorSettingsStore: editorSettingsStore,
-            viewportStateStore: WindowSimulationSessionStore.shared.mainWindowViewportStateStore(),
+            viewportStateStore: viewportStateStore,
             physicsModuleSettingsStore: physicsModuleSettingsStore,
             moduleCatalogStore: moduleCatalogStore,
             runtimeConfigCoordinator: runtimeConfigCoordinator,
             diagnosticsStore: diagnosticsStore,
             debugSettingsStore: WindowSimulationSessionStore.shared.mainWindowDebugSettingsStore(),
             interactionSnapshotRecorder: InteractionSnapshotRecorder.shared,
-            performanceReviewLogger: PerformanceReviewLogger.shared
+            performanceReviewLogger: PerformanceReviewLogger.shared,
+            mediaExportStore: MediaExportStore(session: session, viewportStateStore: viewportStateStore)
         )
     }
 }
@@ -215,6 +218,7 @@ struct ContentView: View {
     private let debugSettingsStore: MainWindowDebugSettingsStore
     private let interactionSnapshotRecorder: InteractionSnapshotRecorder
     private let performanceReviewLogger: PerformanceReviewLogger
+    @ObservedObject private var mediaExportStore: MediaExportStore
 
     init(dependencies: MainWindowContentDependencies) {
         self.session = dependencies.session
@@ -228,6 +232,7 @@ struct ContentView: View {
         self.debugSettingsStore = dependencies.debugSettingsStore
         self.interactionSnapshotRecorder = dependencies.interactionSnapshotRecorder
         self.performanceReviewLogger = dependencies.performanceReviewLogger
+        _mediaExportStore = ObservedObject(wrappedValue: dependencies.mediaExportStore)
     }
 
     private var panels: [DockPanel] {
@@ -250,6 +255,7 @@ struct ContentView: View {
             debugSettingsStore: debugSettingsStore,
             interactionSnapshotRecorder: interactionSnapshotRecorder,
             performanceReviewLogger: performanceReviewLogger,
+            mediaExportStore: mediaExportStore,
             importerTargetKind: $importerTargetKind,
             isImporterPresented: $isImporterPresented,
             startInteractionSnapshotRecording: startInteractionSnapshotRecording
@@ -418,6 +424,7 @@ struct ContentView: View {
                 editorSettingsStore: editorSettingsStore,
                 diagnosticsStore: diagnosticsStore,
                 debugSettingsStore: debugSettingsStore,
+                mediaExportStore: mediaExportStore,
                 viewportGeneration: viewportGeneration,
                 highlightedValidationField: $highlightedValidationField
             ),
@@ -1142,6 +1149,7 @@ private struct SimulationCenterPane: View {
     @ObservedObject var editorSettingsStore: MainWindowEditorSettingsStore
     @ObservedObject var diagnosticsStore: MainWindowDiagnosticsStore
     @ObservedObject var debugSettingsStore: MainWindowDebugSettingsStore
+    @ObservedObject var mediaExportStore: MediaExportStore
     let viewportGeneration: Int
     @Binding var highlightedValidationField: RuntimeValidationField?
 
@@ -1187,7 +1195,8 @@ private struct SimulationCenterPane: View {
                 transportState: transportState,
                 viewportGeneration: viewportGeneration,
                 diagnosticsStore: diagnosticsStore,
-                debugSettingsStore: debugSettingsStore
+                debugSettingsStore: debugSettingsStore,
+                mediaExportStore: mediaExportStore
             )
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
@@ -1565,15 +1574,24 @@ private struct SimulationViewportSurface: View {
     let viewportGeneration: Int
     let diagnosticsStore: MainWindowDiagnosticsStore
     let debugSettingsStore: MainWindowDebugSettingsStore
+    @ObservedObject var mediaExportStore: MediaExportStore
 
     var body: some View {
-        MetalViewportView(
-            session: session,
-            viewportStateStore: viewportStateStore,
-            transportState: transportState,
-            diagnosticsStore: diagnosticsStore,
-            debugSettingsStore: debugSettingsStore
-        )
+        ZStack {
+            MetalViewportView(
+                session: session,
+                viewportStateStore: viewportStateStore,
+                transportState: transportState,
+                diagnosticsStore: diagnosticsStore,
+                debugSettingsStore: debugSettingsStore,
+                mediaExportStore: mediaExportStore
+            )
+
+            if mediaExportStore.capturePreviewEnabled {
+                CapturePreviewOverlay(outputSize: mediaExportStore.settings.outputSize)
+                    .allowsHitTesting(false)
+            }
+        }
         .id(viewportGeneration)
         .transaction { transaction in
             transaction.animation = nil
