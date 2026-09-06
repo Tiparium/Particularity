@@ -53,6 +53,26 @@ struct MediaExportTests {
         #expect(CGImageSourceCreateImageAtIndex(source, 0, nil)?.width == 2)
     }
 
+    @Test("GIF encoder finalizes an open-ended recording")
+    func gifEncoderFinalizesOpenEndedRecording() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("particularity-recording-\(UUID().uuidString).gif")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let encoder = try GIFMediaEncoder(
+            url: url,
+            frameCount: 0,
+            frameDelay: 1.0 / 30.0,
+            loopsForever: true
+        )
+        encoder.add(try solidImage(red: 255, green: 0, blue: 0))
+        encoder.add(try solidImage(red: 0, green: 0, blue: 255))
+        try encoder.finalize()
+
+        let source = try #require(CGImageSourceCreateWithURL(url as CFURL, nil))
+        #expect(CGImageSourceGetCount(source) == 2)
+    }
+
     @Test("still-image encoders write PNG and JPEG files")
     func stillImageEncodersWriteSupportedFormats() throws {
         let image = try solidImage(red: 32, green: 96, blue: 192)
