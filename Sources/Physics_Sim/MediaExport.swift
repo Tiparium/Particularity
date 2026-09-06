@@ -122,10 +122,6 @@ final class MediaExportStore: ObservableObject {
         exportTask?.cancel()
     }
 
-    var hasPlaybackTimeline: Bool {
-        session.playbackTimelineState.durationSeconds > 0
-    }
-
     private func startGIFExport(to url: URL) {
         let request = settings
         isExporting = true
@@ -249,6 +245,12 @@ struct CapturePreviewOverlay: View {
 
 struct MediaExportPanel: View {
     @ObservedObject var store: MediaExportStore
+    @ObservedObject private var viewportStateStore: MainWindowViewportStateStore
+
+    init(store: MediaExportStore) {
+        self.store = store
+        _viewportStateStore = ObservedObject(wrappedValue: store.viewportStateStore)
+    }
 
     private var isRenderPass: Bool { store.settings.timingMode == .renderPass }
 
@@ -285,7 +287,7 @@ struct MediaExportPanel: View {
                 isOn: binding(\.captureFullPlaybackLoop),
                 helpText: "Render exactly one loop, starting at time zero."
             )
-            .disabled(!isRenderPass || !store.hasPlaybackTimeline)
+            .disabled(!isRenderPass)
 
             AppCheckboxToggle(
                 "Loop GIF",
@@ -331,8 +333,8 @@ struct MediaExportPanel: View {
 
     private var boundsVisibilityBinding: Binding<Bool> {
         Binding(
-            get: { store.viewportStateStore.viewportState.showSimulationBounds },
-            set: { store.viewportStateStore.setSimulationBoundsVisible($0) }
+            get: { viewportStateStore.viewportState.showSimulationBounds },
+            set: { viewportStateStore.setSimulationBoundsVisible($0) }
         )
     }
 
