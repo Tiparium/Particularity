@@ -620,6 +620,45 @@ final class SimulationRuntime: @unchecked Sendable {
         }
     }
 
+    func beginFixedStepCapture(completion: @escaping @Sendable () -> Void) {
+        simulationQueue.async {
+            self.tickingSuspended = true
+            self.reconfigureSimulationLoop()
+            if self.simulationWorkInFlight {
+                self.idleCallbacks.append(completion)
+            } else {
+                completion()
+            }
+        }
+    }
+
+    func prepareFixedStepFrame(completion: @escaping @Sendable (Bool) -> Void) {
+        simulationQueue.async {
+            guard self.tickingSuspended,
+                  !self.isPlaybackRuntimeActive,
+                  self.currentSimulationState.transportState == .running,
+                  self.ensureParticleStateBuffers() else {
+                completion(false)
+                return
+            }
+            self.publishSnapshots()
+            completion(true)
+        }
+    }
+
+    func advanceFixedStep(completion: @escaping @Sendable (Bool) -> Void) {
+        simulationQueue.async {
+            guard self.tickingSuspended, !self.simulationWorkInFlight else {
+                completion(false)
+                return
+            }
+            self.stepSimulation(
+                at: ProcessInfo.processInfo.systemUptime,
+                fixedStepCompletion: completion
+            )
+        }
+    }
+
     func discardEphemeralState() {
         simulationQueue.async {
             self.tickingSuspended = true
@@ -707,13 +746,23 @@ final class SimulationRuntime: @unchecked Sendable {
         publishSnapshots()
     }
 
-    private func stepSimulation(at now: TimeInterval) {
-        guard !simulationWorkInFlight else { return }
-        if isPlaybackRuntimeActive {
-            stepPlayback(at: now)
+    private func stepSimulation(
+        at now: TimeInterval,
+        fixedStepCompletion: (@Sendable (Bool) -> Void)? = nil
+    ) {
+        guard !simulationWorkInFlight else {
+            fixedStepCompletion?(false)
             return
         }
-        guard ensureParticleStateBuffers() else { return }
+        if isPlaybackRuntimeActive {
+            stepPlayback(at: now)
+            fixedStepCompletion?(false)
+            return
+        }
+        guard ensureParticleStateBuffers() else {
+            fixedStepCompletion?(false)
+            return
+        }
 
         guard currentSimulationState.transportState == .running,
               let particleFrontBuffer,
@@ -722,6 +771,7 @@ final class SimulationRuntime: @unchecked Sendable {
               let commandBuffer = commandQueue.makeCommandBuffer() else {
             debugHistory.reset()
             publishSnapshots()
+            fixedStepCompletion?(false)
             return
         }
         simulationWorkInFlight = true
@@ -837,13 +887,15 @@ final class SimulationRuntime: @unchecked Sendable {
             )
         }
 
-        commandBuffer.addCompletedHandler { [weak self] _ in
+        commandBuffer.addCompletedHandler { [weak self] completedCommandBuffer in
             guard let runtime = self else { return }
+            let completedSuccessfully = completedCommandBuffer.status == .completed
             runtime.simulationQueue.async {
                 runtime.swapCompletedParticleBuffers()
                 runtime.simulationWorkInFlight = false
                 runtime.publishSnapshots()
                 runtime.drainIdleCallbacks()
+                fixedStepCompletion?(completedSuccessfully)
             }
         }
         commandBuffer.commit()

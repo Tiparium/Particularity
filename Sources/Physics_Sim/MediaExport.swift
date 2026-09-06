@@ -8,6 +8,7 @@ enum MediaExportError: LocalizedError {
     case rendererUnavailable
     case playbackFrameUnavailable
     case playbackTimelineUnavailable
+    case fixedStepUnavailable
     case destinationCreationFailed
     case destinationFinalizeFailed
 
@@ -18,7 +19,9 @@ enum MediaExportError: LocalizedError {
         case .playbackFrameUnavailable:
             return "The active Trinity could not produce the requested playback frame."
         case .playbackTimelineUnavailable:
-            return "Stable render-pass capture currently requires an active playback Trinity."
+            return "Fixed-step playback capture requires an active playback timeline."
+        case .fixedStepUnavailable:
+            return "The active realtime Trinity could not complete a fixed simulation step."
         case .destinationCreationFailed:
             return "The media destination could not be created."
         case .destinationFinalizeFailed:
@@ -59,13 +62,13 @@ enum MediaExportFormat: String, CaseIterable, Identifiable, Sendable {
 }
 
 enum MediaCaptureTimingMode: String, CaseIterable, Identifiable, Sendable {
-    case renderPass
+    case fixedStep
     case live
 
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .renderPass: return "Deterministic Render"
+        case .fixedStep: return "Fixed-Step Render"
         case .live: return "Live Recording"
         }
     }
@@ -77,7 +80,7 @@ struct MediaExportSettings: Equatable, Sendable {
     var height = 600
     var framesPerSecond = 30
     var updatesPerSecond = 60
-    var timingMode = MediaCaptureTimingMode.renderPass
+    var timingMode = MediaCaptureTimingMode.fixedStep
     var gifLoopsForever = true
     var jpegQuality = 0.9
 
@@ -102,6 +105,10 @@ struct MediaExportFramePlan: Equatable, Sendable {
     func playbackTime(for frameIndex: Int) -> Double {
         let time = presentationTime(for: frameIndex)
         return floor(time * Double(updatesPerSecond) + 0.000_001) / Double(updatesPerSecond)
+    }
+
+    func targetUpdateCount(for frameIndex: Int) -> Int {
+        Int(floor(presentationTime(for: frameIndex) * Double(updatesPerSecond) + 0.000_001))
     }
 }
 
@@ -218,10 +225,11 @@ final class MediaExportStore: ObservableObject {
         let fps = max(1, settings.framesPerSecond)
         let timeline = session.playbackTimelineState
         let isPlayback = runtimeConfigCoordinator.activeModules.isPlayback
-        let timingMode = isPlayback ? settings.timingMode : .live
+        let timingMode = settings.timingMode
+        let usesRealtimeFixedStep = !isPlayback && timingMode == .fixedStep
         let capturesFullLoop = isPlayback && fromZero
         let automaticFrameCount: Int?
-        if capturesFullLoop && timingMode == .renderPass {
+        if capturesFullLoop && timingMode == .fixedStep {
             guard timeline.durationSeconds > 0 else { throw MediaExportError.playbackTimelineUnavailable }
             automaticFrameCount = MediaExportFramePlan(
                 durationSeconds: timeline.durationSeconds,
@@ -231,7 +239,7 @@ final class MediaExportStore: ObservableObject {
         } else {
             automaticFrameCount = nil
         }
-        if timingMode == .renderPass, timeline.durationSeconds <= 0 {
+        if isPlayback, timingMode == .fixedStep, timeline.durationSeconds <= 0 {
             throw MediaExportError.playbackTimelineUnavailable
         }
 
@@ -243,14 +251,16 @@ final class MediaExportStore: ObservableObject {
         let encoder = try GIFMediaEncoder(
             url: url,
             frameCount: automaticFrameCount ?? 0,
-            frameDelay: 1.0 / Double(fps),
+            framesPerSecond: min(100, fps),
             loopsForever: settings.gifLoopsForever
         )
         let originalSimulationState = session.simulationState
         let originalPlaybackTime = timeline.currentSeconds
-        let pausesRuntime = timingMode == .renderPass
+        let pausesRuntime = isPlayback
+            && timingMode == .fixedStep
             && originalSimulationState.transportState == .running
         let restartsRuntime = fromZero && timingMode == .live
+        var fixedStepCaptureStarted = false
         if pausesRuntime {
             var pausedState = originalSimulationState
             pausedState.transportState = .paused
@@ -260,7 +270,23 @@ final class MediaExportStore: ObservableObject {
             runtimeConfigCoordinator.stopSimulation()
             runtimeConfigCoordinator.startSimulation()
         }
+        if usesRealtimeFixedStep {
+            await session.beginFixedStepCapture()
+            fixedStepCaptureStarted = true
+            if fromZero {
+                runtimeConfigCoordinator.stopSimulation()
+                runtimeConfigCoordinator.startSimulation()
+            }
+            guard await session.prepareFixedStepFrame() else {
+                session.finishFixedStepCapture()
+                fixedStepCaptureStarted = false
+                throw MediaExportError.fixedStepUnavailable
+            }
+        }
         defer {
+            if fixedStepCaptureStarted {
+                session.finishFixedStepCapture()
+            }
             if pausesRuntime {
                 session.updateSimulationState(originalSimulationState)
             }
@@ -289,21 +315,33 @@ final class MediaExportStore: ObservableObject {
         var frameIndex = 0
         var previousLivePlaybackTime = session.playbackTimelineState.currentSeconds
         var livePlaybackHasAdvanced = false
+        var completedFixedSteps = 0
 
         while !stopRequested && (automaticFrameCount == nil || frameIndex < automaticFrameCount!) {
             let presentationTime = framePlan.presentationTime(for: frameIndex)
             let playbackTime: Double?
             switch timingMode {
-            case .renderPass:
+            case .fixedStep:
                 if automaticFrameCount == nil {
                     let deadline = startedAt.advanced(by: .seconds(presentationTime))
                     try await clock.sleep(until: deadline)
                 }
-                let requestedTime = playbackStartSeconds + framePlan.playbackTime(for: frameIndex)
-                if timeline.isLooping, timeline.durationSeconds > 0 {
-                    playbackTime = requestedTime.truncatingRemainder(dividingBy: timeline.durationSeconds)
+                if isPlayback {
+                    let requestedTime = playbackStartSeconds + framePlan.playbackTime(for: frameIndex)
+                    if timeline.isLooping, timeline.durationSeconds > 0 {
+                        playbackTime = requestedTime.truncatingRemainder(dividingBy: timeline.durationSeconds)
+                    } else {
+                        playbackTime = min(requestedTime, timeline.durationSeconds)
+                    }
                 } else {
-                    playbackTime = min(requestedTime, timeline.durationSeconds)
+                    let targetSteps = framePlan.targetUpdateCount(for: frameIndex)
+                    while completedFixedSteps < targetSteps {
+                        guard await session.advanceFixedStep() else {
+                            throw MediaExportError.fixedStepUnavailable
+                        }
+                        completedFixedSteps += 1
+                    }
+                    playbackTime = nil
                 }
             case .live:
                 playbackTime = nil
@@ -379,9 +417,8 @@ struct MediaExportPanel: View {
         _runtimeConfigCoordinator = ObservedObject(wrappedValue: store.runtimeConfigCoordinator)
     }
 
-    private var isRenderPass: Bool { store.settings.timingMode == .renderPass }
+    private var isFixedStep: Bool { store.settings.timingMode == .fixedStep }
     private var isAnimated: Bool { store.settings.format.isAnimated }
-    private var isPlayback: Bool { runtimeConfigCoordinator.activeModules.isPlayback }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -428,22 +465,17 @@ struct MediaExportPanel: View {
             }
 
             if isAnimated {
-                if isPlayback {
-                    Text("Recording Method")
-                        .font(.caption.weight(.semibold))
-                    Picker("Recording Method", selection: binding(\.timingMode)) {
-                        ForEach(MediaCaptureTimingMode.allCases) { mode in
-                            Text(mode.title).tag(mode)
-                        }
+                Text("Recording Method")
+                    .font(.caption.weight(.semibold))
+                Picker("Recording Method", selection: binding(\.timingMode)) {
+                    ForEach(MediaCaptureTimingMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
                     }
-                    .pickerStyle(.segmented)
-                } else {
-                    LabeledContent("Recording Method", value: "Live Recording")
-                        .font(.caption)
                 }
+                .pickerStyle(.segmented)
 
                 exportIntegerField("Frames / Second", value: binding(\.framesPerSecond), range: 1...120)
-                if isPlayback && isRenderPass {
+                if isFixedStep {
                     exportIntegerField("Updates / Second", value: binding(\.updatesPerSecond), range: 1...240)
                 }
 
@@ -565,9 +597,10 @@ enum StillImageMediaEncoder {
 
 final class GIFMediaEncoder {
     private let destination: CGImageDestination
-    private let frameProperties: CFDictionary
+    private let framesPerSecond: Int
+    private var nextFrameIndex = 0
 
-    init(url: URL, frameCount: Int, frameDelay: Double, loopsForever: Bool) throws {
+    init(url: URL, frameCount: Int, framesPerSecond: Int, loopsForever: Bool) throws {
         guard let destination = CGImageDestinationCreateWithURL(
             url as CFURL,
             UTType.gif.identifier as CFString,
@@ -577,21 +610,30 @@ final class GIFMediaEncoder {
             throw MediaExportError.destinationCreationFailed
         }
         self.destination = destination
+        self.framesPerSecond = min(100, max(1, framesPerSecond))
         CGImageDestinationSetProperties(destination, [
             kCGImagePropertyGIFDictionary: [
                 kCGImagePropertyGIFLoopCount: loopsForever ? 0 : 1,
             ],
         ] as CFDictionary)
-        frameProperties = [
-            kCGImagePropertyGIFDictionary: [
-                kCGImagePropertyGIFDelayTime: frameDelay,
-                kCGImagePropertyGIFUnclampedDelayTime: frameDelay,
-            ],
-        ] as CFDictionary
     }
 
     func add(_ image: CGImage) {
+        let startCentiseconds = Int(
+            (Double(nextFrameIndex) * 100.0 / Double(framesPerSecond)).rounded()
+        )
+        let endCentiseconds = Int(
+            (Double(nextFrameIndex + 1) * 100.0 / Double(framesPerSecond)).rounded()
+        )
+        let delay = Double(max(1, endCentiseconds - startCentiseconds)) / 100.0
+        let frameProperties = [
+            kCGImagePropertyGIFDictionary: [
+                kCGImagePropertyGIFDelayTime: delay,
+                kCGImagePropertyGIFUnclampedDelayTime: delay,
+            ],
+        ] as CFDictionary
         CGImageDestinationAddImage(destination, image, frameProperties)
+        nextFrameIndex += 1
     }
 
     func finalize() throws {

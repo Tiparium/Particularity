@@ -7,7 +7,7 @@ import Testing
 
 @Suite("Media export")
 struct MediaExportTests {
-    @Test("render-pass frame plan excludes the duplicate loop endpoint")
+    @Test("fixed-step frame plan excludes the duplicate loop endpoint")
     func framePlanExcludesLoopEndpoint() {
         let plan = MediaExportFramePlan(
             durationSeconds: 2,
@@ -21,7 +21,7 @@ struct MediaExportTests {
         #expect(plan.playbackTime(for: 1) == 1.0 / 30.0)
     }
 
-    @Test("render-pass frame plan quantizes playback to update boundaries")
+    @Test("fixed-step frame plan quantizes playback to update boundaries")
     func framePlanQuantizesPlaybackTime() {
         let plan = MediaExportFramePlan(
             durationSeconds: 1,
@@ -30,6 +30,17 @@ struct MediaExportTests {
         )
 
         #expect(plan.playbackTime(for: 1) == 2.0 / 60.0)
+    }
+
+    @Test("fixed-step frame plan distributes non-integer update ratios")
+    func framePlanDistributesUpdateRatios() {
+        let plan = MediaExportFramePlan(
+            durationSeconds: 1,
+            framesPerSecond: 24,
+            updatesPerSecond: 60
+        )
+
+        #expect((0...4).map(plan.targetUpdateCount) == [0, 2, 5, 7, 10])
     }
 
     @Test("GIF encoder writes all requested frames")
@@ -41,7 +52,7 @@ struct MediaExportTests {
         let encoder = try GIFMediaEncoder(
             url: url,
             frameCount: 2,
-            frameDelay: 1.0 / 30.0,
+            framesPerSecond: 30,
             loopsForever: true
         )
         encoder.add(try solidImage(red: 255, green: 0, blue: 0))
@@ -62,7 +73,7 @@ struct MediaExportTests {
         let encoder = try GIFMediaEncoder(
             url: url,
             frameCount: 0,
-            frameDelay: 1.0 / 30.0,
+            framesPerSecond: 30,
             loopsForever: true
         )
         encoder.add(try solidImage(red: 255, green: 0, blue: 0))
@@ -71,6 +82,35 @@ struct MediaExportTests {
 
         let source = try #require(CGImageSourceCreateWithURL(url as CFURL, nil))
         #expect(CGImageSourceGetCount(source) == 2)
+    }
+
+    @Test("GIF encoder preserves average timing for fractional centisecond rates")
+    func gifEncoderDistributesFrameDelays() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("particularity-timing-\(UUID().uuidString).gif")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let encoder = try GIFMediaEncoder(
+            url: url,
+            frameCount: 3,
+            framesPerSecond: 30,
+            loopsForever: true
+        )
+        encoder.add(try solidImage(red: 255, green: 0, blue: 0))
+        encoder.add(try solidImage(red: 0, green: 255, blue: 0))
+        encoder.add(try solidImage(red: 0, green: 0, blue: 255))
+        try encoder.finalize()
+
+        let source = try #require(CGImageSourceCreateWithURL(url as CFURL, nil))
+        let totalDelay = (0..<3).reduce(0.0) { total, index in
+            guard let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any],
+                  let gif = properties[kCGImagePropertyGIFDictionary] as? [CFString: Any],
+                  let delay = gif[kCGImagePropertyGIFUnclampedDelayTime] as? Double else {
+                return total
+            }
+            return total + delay
+        }
+        #expect(abs(totalDelay - 0.1) < 0.000_1)
     }
 
     @Test("still-image encoders write PNG and JPEG files")
@@ -130,13 +170,46 @@ struct MediaExportTests {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("particularity-toy-playback-\(UUID().uuidString).gif")
         defer { try? FileManager.default.removeItem(at: url) }
-        let encoder = try GIFMediaEncoder(url: url, frameCount: 1, frameDelay: 1.0 / 30.0, loopsForever: true)
+        let encoder = try GIFMediaEncoder(url: url, frameCount: 1, framesPerSecond: 30, loopsForever: true)
         encoder.add(image)
         try encoder.finalize()
 
         let source = try #require(CGImageSourceCreateWithURL(url as CFURL, nil))
         #expect(CGImageSourceGetCount(source) == 1)
         #expect(CGImageSourceCreateImageAtIndex(source, 0, nil)?.width == 320)
+    }
+
+    @Test("realtime fixed step publishes one completed update")
+    @MainActor
+    func realtimeFixedStepPublishesCompletedUpdate() async throws {
+        let session = try await SimulationSession.create()
+        try session.updateActiveModules(
+            ActiveModuleSet(
+                physics: ModuleCatalog.defaultPhysics,
+                visual: ModuleCatalog.defaultVisual,
+                optimization: ModuleCatalog.defaultOptimization
+            )
+        )
+        var state = session.simulationState
+        state.transportState = .running
+        state.particleCount = 32
+        state.timeScale = 1
+        state.movementDirection = SIMD3<Float>(1, 0, 0)
+        session.updateSimulationState(state)
+
+        await session.beginFixedStepCapture()
+        let prepared = await session.prepareFixedStepFrame()
+        #expect(prepared)
+        let before = firstParticle(in: session)
+
+        let advanced = await session.advanceFixedStep()
+        #expect(advanced)
+        let after = firstParticle(in: session)
+        session.finishFixedStepCapture()
+
+        #expect(before != nil)
+        #expect(after != nil)
+        #expect((after?.position.x ?? 0) > (before?.position.x ?? 0))
     }
 
     private func solidImage(red: UInt8, green: UInt8, blue: UInt8) throws -> CGImage {
@@ -158,5 +231,12 @@ struct MediaExportTests {
             shouldInterpolate: false,
             intent: .defaultIntent
         ))
+    }
+
+    @MainActor
+    private func firstParticle(in session: SimulationSession) -> ParticleState? {
+        let renderState = session.renderState
+        guard renderState.activeParticleCount > 0, let buffer = renderState.particleBuffer else { return nil }
+        return buffer.contents().bindMemory(to: ParticleState.self, capacity: 1).pointee
     }
 }

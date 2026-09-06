@@ -188,6 +188,37 @@ final class SimulationSession {
         runtime?.preparePlaybackFrameForExport(at: seconds) ?? false
     }
 
+    func beginFixedStepCapture() async {
+        guard let runtime else { return }
+        await withCheckedContinuation { continuation in
+            runtime.beginFixedStepCapture {
+                continuation.resume()
+            }
+        }
+    }
+
+    func prepareFixedStepFrame() async -> Bool {
+        guard let runtime else { return false }
+        return await withCheckedContinuation { continuation in
+            runtime.prepareFixedStepFrame { succeeded in
+                continuation.resume(returning: succeeded)
+            }
+        }
+    }
+
+    func advanceFixedStep() async -> Bool {
+        guard let runtime else { return false }
+        return await withCheckedContinuation { continuation in
+            runtime.advanceFixedStep { succeeded in
+                continuation.resume(returning: succeeded)
+            }
+        }
+    }
+
+    func finishFixedStepCapture() {
+        runtime?.resumeTicking()
+    }
+
     func publishFrameMetrics(averageFPS: Double, at now: TimeInterval) {
         runtime?.publishFrameMetrics(averageFPS: averageFPS, at: now)
     }
