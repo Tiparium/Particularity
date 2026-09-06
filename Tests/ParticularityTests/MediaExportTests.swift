@@ -1,6 +1,7 @@
 import CoreGraphics
 import Foundation
 import ImageIO
+import MetalKit
 import Testing
 @testable import Particularity
 
@@ -50,6 +51,48 @@ struct MediaExportTests {
         let source = try #require(CGImageSourceCreateWithURL(url as CFURL, nil))
         #expect(CGImageSourceGetCount(source) == 2)
         #expect(CGImageSourceCreateImageAtIndex(source, 0, nil)?.width == 2)
+    }
+
+    @Test("Toy Playback renders through the offscreen GIF path")
+    @MainActor
+    func toyPlaybackRendersToGIF() async throws {
+        let session = try await SimulationSession.create()
+        let modules = ActiveModuleSet(
+            physics: try #require(ModuleCatalog.knownModulesByName["ToyPlaybackProcessor"]),
+            visual: try #require(ModuleCatalog.knownModulesByName["ToyPlaybackPresenter"]),
+            optimization: try #require(ModuleCatalog.knownModulesByName["ToyPlaybackReader"])
+        )
+        try session.updateActiveModules(modules)
+
+        let viewportStore = MainWindowViewportStateStore()
+        let view = MTKView(frame: CGRect(x: 0, y: 0, width: 320, height: 180), device: session.device)
+        view.colorPixelFormat = .bgra8Unorm
+        view.depthStencilPixelFormat = .depth32Float
+        let renderer = try Renderer(
+            mtkView: view,
+            session: session,
+            viewportStateStore: viewportStore
+        )
+        let image = try renderer.captureImage(
+            size: CGSize(width: 320, height: 180),
+            cameraState: viewportStore.viewportState.camera,
+            showSimulationBounds: false,
+            playbackTime: 1
+        )
+
+        #expect(image.width == 320)
+        #expect(image.height == 180)
+
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("particularity-toy-playback-\(UUID().uuidString).gif")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let encoder = try GIFMediaEncoder(url: url, frameCount: 1, frameDelay: 1.0 / 30.0, loopsForever: true)
+        encoder.add(image)
+        try encoder.finalize()
+
+        let source = try #require(CGImageSourceCreateWithURL(url as CFURL, nil))
+        #expect(CGImageSourceGetCount(source) == 1)
+        #expect(CGImageSourceCreateImageAtIndex(source, 0, nil)?.width == 320)
     }
 
     private func solidImage(red: UInt8, green: UInt8, blue: UInt8) throws -> CGImage {
