@@ -65,8 +65,8 @@ enum MediaCaptureTimingMode: String, CaseIterable, Identifiable, Sendable {
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .renderPass: return "Render Pass"
-        case .live: return "Live"
+        case .renderPass: return "Deterministic Render"
+        case .live: return "Live Recording"
         }
     }
 }
@@ -429,14 +429,16 @@ struct MediaExportPanel: View {
 
             if isAnimated {
                 if isPlayback {
-                    Picker("Capture", selection: binding(\.timingMode)) {
+                    Text("Recording Method")
+                        .font(.caption.weight(.semibold))
+                    Picker("Recording Method", selection: binding(\.timingMode)) {
                         ForEach(MediaCaptureTimingMode.allCases) { mode in
                             Text(mode.title).tag(mode)
                         }
                     }
                     .pickerStyle(.segmented)
                 } else {
-                    LabeledContent("Capture", value: "Live")
+                    LabeledContent("Recording Method", value: "Live Recording")
                         .font(.caption)
                 }
 
