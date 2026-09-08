@@ -4,6 +4,31 @@ import simd
 
 @Suite("Profile header playback runtime")
 struct ProfileHeaderPlaybackRuntimeTests {
+    @Test("export frame preparation advances vert geometry with the nodes")
+    @MainActor
+    func exportPreparationAdvancesVertGeometry() async throws {
+        let session = try await SimulationSession.create()
+        let modules = ActiveModuleSet(
+            physics: try #require(ModuleCatalog.knownModulesByName["ProfileHeaderPlaybackProcessor"]),
+            visual: try #require(ModuleCatalog.knownModulesByName["ProfileHeaderPlaybackPresenter"]),
+            optimization: try #require(ModuleCatalog.knownModulesByName["ProfileHeaderPlaybackReader"])
+        )
+        try session.updateActiveModules(modules)
+
+        var state = session.simulationState
+        state.profileHeader.isActive = true
+        session.updateSimulationState(state)
+
+        #expect(session.preparePlaybackFrameForExport(at: 0))
+        let startVertex = firstPresentationVertex(in: session)
+        #expect(session.preparePlaybackFrameForExport(at: 3.75))
+        let advancedVertex = firstPresentationVertex(in: session)
+
+        #expect(startVertex != nil)
+        #expect(advancedVertex != nil)
+        #expect(startVertex != advancedVertex)
+    }
+
     @Test("vert thickness variance remains normalized")
     func vertThicknessVarianceRemainsNormalized() {
         for sourceIndex in stride(from: 0, through: 8_000, by: 97) {
@@ -89,5 +114,17 @@ struct ProfileHeaderPlaybackRuntimeTests {
 
         #expect(start.count == end.count)
         #expect(zip(start, end).allSatisfy { $0.position == $1.position })
+    }
+
+    @MainActor
+    private func firstPresentationVertex(in session: SimulationSession) -> SIMD4<Float>? {
+        let renderState = session.renderState
+        guard renderState.presentationLineVertexCount > 0,
+              let buffer = renderState.presentationLineBuffer else {
+            return nil
+        }
+        return buffer.contents()
+            .bindMemory(to: ProfileHeaderVertVertex.self, capacity: 1)
+            .pointee.position
     }
 }

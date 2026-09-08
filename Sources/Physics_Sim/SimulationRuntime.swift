@@ -482,9 +482,10 @@ final class SimulationRuntime: @unchecked Sendable {
             }
             self.playbackCurrentSeconds = min(max(0, seconds), playbackRuntime.timeline.durationSeconds)
             self.playbackLastUptime = nil
+            self.updatePlaybackRuntimeSettings(playbackRuntime)
             let frame = playbackRuntime.frame(at: self.playbackCurrentSeconds)
             self.playbackCurrentSampleIndex = frame.sampleIndex
-            self.uploadPlaybackParticles(frame.particles)
+            self.uploadPlaybackPresentation(frame, runtime: playbackRuntime)
             self.publishSnapshots()
         }
     }
@@ -497,9 +498,10 @@ final class SimulationRuntime: @unchecked Sendable {
             }
             playbackCurrentSeconds = min(max(0, seconds), playbackRuntime.timeline.durationSeconds)
             playbackLastUptime = nil
+            updatePlaybackRuntimeSettings(playbackRuntime)
             let frame = playbackRuntime.frame(at: playbackCurrentSeconds)
             playbackCurrentSampleIndex = frame.sampleIndex
-            uploadPlaybackParticles(frame.particles)
+            uploadPlaybackPresentation(frame, runtime: playbackRuntime)
             publishSnapshots()
             return true
         }
@@ -939,15 +941,27 @@ final class SimulationRuntime: @unchecked Sendable {
             looping: currentSimulationState.playbackLooping
         )
 
+        updatePlaybackRuntimeSettings(playbackRuntime)
+        let frame = playbackRuntime.frame(at: playbackCurrentSeconds)
+        playbackCurrentSampleIndex = frame.sampleIndex
+        uploadPlaybackPresentation(frame, runtime: playbackRuntime)
+        metricsAccumulator.recordPhysicsStep(at: now)
+        publishSnapshots()
+    }
+
+    private func updatePlaybackRuntimeSettings(_ playbackRuntime: ParticlePlaybackRuntime) {
         if let mlPlaybackRuntime = playbackRuntime as? MLPlaybackRuntime {
             mlPlaybackRuntime.updateSettings(currentSimulationState.mlPlayback)
         }
         if let profileRuntime = playbackRuntime as? ProfileHeaderPlaybackRuntime {
             profileRuntime.motionRadius = currentSimulationState.profileHeader.motionRadius
         }
+    }
 
-        let frame = playbackRuntime.frame(at: playbackCurrentSeconds)
-        playbackCurrentSampleIndex = frame.sampleIndex
+    private func uploadPlaybackPresentation(
+        _ frame: PlaybackParticleFrame,
+        runtime playbackRuntime: ParticlePlaybackRuntime
+    ) {
         uploadPlaybackParticles(frame.particles)
         if let profileRuntime = playbackRuntime as? ProfileHeaderPlaybackRuntime {
             uploadProfileHeaderVerts(
@@ -959,8 +973,6 @@ final class SimulationRuntime: @unchecked Sendable {
                 )
             )
         }
-        metricsAccumulator.recordPhysicsStep(at: now)
-        publishSnapshots()
     }
 
     private func ensureActivePlaybackRuntime() -> ParticlePlaybackRuntime? {
