@@ -127,7 +127,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         lineDescriptor.colorAttachments[0].rgbBlendOperation = .add
         lineDescriptor.colorAttachments[0].alphaBlendOperation = .add
         lineDescriptor.colorAttachments[0].sourceRGBBlendFactor = .sourceAlpha
-        lineDescriptor.colorAttachments[0].sourceAlphaBlendFactor = .sourceAlpha
+        lineDescriptor.colorAttachments[0].sourceAlphaBlendFactor = .one
         lineDescriptor.colorAttachments[0].destinationRGBBlendFactor = .oneMinusSourceAlpha
         lineDescriptor.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
 
@@ -148,7 +148,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         particleDescriptor.colorAttachments[0].rgbBlendOperation = .add
         particleDescriptor.colorAttachments[0].alphaBlendOperation = .add
         particleDescriptor.colorAttachments[0].sourceRGBBlendFactor = .sourceAlpha
-        particleDescriptor.colorAttachments[0].sourceAlphaBlendFactor = .sourceAlpha
+        particleDescriptor.colorAttachments[0].sourceAlphaBlendFactor = .one
         particleDescriptor.colorAttachments[0].destinationRGBBlendFactor = .oneMinusSourceAlpha
         particleDescriptor.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
 
@@ -162,7 +162,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         meshDescriptor.colorAttachments[0].rgbBlendOperation = .add
         meshDescriptor.colorAttachments[0].alphaBlendOperation = .add
         meshDescriptor.colorAttachments[0].sourceRGBBlendFactor = .sourceAlpha
-        meshDescriptor.colorAttachments[0].sourceAlphaBlendFactor = .sourceAlpha
+        meshDescriptor.colorAttachments[0].sourceAlphaBlendFactor = .one
         meshDescriptor.colorAttachments[0].destinationRGBBlendFactor = .oneMinusSourceAlpha
         meshDescriptor.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
 
@@ -302,6 +302,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         cameraState: ViewportCameraState,
         showSimulationBounds: Bool,
         playbackTime: Double? = nil,
+        transparentBackground: Bool = false,
         verticalFieldOfViewRadians: Float = .pi / 3
     ) throws -> CGImage {
         let width = max(1, Int(size.width.rounded()))
@@ -343,7 +344,9 @@ final class Renderer: NSObject, MTKViewDelegate {
         passDescriptor.colorAttachments[0].texture = colorTexture
         passDescriptor.colorAttachments[0].loadAction = .clear
         passDescriptor.colorAttachments[0].storeAction = .store
-        passDescriptor.colorAttachments[0].clearColor = MTLClearColor(red: 0.09, green: 0.09, blue: 0.10, alpha: 1)
+        passDescriptor.colorAttachments[0].clearColor = transparentBackground
+            ? MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
+            : MTLClearColor(red: 0.09, green: 0.09, blue: 0.10, alpha: 1)
         passDescriptor.depthAttachment.texture = depthTexture
         passDescriptor.depthAttachment.loadAction = .clear
         passDescriptor.depthAttachment.storeAction = .dontCare

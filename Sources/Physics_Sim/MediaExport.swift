@@ -240,6 +240,7 @@ enum MediaExportFormat: String, CaseIterable, Identifiable, Sendable {
     var fileExtension: String { rawValue == "jpeg" ? "jpg" : rawValue }
     var isAnimated: Bool { self == .gif || self == .mp4 }
     var isAvailable: Bool { self != .mp4 }
+    var supportsTransparency: Bool { self == .png || self == .gif }
 
     var contentType: UTType {
         switch self {
@@ -284,6 +285,7 @@ struct MediaExportSettings: Equatable, Sendable {
     var gifLoopsForever = true
     var jpegQuality = 0.9
     var includesWatermark = true
+    var transparentBackground = true
 
     var outputSize: CGSize {
         CGSize(width: max(1, width), height: max(1, height))
@@ -570,6 +572,7 @@ final class MediaExportStore: ObservableObject {
             size: settings.outputSize,
             cameraState: renderer.renderedCameraState,
             showSimulationBounds: viewportStateStore.viewportState.showSimulationBounds,
+            transparentBackground: settings.transparentBackground && settings.format.supportsTransparency,
             verticalFieldOfViewRadians: fieldOfView
         )
         if settings.includesWatermark {
@@ -731,6 +734,7 @@ final class MediaExportStore: ObservableObject {
                     cameraState: cameraState,
                     showSimulationBounds: showBounds,
                     playbackTime: playbackTime,
+                    transparentBackground: settings.transparentBackground && settings.format.supportsTransparency,
                     verticalFieldOfViewRadians: fieldOfView
                 )
                 if settings.includesWatermark {
@@ -901,6 +905,15 @@ struct MediaExportPanel: View {
                 isOn: binding(\.includesWatermark),
                 helpText: "Add a small watermark to the lower-right corner of exported media."
             )
+
+            AppCheckboxToggle(
+                "Transparent Background",
+                isOn: binding(\.transparentBackground),
+                helpText: store.settings.format.supportsTransparency
+                    ? "Export empty scene areas with transparency instead of the viewport background."
+                    : "The selected format does not support transparency."
+            )
+            .disabled(!store.settings.format.supportsTransparency)
 
             Divider()
 
