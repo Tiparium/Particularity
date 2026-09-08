@@ -20,25 +20,34 @@ struct SceneState: Codable, Equatable, Sendable {
 struct ViewportState: Codable, Equatable, Sendable {
     var camera: ViewportCameraState = ViewportCameraState()
     var slowRotationEnabled = false
+    var showSimulationBounds = true
 
     private enum CodingKeys: String, CodingKey {
         case camera
+        case showSimulationBounds
     }
 
-    init(camera: ViewportCameraState = ViewportCameraState(), slowRotationEnabled: Bool = false) {
+    init(
+        camera: ViewportCameraState = ViewportCameraState(),
+        slowRotationEnabled: Bool = false,
+        showSimulationBounds: Bool = true
+    ) {
         self.camera = camera
         self.slowRotationEnabled = slowRotationEnabled
+        self.showSimulationBounds = showSimulationBounds
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         camera = try container.decodeIfPresent(ViewportCameraState.self, forKey: .camera) ?? ViewportCameraState()
         slowRotationEnabled = false
+        showSimulationBounds = try container.decodeIfPresent(Bool.self, forKey: .showSimulationBounds) ?? true
     }
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(camera, forKey: .camera)
+        try container.encode(showSimulationBounds, forKey: .showSimulationBounds)
     }
 }
 
@@ -122,6 +131,14 @@ final class MainWindowViewportStateStore: ObservableObject {
         guard viewportState.slowRotationEnabled != isEnabled else { return }
         var nextViewportState = viewportState
         nextViewportState.slowRotationEnabled = isEnabled
+        viewportState = nextViewportState
+        schedulePersistence()
+    }
+
+    func setSimulationBoundsVisible(_ isVisible: Bool) {
+        guard viewportState.showSimulationBounds != isVisible else { return }
+        var nextViewportState = viewportState
+        nextViewportState.showSimulationBounds = isVisible
         viewportState = nextViewportState
         schedulePersistence()
     }

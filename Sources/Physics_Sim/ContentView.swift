@@ -153,6 +153,7 @@ struct MainWindowContentDependencies {
     let debugSettingsStore: MainWindowDebugSettingsStore
     let interactionSnapshotRecorder: InteractionSnapshotRecorder
     let performanceReviewLogger: PerformanceReviewLogger
+    let mediaExportStore: MediaExportStore
 
     @MainActor
     static func load(
@@ -175,18 +176,24 @@ struct MainWindowContentDependencies {
 
         progress?(.finalizingUI)
         await Task.yield()
+        let viewportStateStore = WindowSimulationSessionStore.shared.mainWindowViewportStateStore()
         return MainWindowContentDependencies(
             session: session,
             chromeStateStore: WindowSimulationSessionStore.shared.mainWindowChromeStateStore(),
             editorSettingsStore: editorSettingsStore,
-            viewportStateStore: WindowSimulationSessionStore.shared.mainWindowViewportStateStore(),
+            viewportStateStore: viewportStateStore,
             physicsModuleSettingsStore: physicsModuleSettingsStore,
             moduleCatalogStore: moduleCatalogStore,
             runtimeConfigCoordinator: runtimeConfigCoordinator,
             diagnosticsStore: diagnosticsStore,
             debugSettingsStore: WindowSimulationSessionStore.shared.mainWindowDebugSettingsStore(),
             interactionSnapshotRecorder: InteractionSnapshotRecorder.shared,
-            performanceReviewLogger: PerformanceReviewLogger.shared
+            performanceReviewLogger: PerformanceReviewLogger.shared,
+            mediaExportStore: MediaExportStore(
+                session: session,
+                viewportStateStore: viewportStateStore,
+                runtimeConfigCoordinator: runtimeConfigCoordinator
+            )
         )
     }
 }
@@ -215,6 +222,7 @@ struct ContentView: View {
     private let debugSettingsStore: MainWindowDebugSettingsStore
     private let interactionSnapshotRecorder: InteractionSnapshotRecorder
     private let performanceReviewLogger: PerformanceReviewLogger
+    @ObservedObject private var mediaExportStore: MediaExportStore
 
     init(dependencies: MainWindowContentDependencies) {
         self.session = dependencies.session
@@ -228,6 +236,7 @@ struct ContentView: View {
         self.debugSettingsStore = dependencies.debugSettingsStore
         self.interactionSnapshotRecorder = dependencies.interactionSnapshotRecorder
         self.performanceReviewLogger = dependencies.performanceReviewLogger
+        _mediaExportStore = ObservedObject(wrappedValue: dependencies.mediaExportStore)
     }
 
     private var panels: [DockPanel] {
@@ -244,12 +253,14 @@ struct ContentView: View {
             editorSettingsStore: editorSettingsStore,
             moduleCatalogStore: moduleCatalogStore,
             chromeStateStore: chromeStateStore,
+            viewportStateStore: viewportStateStore,
             physicsModuleSettingsStore: physicsModuleSettingsStore,
             runtimeConfigCoordinator: runtimeConfigCoordinator,
             diagnosticsStore: diagnosticsStore,
             debugSettingsStore: debugSettingsStore,
             interactionSnapshotRecorder: interactionSnapshotRecorder,
             performanceReviewLogger: performanceReviewLogger,
+            mediaExportStore: mediaExportStore,
             importerTargetKind: $importerTargetKind,
             isImporterPresented: $isImporterPresented,
             startInteractionSnapshotRecording: startInteractionSnapshotRecording
@@ -387,6 +398,7 @@ struct ContentView: View {
                 runtimeConfigCoordinator: runtimeConfigCoordinator,
                 editorSettingsStore: editorSettingsStore,
                 viewportStateStore: viewportStateStore,
+                mediaExportStore: mediaExportStore,
                 validationReport: runtimeConfigCoordinator.validationReport,
                 highlightedValidationField: highlightedValidationField,
                 anyDockPanelsVisible: chromeStateStore.anyDockPanelsVisible,
@@ -418,6 +430,7 @@ struct ContentView: View {
                 editorSettingsStore: editorSettingsStore,
                 diagnosticsStore: diagnosticsStore,
                 debugSettingsStore: debugSettingsStore,
+                mediaExportStore: mediaExportStore,
                 viewportGeneration: viewportGeneration,
                 highlightedValidationField: $highlightedValidationField
             ),
@@ -1142,6 +1155,7 @@ private struct SimulationCenterPane: View {
     @ObservedObject var editorSettingsStore: MainWindowEditorSettingsStore
     @ObservedObject var diagnosticsStore: MainWindowDiagnosticsStore
     @ObservedObject var debugSettingsStore: MainWindowDebugSettingsStore
+    @ObservedObject var mediaExportStore: MediaExportStore
     let viewportGeneration: Int
     @Binding var highlightedValidationField: RuntimeValidationField?
 
@@ -1159,7 +1173,7 @@ private struct SimulationCenterPane: View {
     var body: some View {
         VStack(spacing: 10) {
             HStack(spacing: 16) {
-                LabeledContent("Transport", value: transportState.title)
+                LabeledContent("Transport", value: mediaExportStore.isExporting ? "Exporting" : transportState.title)
                 LabeledContent("Mode", value: runtimeConfigCoordinator.activeModules.executionModel?.title ?? "Mixed")
                 LabeledContent("Projected", value: ByteCountFormatter.string(fromByteCount: Int64(validationReport.projectedBytes), countStyle: .memory))
                 Spacer()
@@ -1177,6 +1191,7 @@ private struct SimulationCenterPane: View {
                     session: session,
                     activeModules: runtimeConfigCoordinator.activeModules,
                     transportState: transportState,
+                    isExporting: mediaExportStore.isExporting,
                     looping: runtimeConfigCoordinator.simulationState.playbackLooping
                 )
             }
@@ -1187,7 +1202,8 @@ private struct SimulationCenterPane: View {
                 transportState: transportState,
                 viewportGeneration: viewportGeneration,
                 diagnosticsStore: diagnosticsStore,
-                debugSettingsStore: debugSettingsStore
+                debugSettingsStore: debugSettingsStore,
+                mediaExportStore: mediaExportStore
             )
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
@@ -1250,6 +1266,7 @@ private struct TopRuntimeToolbar: View {
     @ObservedObject var runtimeConfigCoordinator: SimulationRuntimeConfigCoordinator
     @ObservedObject var editorSettingsStore: MainWindowEditorSettingsStore
     @ObservedObject var viewportStateStore: MainWindowViewportStateStore
+    @ObservedObject var mediaExportStore: MediaExportStore
     let validationReport: RuntimeValidationReport
     let highlightedValidationField: RuntimeValidationField?
     let anyDockPanelsVisible: Bool
@@ -1272,20 +1289,24 @@ private struct TopRuntimeToolbar: View {
                     runtimeConfigCoordinator.startSimulation()
                 }
                 .buttonStyle(AppFramedButtonStyle(.prominent))
-                .disabled(transportState != .stopped || !validationReport.canStart)
+                .disabled(mediaExportStore.isExporting || transportState != .stopped || !validationReport.canStart)
 
                 Button(transportState == .running ? "Pause" : "Play") {
                     runtimeConfigCoordinator.togglePausePlay()
                 }
                 .frame(minWidth: 64)
                 .buttonStyle(AppFramedButtonStyle())
-                .disabled(transportState == .stopped || (transportState == .paused && !validationReport.canStart))
+                .disabled(
+                    mediaExportStore.isExporting
+                    || transportState == .stopped
+                    || (transportState == .paused && !validationReport.canStart)
+                )
 
                 Button("Stop") {
                     runtimeConfigCoordinator.stopSimulation()
                 }
                 .buttonStyle(AppFramedButtonStyle())
-                .disabled(transportState == .stopped)
+                .disabled(mediaExportStore.isExporting || transportState == .stopped)
 
                 Divider()
                     .frame(height: 18)
@@ -1457,6 +1478,7 @@ private struct PlaybackStatusBar: View {
     let session: SimulationSession
     let activeModules: ActiveModuleSet
     let transportState: SimulationTransportState
+    let isExporting: Bool
     let looping: Bool
 
     var body: some View {
@@ -1476,7 +1498,7 @@ private struct PlaybackStatusBar: View {
                     in: 0...max(0.001, timeline.durationSeconds)
                 )
                 .controlSize(.small)
-                .disabled(transportState == .stopped)
+                .disabled(isExporting || transportState == .stopped)
                 Text(timeText(timeline.durationSeconds))
                     .font(.caption.monospacedDigit())
                     .frame(width: 52, alignment: .leading)
@@ -1565,15 +1587,27 @@ private struct SimulationViewportSurface: View {
     let viewportGeneration: Int
     let diagnosticsStore: MainWindowDiagnosticsStore
     let debugSettingsStore: MainWindowDebugSettingsStore
+    @ObservedObject var mediaExportStore: MediaExportStore
 
     var body: some View {
-        MetalViewportView(
-            session: session,
-            viewportStateStore: viewportStateStore,
-            transportState: transportState,
-            diagnosticsStore: diagnosticsStore,
-            debugSettingsStore: debugSettingsStore
-        )
+        ZStack {
+            MetalViewportView(
+                session: session,
+                viewportStateStore: viewportStateStore,
+                transportState: transportState,
+                diagnosticsStore: diagnosticsStore,
+                debugSettingsStore: debugSettingsStore,
+                mediaExportStore: mediaExportStore
+            )
+
+            if mediaExportStore.capturePreviewEnabled {
+                CapturePreviewOverlay(
+                    outputSize: mediaExportStore.settings.outputSize,
+                    showsWatermark: mediaExportStore.settings.includesWatermark
+                )
+                    .allowsHitTesting(false)
+            }
+        }
         .id(viewportGeneration)
         .transaction { transaction in
             transaction.animation = nil
@@ -2197,6 +2231,7 @@ struct InspectorPanel: View {
     @ObservedObject var runtimeConfigCoordinator: SimulationRuntimeConfigCoordinator
     @ObservedObject var diagnosticsStore: MainWindowDiagnosticsStore
     @ObservedObject var chromeStateStore: MainWindowChromeStateStore
+    @ObservedObject var viewportStateStore: MainWindowViewportStateStore
     let onStartInteractionSnapshot: () -> Void
     let onSetPerformanceReviewLoggingEnabled: (Bool) -> Void
 
@@ -2240,6 +2275,14 @@ struct InspectorPanel: View {
             Text("Diagnostics")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
+            AppCheckboxToggle(
+                "Show Simulation Bounds",
+                isOn: Binding(
+                    get: { viewportStateStore.viewportState.showSimulationBounds },
+                    set: { viewportStateStore.setSimulationBoundsVisible($0) }
+                ),
+                helpText: "Show the simulation bounds in the viewport and exported media."
+            )
             AppCheckboxToggle(
                 "Performance Review Logging",
                 isOn: Binding(

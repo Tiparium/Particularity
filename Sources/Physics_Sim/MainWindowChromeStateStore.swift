@@ -75,6 +75,15 @@ struct MainWindowChromeStateSnapshot: Codable, Equatable, Sendable {
         "fileView:right",
     ]
 
+    static let preMediaExportDefaultLayoutSignature: Set<String> = [
+        "moduleSlots:left",
+        "physicsSettings:right",
+        "visualSettings:right",
+        "optimizationSettings:right",
+        "inspector:center",
+        "debugSettings:center",
+    ]
+
     static let currentDefaultLayoutSignature: Set<String> = layoutSignature(for: currentDefaultPanels)
 
     static func layoutSignature(for panels: [DockPanel]) -> Set<String> {
@@ -88,7 +97,8 @@ struct MainWindowChromeStateSnapshot: Codable, Equatable, Sendable {
 
         if next.panels.isEmpty
             || signature == Self.legacyDefaultLayoutSignature
-            || signature == Self.fileBrowserDefaultLayoutSignature {
+            || signature == Self.fileBrowserDefaultLayoutSignature
+            || signature == Self.preMediaExportDefaultLayoutSignature {
             next.panels = Self.currentDefaultPanels
         }
 

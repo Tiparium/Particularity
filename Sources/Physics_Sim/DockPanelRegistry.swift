@@ -26,6 +26,7 @@ struct DockPanelType: RawRepresentable, Codable, Hashable, Sendable, Identifiabl
     static let visualSettings: Self = "visualSettings"
     static let optimizationSettings: Self = "optimizationSettings"
     static let moduleCatalog: Self = "moduleCatalog"
+    static let mediaExport: Self = "mediaExport"
     static let inspector: Self = "inspector"
     static let leaderCommunicationLog: Self = "leaderCommunicationLog"
     static let debugSettings: Self = "debugSettings"
@@ -54,12 +55,14 @@ struct DockPanelRenderContext {
     let editorSettingsStore: MainWindowEditorSettingsStore
     let moduleCatalogStore: MainWindowModuleCatalogStore
     let chromeStateStore: MainWindowChromeStateStore
+    let viewportStateStore: MainWindowViewportStateStore
     let physicsModuleSettingsStore: MainWindowPhysicsModuleSettingsStore
     let runtimeConfigCoordinator: SimulationRuntimeConfigCoordinator
     let diagnosticsStore: MainWindowDiagnosticsStore
     let debugSettingsStore: MainWindowDebugSettingsStore
     let interactionSnapshotRecorder: InteractionSnapshotRecorder
     let performanceReviewLogger: PerformanceReviewLogger
+    let mediaExportStore: MediaExportStore
     let importerTargetKind: Binding<ModuleKind>
     let isImporterPresented: Binding<Bool>
     let startInteractionSnapshotRecording: () -> Void
@@ -141,6 +144,14 @@ enum DockPanelRegistry {
             )
         },
         DockPanelDefinition(
+            type: .mediaExport,
+            title: "Media Export",
+            subtype: .core,
+            defaultZone: .right
+        ) { context in
+            AnyView(MediaExportPanel(store: context.mediaExportStore))
+        },
+        DockPanelDefinition(
             type: .moduleCatalog,
             title: "Module Catalog",
             subtype: .core,
@@ -167,6 +178,7 @@ enum DockPanelRegistry {
                     runtimeConfigCoordinator: context.runtimeConfigCoordinator,
                     diagnosticsStore: context.diagnosticsStore,
                     chromeStateStore: context.chromeStateStore,
+                    viewportStateStore: context.viewportStateStore,
                     onStartInteractionSnapshot: context.startInteractionSnapshotRecording,
                     onSetPerformanceReviewLoggingEnabled: { context.performanceReviewLogger.setEnabled($0) }
                 )
