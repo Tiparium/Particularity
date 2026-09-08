@@ -290,6 +290,28 @@ struct MediaExportTests {
         #expect(abs(Int(pixels[2]) - 231) <= 2)
     }
 
+    @Test("ImageIO GIF encoder preserves transparent empty pixels")
+    func gifEncoderPreservesTransparency() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("particularity-transparent-\(UUID().uuidString).gif")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let encoder = try GIFMediaEncoder(
+            url: url,
+            frameCount: 1,
+            framesPerSecond: 30,
+            loopsForever: true
+        )
+
+        try encoder.add(try mixedAlphaImage())
+        try encoder.finalize()
+
+        let source = try #require(CGImageSourceCreateWithURL(url as CFURL, nil))
+        let image = try #require(CGImageSourceCreateImageAtIndex(source, 0, nil))
+        let pixels = try rgbaPixels(in: image)
+        #expect(pixels[3] == 255)
+        #expect(pixels[7] == 0)
+    }
+
     @Test("GIF encoder rejects dimensions outside the format limit")
     func gifEncoderRejectsUnsupportedDimensions() throws {
         let url = FileManager.default.temporaryDirectory
@@ -389,6 +411,14 @@ struct MediaExportTests {
         }
     }
 
+    @Test("export formats expose their transparency support")
+    func exportFormatsReportTransparencySupport() {
+        #expect(MediaExportFormat.png.supportsTransparency)
+        #expect(MediaExportFormat.gif.supportsTransparency)
+        #expect(!MediaExportFormat.jpeg.supportsTransparency)
+        #expect(!MediaExportFormat.mp4.supportsTransparency)
+    }
+
     @Test("Toy Playback renders through the offscreen GIF path")
     @MainActor
     func toyPlaybackRendersToGIF() async throws {
@@ -413,11 +443,19 @@ struct MediaExportTests {
             size: CGSize(width: 320, height: 180),
             cameraState: viewportStore.viewportState.camera,
             showSimulationBounds: false,
-            playbackTime: 1
+            playbackTime: 1,
+            transparentBackground: true
         )
 
         #expect(image.width == 320)
         #expect(image.height == 180)
+        let renderedPixels = try rgbaPixels(in: image)
+        let transparentPixelCount = stride(from: 3, to: renderedPixels.count, by: 4).reduce(into: 0) {
+            if renderedPixels[$1] == 0 {
+                $0 += 1
+            }
+        }
+        #expect(transparentPixelCount > 0)
 
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("particularity-toy-playback-\(UUID().uuidString).gif")
@@ -513,6 +551,24 @@ struct MediaExportTests {
             bitsPerComponent: 8,
             bitsPerPixel: 32,
             bytesPerRow: width * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
+            provider: provider,
+            decode: nil,
+            shouldInterpolate: false,
+            intent: .defaultIntent
+        ))
+    }
+
+    private func mixedAlphaImage() throws -> CGImage {
+        let pixels: [UInt8] = [255, 255, 255, 255, 0, 0, 0, 0]
+        let provider = try #require(CGDataProvider(data: Data(pixels) as CFData))
+        return try #require(CGImage(
+            width: 2,
+            height: 1,
+            bitsPerComponent: 8,
+            bitsPerPixel: 32,
+            bytesPerRow: 8,
             space: CGColorSpaceCreateDeviceRGB(),
             bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
             provider: provider,
