@@ -153,7 +153,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         vertRibbonDescriptor.colorAttachments[0].isBlendingEnabled = true
         vertRibbonDescriptor.colorAttachments[0].sourceRGBBlendFactor = .sourceAlpha
         vertRibbonDescriptor.colorAttachments[0].destinationRGBBlendFactor = .oneMinusSourceAlpha
-        vertRibbonDescriptor.colorAttachments[0].sourceAlphaBlendFactor = .sourceAlpha
+        vertRibbonDescriptor.colorAttachments[0].sourceAlphaBlendFactor = .one
         vertRibbonDescriptor.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
 
         let particleDescriptor = MTLRenderPipelineDescriptor()
