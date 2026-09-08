@@ -50,8 +50,11 @@ enum LaunchProgressStage: String, CaseIterable {
     }
 }
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var didEmitReady = false
+    weak var mediaExportStore: MediaExportStore?
+    private var isWaitingForMediaExport = false
 
     private var isHeadless: Bool {
         ProcessInfo.processInfo.environment["PHYSICS_SIM_HEADLESS"] == "1"
@@ -66,6 +69,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard mediaExportStore?.isExporting == true else { return .terminateNow }
+        guard !isWaitingForMediaExport else { return .terminateLater }
+        isWaitingForMediaExport = true
+        Task { [weak self, weak sender] in
+            await self?.mediaExportStore?.prepareForApplicationTermination()
+            self?.isWaitingForMediaExport = false
+            sender?.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -125,6 +140,7 @@ struct PhysicsSimApp: App {
                     let dependencies = try await MainWindowContentDependencies.load { stage in
                         launchProgressStage = stage
                     }
+                    appDelegate.mediaExportStore = dependencies.mediaExportStore
                     contentDependencies = .success(dependencies)
                 } catch {
                     contentDependencies = .failure(error)

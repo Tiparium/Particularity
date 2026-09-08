@@ -54,8 +54,6 @@ struct CameraTransition {
 enum CameraMath {
     static let worldUp = SIMD3<Float>(0, 0, 1)
     static let orbitMinRadius: Float = 0.12
-    static let orbitMaxRadius: Float = 2.5
-    static let navBounds: ClosedRange<Float> = -2.5...2.5
     static let pitchLimit: Float = 1.35
     static let movementSpeedRange: ClosedRange<Float> = 0.2...4.0
 
@@ -119,24 +117,9 @@ enum CameraMath {
         )
     }
 
-    static func clampNavigationPosition(_ position: SIMD3<Float>) -> SIMD3<Float> {
-        SIMD3<Float>(
-            max(navBounds.lowerBound, min(navBounds.upperBound, position.x)),
-            max(navBounds.lowerBound, min(navBounds.upperBound, position.y)),
-            max(navBounds.lowerBound, min(navBounds.upperBound, position.z))
-        )
-    }
-
     static func correctedOrbitState(from state: ViewportCameraState) -> ViewportCameraState {
         var corrected = state
         corrected.mode = .orbit
-        let radius = simd_length(state.position)
-        if radius > orbitMaxRadius {
-            let direction = simd_length_squared(state.position) > 0.000_001
-                ? simd_normalize(state.position)
-                : simd_normalize(ViewportCameraState.defaultPosition)
-            corrected.position = direction * (orbitMaxRadius - 0.01)
-        }
         let orientation = legalOrbitOrientation(for: corrected.position)
         corrected.yaw = orientation.yaw
         corrected.pitch = orientation.pitch
@@ -213,7 +196,7 @@ final class CameraState {
             CameraMath.forwardVector(yaw: authoritativeState.yaw, pitch: authoritativeState.pitch) * forward
             + CameraMath.rightVector(yaw: authoritativeState.yaw, pitch: authoritativeState.pitch) * right
             + CameraMath.upVector(yaw: authoritativeState.yaw, pitch: authoritativeState.pitch) * up
-        authoritativeState.position = CameraMath.clampNavigationPosition(authoritativeState.position + offset * moveScale)
+        authoritativeState.position += offset * moveScale
         renderedState = authoritativeState
     }
 
@@ -222,7 +205,7 @@ final class CameraState {
         var orbit = CameraMath.orbitComponents(position: authoritativeState.position)
         orbit.yaw += yawDelta
         orbit.pitch = CameraMath.clampPitch(orbit.pitch + pitchDelta)
-        orbit.radius = max(CameraMath.orbitMinRadius, min(CameraMath.orbitMaxRadius, orbit.radius + radiusDelta))
+        orbit.radius = max(CameraMath.orbitMinRadius, orbit.radius + radiusDelta)
         authoritativeState.position = CameraMath.orbitPosition(yaw: orbit.yaw, pitch: orbit.pitch, radius: orbit.radius)
         let orientation = CameraMath.legalOrbitOrientation(for: authoritativeState.position)
         authoritativeState.yaw = orientation.yaw

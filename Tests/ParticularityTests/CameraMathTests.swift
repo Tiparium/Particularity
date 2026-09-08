@@ -1,4 +1,5 @@
 import Foundation
+import simd
 import Testing
 @testable import Particularity
 
@@ -20,6 +21,26 @@ struct CameraMathTests {
             sinf(ViewportCameraState.defaultPitch) * ViewportCameraState.defaultRadius
         )
         expectVector(ViewportCameraState.defaultPosition, equals: expected)
+    }
+
+    @Test("navigation camera can move beyond the simulation bounds")
+    func navigationCameraHasNoOuterBounds() {
+        let camera = CameraState()
+
+        camera.updateNavigationTranslation(forward: 100, right: 0, up: 0, deltaTime: 1)
+
+        #expect(simd_length(camera.authoritativeState.position) > 2.5)
+    }
+
+    @Test("orbit camera can move beyond the simulation bounds")
+    func orbitCameraHasNoMaximumRadius() {
+        var state = ViewportCameraState()
+        state.mode = .orbit
+        let camera = CameraState(viewportCameraState: state)
+
+        camera.updateOrbitMotion(yawDelta: 0, pitchDelta: 0, radiusDelta: 10)
+
+        #expect(simd_length(camera.authoritativeState.position) > 10)
     }
 
     private func expectVector(

@@ -398,6 +398,7 @@ struct ContentView: View {
                 runtimeConfigCoordinator: runtimeConfigCoordinator,
                 editorSettingsStore: editorSettingsStore,
                 viewportStateStore: viewportStateStore,
+                mediaExportStore: mediaExportStore,
                 validationReport: runtimeConfigCoordinator.validationReport,
                 highlightedValidationField: highlightedValidationField,
                 anyDockPanelsVisible: chromeStateStore.anyDockPanelsVisible,
@@ -1172,7 +1173,7 @@ private struct SimulationCenterPane: View {
     var body: some View {
         VStack(spacing: 10) {
             HStack(spacing: 16) {
-                LabeledContent("Transport", value: transportState.title)
+                LabeledContent("Transport", value: mediaExportStore.isExporting ? "Exporting" : transportState.title)
                 LabeledContent("Mode", value: runtimeConfigCoordinator.activeModules.executionModel?.title ?? "Mixed")
                 LabeledContent("Projected", value: ByteCountFormatter.string(fromByteCount: Int64(validationReport.projectedBytes), countStyle: .memory))
                 Spacer()
@@ -1190,6 +1191,7 @@ private struct SimulationCenterPane: View {
                     session: session,
                     activeModules: runtimeConfigCoordinator.activeModules,
                     transportState: transportState,
+                    isExporting: mediaExportStore.isExporting,
                     looping: runtimeConfigCoordinator.simulationState.playbackLooping
                 )
             }
@@ -1264,6 +1266,7 @@ private struct TopRuntimeToolbar: View {
     @ObservedObject var runtimeConfigCoordinator: SimulationRuntimeConfigCoordinator
     @ObservedObject var editorSettingsStore: MainWindowEditorSettingsStore
     @ObservedObject var viewportStateStore: MainWindowViewportStateStore
+    @ObservedObject var mediaExportStore: MediaExportStore
     let validationReport: RuntimeValidationReport
     let highlightedValidationField: RuntimeValidationField?
     let anyDockPanelsVisible: Bool
@@ -1286,20 +1289,24 @@ private struct TopRuntimeToolbar: View {
                     runtimeConfigCoordinator.startSimulation()
                 }
                 .buttonStyle(AppFramedButtonStyle(.prominent))
-                .disabled(transportState != .stopped || !validationReport.canStart)
+                .disabled(mediaExportStore.isExporting || transportState != .stopped || !validationReport.canStart)
 
                 Button(transportState == .running ? "Pause" : "Play") {
                     runtimeConfigCoordinator.togglePausePlay()
                 }
                 .frame(minWidth: 64)
                 .buttonStyle(AppFramedButtonStyle())
-                .disabled(transportState == .stopped || (transportState == .paused && !validationReport.canStart))
+                .disabled(
+                    mediaExportStore.isExporting
+                    || transportState == .stopped
+                    || (transportState == .paused && !validationReport.canStart)
+                )
 
                 Button("Stop") {
                     runtimeConfigCoordinator.stopSimulation()
                 }
                 .buttonStyle(AppFramedButtonStyle())
-                .disabled(transportState == .stopped)
+                .disabled(mediaExportStore.isExporting || transportState == .stopped)
 
                 Divider()
                     .frame(height: 18)
@@ -1471,6 +1478,7 @@ private struct PlaybackStatusBar: View {
     let session: SimulationSession
     let activeModules: ActiveModuleSet
     let transportState: SimulationTransportState
+    let isExporting: Bool
     let looping: Bool
 
     var body: some View {
@@ -1490,7 +1498,7 @@ private struct PlaybackStatusBar: View {
                     in: 0...max(0.001, timeline.durationSeconds)
                 )
                 .controlSize(.small)
-                .disabled(transportState == .stopped)
+                .disabled(isExporting || transportState == .stopped)
                 Text(timeText(timeline.durationSeconds))
                     .font(.caption.monospacedDigit())
                     .frame(width: 52, alignment: .leading)
@@ -1593,7 +1601,10 @@ private struct SimulationViewportSurface: View {
             )
 
             if mediaExportStore.capturePreviewEnabled {
-                CapturePreviewOverlay(outputSize: mediaExportStore.settings.outputSize)
+                CapturePreviewOverlay(
+                    outputSize: mediaExportStore.settings.outputSize,
+                    showsWatermark: mediaExportStore.settings.includesWatermark
+                )
                     .allowsHitTesting(false)
             }
         }

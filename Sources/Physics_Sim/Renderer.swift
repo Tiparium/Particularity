@@ -78,6 +78,8 @@ final class Renderer: NSObject, MTKViewDelegate {
     private let slowRotationAngularSpeed: Float = 0.16
     private let slowRotationResumeDelay: TimeInterval = 3.0
     private let liveCameraState: CameraState
+    private(set) var logicalViewportSize: CGSize
+    var renderedCameraState: ViewportCameraState { liveCameraState.renderedState }
     private var lastManualCameraInteractionTime: TimeInterval = -.infinity
     private var lastSlowRotationEnabled = false
 
@@ -98,6 +100,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         self.viewportStateStore = viewportStateStore
         self.cameraStateSink = cameraStateSink
         self.liveCameraState = CameraState(viewportCameraState: viewportStateStore.viewportState.camera)
+        self.logicalViewportSize = mtkView.bounds.size
 
         let library = session.library
 
@@ -253,9 +256,12 @@ final class Renderer: NSObject, MTKViewDelegate {
         try session.updateActiveModules(nextModules)
     }
 
-    func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
+    func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
+        logicalViewportSize = view.bounds.size
+    }
 
     func draw(in view: MTKView) {
+        logicalViewportSize = view.bounds.size
         let now = ProcessInfo.processInfo.systemUptime
         frameRateTracker.recordFrame(at: now)
         syncCameraControlsFromViewportState(now: now)
@@ -280,6 +286,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             size: size,
             cameraState: liveCameraState.renderedState,
             showSimulationBounds: viewportStateStore.viewportState.showSimulationBounds,
+            verticalFieldOfViewRadians: .pi / 3,
             now: now
         ) else { return }
 
@@ -294,7 +301,8 @@ final class Renderer: NSObject, MTKViewDelegate {
         size: CGSize,
         cameraState: ViewportCameraState,
         showSimulationBounds: Bool,
-        playbackTime: Double? = nil
+        playbackTime: Double? = nil,
+        verticalFieldOfViewRadians: Float = .pi / 3
     ) throws -> CGImage {
         let width = max(1, Int(size.width.rounded()))
         let height = max(1, Int(size.height.rounded()))
@@ -347,6 +355,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             size: CGSize(width: width, height: height),
             cameraState: cameraState,
             showSimulationBounds: showSimulationBounds,
+            verticalFieldOfViewRadians: verticalFieldOfViewRadians,
             now: ProcessInfo.processInfo.systemUptime
         ) else {
             throw RendererError.imageCreationFailed
@@ -389,12 +398,18 @@ final class Renderer: NSObject, MTKViewDelegate {
         size: CGSize,
         cameraState: ViewportCameraState,
         showSimulationBounds: Bool,
+        verticalFieldOfViewRadians: Float,
         now: TimeInterval
     ) -> Bool {
         let renderState = session.renderState
         let simulationState = session.simulationState
         let aspect = Float(size.width / max(size.height, 1))
-        let projection = float4x4.perspective(fovY: 60.0 * .pi / 180.0, aspect: aspect, near: 0.1, far: 100.0)
+        let projection = float4x4.perspective(
+            fovY: verticalFieldOfViewRadians,
+            aspect: aspect,
+            near: 0.1,
+            far: 100.0
+        )
         let projectionYScale = projection.columns.1.y
         let model = float4x4.identity()
         let mvp = projection * CameraMath.viewMatrix(for: cameraState) * model

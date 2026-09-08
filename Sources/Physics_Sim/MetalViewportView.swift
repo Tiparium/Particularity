@@ -271,7 +271,11 @@ final class MetalViewportCoordinator: NSObject, InputMTKViewDelegate {
         renderer?.commitCameraState()
         mediaExportStore?.detach(renderer: renderer)
         if isViewportAttached {
-            session?.detachViewport()
+            if let session, mediaExportStore?.isExporting == true {
+                mediaExportStore?.detachViewportAfterExport(session)
+            } else {
+                session?.detachViewport()
+            }
             isViewportAttached = false
         }
         windowLifecycleObserver.unbind()
@@ -290,7 +294,11 @@ final class MetalViewportCoordinator: NSObject, InputMTKViewDelegate {
         renderer?.commitCameraState()
         guard isViewportAttached else { return }
         isViewportAttached = false
-        session?.detachViewport()
+        if let session, mediaExportStore?.isExporting == true {
+            mediaExportStore?.detachViewportAfterExport(session)
+        } else {
+            session?.detachViewport()
+        }
         NotificationCenter.default.post(name: .rebuildViewport, object: nil)
     }
 }
