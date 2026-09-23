@@ -102,6 +102,10 @@ check_cmd() {
   return 1
 }
 
+metal_toolchain_available() {
+  xcrun --sdk macosx metal -v >/dev/null 2>&1
+}
+
 run_selfcheck() {
   local ok=0
 
@@ -117,7 +121,7 @@ run_selfcheck() {
     ok=1
   fi
 
-  if xcrun --sdk macosx metal -v >/dev/null 2>&1; then
+  if metal_toolchain_available; then
     pass "Metal toolchain available via xcrun"
   else
     fail "Metal toolchain missing (run ./run setup)"
@@ -162,6 +166,11 @@ case "$subcmd" in
       swift build "$@"
       pass "Headless smoke check complete"
       exit 0
+    fi
+
+    if ! metal_toolchain_available; then
+      fail "Metal toolchain unavailable for runtime shaders. Run ./run setup, then retry."
+      exit 1
     fi
 
     swift build "$@"
@@ -214,9 +223,20 @@ case "$subcmd" in
     swift test "$@"
     ;;
   setup)
-    echo "Running utility setup for machine provisioning..."
-    echo "Downloading Metal toolchain component (run this on M1.2 setup as requested)."
-    xcodebuild -downloadComponent MetalToolchain
+    echo "Completing Xcode first-launch setup..."
+    if ! xcodebuild -runFirstLaunch; then
+      fail "Xcode first-launch setup failed. Open Xcode and finish its setup, then retry ./run setup."
+      exit 1
+    fi
+    if ! metal_toolchain_available; then
+      echo "Installing the Metal toolchain component for the selected Xcode..."
+      xcodebuild -downloadComponent MetalToolchain
+    fi
+    if ! metal_toolchain_available; then
+      fail "Metal toolchain is still unavailable. Check xcode-select and rerun ./run selfcheck."
+      exit 1
+    fi
+    pass "Metal toolchain ready"
     ;;
   selfcheck)
     run_selfcheck

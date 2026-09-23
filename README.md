@@ -115,8 +115,8 @@ Common selfcheck failures:
 - **Xcode build tools missing**: install Xcode from the App Store or Apple Developer downloads.
 - **Xcode runtime tools missing**: install Xcode command line tools and make sure `xcrun` is available.
 - **Swift toolchain missing**: install Xcode with Swift support.
-- **xcodebuild not ready**: open Xcode once and accept any first-run prompts or license agreements.
-- **Metal toolchain missing**: run `./run setup`, then rerun `./run selfcheck`.
+- **xcodebuild not ready**: open Xcode once and accept any first-run prompts or license agreements, then run `./run setup`.
+- **Metal toolchain missing**: Xcode updates can remove this optional component. Run `./run setup`, then rerun `./run selfcheck`.
 
 Common selfcheck warnings:
 

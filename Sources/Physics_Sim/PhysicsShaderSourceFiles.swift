@@ -44,7 +44,7 @@ enum PhysicsShaderSourceFiles {
     }
 
     private static func loadShaderSource(named name: String) throws -> String {
-        guard let url = Bundle.module.url(forResource: name, withExtension: "metal") else {
+        guard let url = Bundle.module.url(forResource: name, withExtension: "metal", subdirectory: "Shaders") else {
             throw SimulationSessionError.shaderSourceLoadingFailed("Missing shader resource \(name).metal.")
         }
 

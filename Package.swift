@@ -13,7 +13,7 @@ let package = Package(
             name: "Particularity",
             path: "Sources/Physics_Sim",
             resources: [
-                .process("Shaders"),
+                .copy("Shaders"),
             ],
             linkerSettings: [
                 .linkedFramework("SwiftUI"),
