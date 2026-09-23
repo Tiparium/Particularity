@@ -202,6 +202,13 @@ private struct GenericModuleSettingsSchemaView: View {
                 value: textBinding(for: control),
                 helpText: control.helpText
             )
+        case .multilineText:
+            ModuleDebouncedTextSettingControl(
+                title: control.title,
+                value: textBinding(for: control),
+                helpText: control.helpText,
+                isMultiline: true
+            )
         case .color:
             ModuleColorSettingControl(
                 title: control.title,
@@ -281,12 +288,14 @@ private struct ModuleDebouncedTextSettingControl: View {
     let title: String
     @Binding var value: String
     let helpText: String?
+    let isMultiline: Bool
     @State private var draft: String
 
-    init(title: String, value: Binding<String>, helpText: String?) {
+    init(title: String, value: Binding<String>, helpText: String?, isMultiline: Bool = false) {
         self.title = title
         _value = value
         self.helpText = helpText
+        self.isMultiline = isMultiline
         _draft = State(initialValue: value.wrappedValue)
     }
 
@@ -295,9 +304,7 @@ private struct ModuleDebouncedTextSettingControl: View {
             Text(title)
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            TextField(title, text: $draft)
-                .textFieldStyle(.roundedBorder)
-                .onSubmit(commit)
+            textEditor
             if let helpText {
                 Text(helpText)
                     .font(.caption2)
@@ -319,6 +326,32 @@ private struct ModuleDebouncedTextSettingControl: View {
             }
         }
         .onDisappear(perform: commit)
+    }
+
+    @ViewBuilder
+    private var textEditor: some View {
+        if isMultiline {
+            TextEditor(text: $draft)
+                .font(.body)
+                .scrollContentBackground(.hidden)
+                .padding(5)
+                .frame(height: multilineEditorHeight)
+                .background(.quaternary.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(.quaternary, lineWidth: 1)
+                }
+        } else {
+            TextField(title, text: $draft)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit(commit)
+        }
+    }
+
+    private var multilineEditorHeight: CGFloat {
+        let explicitLineCount = max(1, draft.components(separatedBy: .newlines).count)
+        let visibleLineCount = min(explicitLineCount, 8)
+        return 34 + CGFloat(visibleLineCount - 1) * 20
     }
 
     private func commit() {

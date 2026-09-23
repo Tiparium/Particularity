@@ -99,6 +99,59 @@ struct ProfileHeaderPlaybackRuntimeTests {
         #expect(runtime.frame(at: 0).particles.count == 800)
     }
 
+    @Test("lays out newline-separated text as centered independent lines")
+    func laysOutMultilineText() throws {
+        let runtime = ProfileHeaderPlaybackRuntime(
+            text: "AA\nBB",
+            nodesPerCharacter: 200,
+            textScale: 0.5,
+            motionRadius: 0,
+            durationSeconds: 15
+        )
+        let particles = runtime.frame(at: 0).particles
+        let groupedPositions = Dictionary(grouping: particles.indices) {
+            runtime.glyphOwner(ofNodeAt: $0)
+        }
+
+        #expect(particles.count == 800)
+        #expect(groupedPositions.keys.compactMap { $0 }.count == 4)
+        let firstLineMean = try meanZ(forOwners: [0, 1], groups: groupedPositions, particles: particles)
+        let secondLineMean = try meanZ(forOwners: [2, 3], groups: groupedPositions, particles: particles)
+        #expect(abs(firstLineMean - secondLineMean) > 0.15)
+    }
+
+    @Test("aligns multiline text against shared left, center, and right edges")
+    func alignsMultilineText() throws {
+        for alignment in [
+            ProfileHeaderTextAlignment.left,
+            .center,
+            .right,
+        ] {
+            let runtime = ProfileHeaderPlaybackRuntime(
+                text: "I\nMMMM",
+                textAlignment: alignment,
+                nodesPerCharacter: 150,
+                textScale: 0.5,
+                motionRadius: 0,
+                durationSeconds: 15
+            )
+            let particles = runtime.frame(at: 0).particles
+            let firstLine = particles.indices.filter { runtime.glyphOwner(ofNodeAt: $0) == 0 }
+            let secondLine = particles.indices.filter { (runtime.glyphOwner(ofNodeAt: $0) ?? 0) > 0 }
+            let firstBounds = try horizontalBounds(for: firstLine, particles: particles)
+            let secondBounds = try horizontalBounds(for: secondLine, particles: particles)
+
+            switch alignment {
+            case .left:
+                #expect(abs(firstBounds.lowerBound - secondBounds.lowerBound) < 0.04)
+            case .center:
+                #expect(abs(firstBounds.midpoint - secondBounds.midpoint) < 0.04)
+            case .right:
+                #expect(abs(firstBounds.upperBound - secondBounds.upperBound) < 0.04)
+            }
+        }
+    }
+
     @Test("closes its deterministic loop")
     func closesDeterministicLoop() {
         let runtime = ProfileHeaderPlaybackRuntime(
@@ -127,4 +180,29 @@ struct ProfileHeaderPlaybackRuntimeTests {
             .bindMemory(to: ProfileHeaderVertVertex.self, capacity: 1)
             .pointee.position
     }
+
+    private func meanZ(
+        forOwners owners: [Int],
+        groups: [Int?: [Int]],
+        particles: [ParticleState]
+    ) throws -> Float {
+        let indices = owners.flatMap { groups[$0] ?? [] }
+        let populatedIndices = try #require(indices.isEmpty ? nil : indices)
+        return populatedIndices.reduce(0) { $0 + particles[$1].position.z } / Float(populatedIndices.count)
+    }
+
+    private func horizontalBounds(
+        for indices: [Int],
+        particles: [ParticleState]
+    ) throws -> ClosedRange<Float> {
+        let populatedIndices = try #require(indices.isEmpty ? nil : indices)
+        let values = populatedIndices.map { particles[$0].position.x }
+        let minimum = try #require(values.min())
+        let maximum = try #require(values.max())
+        return minimum...maximum
+    }
+}
+
+private extension ClosedRange where Bound == Float {
+    var midpoint: Float { (lowerBound + upperBound) * 0.5 }
 }

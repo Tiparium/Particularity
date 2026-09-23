@@ -303,6 +303,12 @@ struct ModuleCompatibilityTests {
         #expect(manifest.settings?.sections.first?.controls.last?.defaultValue == .number(0.35))
     }
 
+    @Test("decodes reusable multiline module text controls")
+    func decodesMultilineTextControl() throws {
+        let data = try #require("\"multilineText\"".data(using: .utf8))
+        #expect(try JSONDecoder().decode(ModuleSettingControlType.self, from: data) == .multilineText)
+    }
+
     @Test("decodes module time scale profile")
     func decodesModuleTimeScaleProfile() throws {
         let json = """

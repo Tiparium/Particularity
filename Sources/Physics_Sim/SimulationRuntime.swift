@@ -1024,12 +1024,14 @@ final class SimulationRuntime: @unchecked Sendable {
         let settings = currentSimulationState.profileHeader
         if let profileHeaderPlaybackRuntime,
            profileHeaderPlaybackRuntime.sourceText == settings.text,
+           profileHeaderPlaybackRuntime.sourceTextAlignment == settings.textAlignment,
            profileHeaderPlaybackRuntime.sourceNodesPerCharacter == settings.nodesPerCharacter,
            profileHeaderPlaybackRuntime.sourceTextScale == settings.textScale {
             return profileHeaderPlaybackRuntime
         }
         let runtime = ProfileHeaderPlaybackRuntime(
             text: settings.text,
+            textAlignment: settings.textAlignment,
             nodesPerCharacter: settings.nodesPerCharacter,
             textScale: settings.textScale,
             motionRadius: settings.motionRadius,

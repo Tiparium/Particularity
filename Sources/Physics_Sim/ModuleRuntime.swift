@@ -295,6 +295,7 @@ enum ModuleSettingControlType: String, Decodable, Equatable, Sendable {
     case intSlider
     case segmented
     case text
+    case multilineText
     case color
 }
 
@@ -1266,6 +1267,7 @@ struct SimulationViewportState: Equatable {
 struct ProfileHeaderViewportSettings: Equatable {
     var isActive = false
     var text = "Nainoa Faulkner-Jackson"
+    var textAlignment = ProfileHeaderTextAlignment.center
     var nodesPerCharacter = 500
     var textScale: Float = 0.5
     var motionRadius: Float = 0.018
@@ -1278,6 +1280,12 @@ struct ProfileHeaderViewportSettings: Equatable {
     var nodeSizeCeiling: Float = 0.010
     var vertThickness: Float = 0.32
     var vertThicknessVariance: Float = 0.35
+}
+
+enum ProfileHeaderTextAlignment: String, Equatable {
+    case left
+    case center
+    case right
 }
 
 enum MLPlaybackSurfaceSelectionMode: String, Equatable, Hashable {

@@ -13,7 +13,8 @@
       "id": "source",
       "title": "Wordmark",
       "controls": [
-        { "id": "text", "title": "Text", "type": "text", "defaultValue": "Nainoa Faulkner-Jackson" },
+        { "id": "text", "title": "Text", "type": "multilineText", "defaultValue": "Nainoa Faulkner-Jackson", "helpText": "Use line breaks to arrange text on multiple lines." },
+        { "id": "textAlignment", "title": "Line Alignment", "type": "segmented", "defaultValue": "center", "options": [{ "value": "left", "title": "Left" }, { "value": "center", "title": "Center" }, { "value": "right", "title": "Right" }] },
         { "id": "nodesPerCharacter", "title": "Nodes Per Character", "type": "intSlider", "defaultValue": 500, "minimum": 50, "maximum": 1000, "step": 25 },
         { "id": "textScale", "title": "Global Scale", "type": "slider", "defaultValue": 0.5, "minimum": 0.2, "maximum": 2.0, "step": 0.05 }
       ]

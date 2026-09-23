@@ -95,6 +95,9 @@ enum SimulationConfigurationDerivation {
         return ProfileHeaderViewportSettings(
             isActive: true,
             text: producerSettings["text"]?.textValue ?? "Nainoa Faulkner-Jackson",
+            textAlignment: ProfileHeaderTextAlignment(
+                rawValue: producerSettings["textAlignment"]?.textValue ?? "center"
+            ) ?? .center,
             nodesPerCharacter: min(max(Int(producerSettings["nodesPerCharacter"]?.numberValue ?? 500), 50), 1_000),
             textScale: Float(min(max(producerSettings["textScale"]?.numberValue ?? 0.5, 0.2), 2)),
             motionRadius: Float(min(max(processorSettings["motionRadius"]?.numberValue ?? 0.018, 0), 0.08)),

@@ -30,6 +30,12 @@ final class ProfileHeaderPlaybackRuntime: ParticlePlaybackRuntime {
         }
     }
 
+    private struct TextLineLayout {
+        let origin: NSPoint
+        let centerY: CGFloat
+        let glyphIntervals: [GlyphInterval]
+    }
+
     private struct Anchor {
         let position: SIMD3<Float>
         let phaseA: Float
@@ -59,6 +65,7 @@ final class ProfileHeaderPlaybackRuntime: ParticlePlaybackRuntime {
     private var cachedConnectionRequest: ConnectionRequest?
     private var cachedConnectionPairs: [(source: Int, target: Int)] = []
     let sourceText: String
+    let sourceTextAlignment: ProfileHeaderTextAlignment
     let sourceNodesPerCharacter: Int
     let sourceTextScale: Float
     var motionRadius: Float
@@ -76,6 +83,7 @@ final class ProfileHeaderPlaybackRuntime: ParticlePlaybackRuntime {
 
     init(
         text: String,
+        textAlignment: ProfileHeaderTextAlignment = .center,
         nodesPerCharacter: Int,
         textScale: Float,
         motionRadius: Float,
@@ -83,11 +91,13 @@ final class ProfileHeaderPlaybackRuntime: ParticlePlaybackRuntime {
     ) {
         self.durationSeconds = max(4, durationSeconds)
         sourceText = text
+        sourceTextAlignment = textAlignment
         sourceNodesPerCharacter = nodesPerCharacter
         sourceTextScale = textScale
         self.motionRadius = motionRadius
         let generated = Self.makeProfile(
             text: text,
+            textAlignment: textAlignment,
             nodesPerCharacter: nodesPerCharacter,
             textScale: textScale
         )
@@ -215,15 +225,25 @@ final class ProfileHeaderPlaybackRuntime: ParticlePlaybackRuntime {
 
     private static func makeProfile(
         text: String,
+        textAlignment: ProfileHeaderTextAlignment,
         nodesPerCharacter: Int,
         textScale: Float
     ) -> GeneratedProfile {
         let font = NSFont.systemFont(ofSize: 260, weight: .semibold)
         let attributes: [NSAttributedString.Key: Any] = [.font: font]
-        let measured = (text as NSString).size(withAttributes: attributes)
+        let normalizedText = text
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+        let lines = normalizedText.components(separatedBy: "\n")
+        let measuredLines = lines.map { ($0 as NSString).size(withAttributes: attributes) }
+        let lineHeight = max(1, ceil(font.boundingRectForFont.height))
+        let lineAdvance = ceil(lineHeight * 1.12)
+        let blockHeight = lineHeight + CGFloat(max(0, lines.count - 1)) * lineAdvance
+        let blockWidth = measuredLines.map(\.width).max() ?? 0
+        let horizontalPadding: CGFloat = 60
         let canvas = NSSize(
-            width: max(240, ceil(measured.width + 120)),
-            height: 520
+            width: max(240, ceil(blockWidth + horizontalPadding * 2)),
+            height: max(520, ceil(blockHeight + 120))
         )
         let bitmap = NSBitmapImageRep(
             bitmapDataPlanes: nil,
@@ -244,19 +264,36 @@ final class ProfileHeaderPlaybackRuntime: ParticlePlaybackRuntime {
         NSBezierPath(rect: NSRect(origin: .zero, size: canvas)).fill()
 
         let finalAttributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.white]
-        let finalSize = (text as NSString).size(withAttributes: finalAttributes)
-        let drawOrigin = NSPoint(
-            x: (canvas.width - finalSize.width) * 0.5,
-            y: (canvas.height - finalSize.height) * 0.5
-        )
-        let textLine = CTLineCreateWithAttributedString(
-            NSAttributedString(string: text, attributes: finalAttributes)
-        )
-        let glyphIntervals = makeGlyphIntervals(for: textLine)
-        (text as NSString).draw(
-            at: drawOrigin,
-            withAttributes: finalAttributes
-        )
+        let blockBottom = (canvas.height - blockHeight) * 0.5
+        var ownerOffset = 0
+        var lineLayouts: [TextLineLayout] = []
+        for (lineIndex, lineText) in lines.enumerated() {
+            let measuredLine = measuredLines[lineIndex]
+            let originX: CGFloat
+            switch textAlignment {
+            case .left:
+                originX = horizontalPadding
+            case .center:
+                originX = (canvas.width - measuredLine.width) * 0.5
+            case .right:
+                originX = canvas.width - horizontalPadding - measuredLine.width
+            }
+            let origin = NSPoint(
+                x: originX,
+                y: blockBottom + CGFloat(lines.count - lineIndex - 1) * lineAdvance
+            )
+            let textLine = CTLineCreateWithAttributedString(
+                NSAttributedString(string: lineText, attributes: finalAttributes)
+            )
+            let glyphIntervals = makeGlyphIntervals(for: textLine, ownerOffset: ownerOffset)
+            ownerOffset += glyphIntervals.count
+            lineLayouts.append(TextLineLayout(
+                origin: origin,
+                centerY: origin.y + lineHeight * 0.5,
+                glyphIntervals: glyphIntervals
+            ))
+            (lineText as NSString).draw(at: origin, withAttributes: finalAttributes)
+        }
         NSGraphicsContext.restoreGraphicsState()
 
         let gridStep = 3
@@ -269,16 +306,15 @@ final class ProfileHeaderPlaybackRuntime: ParticlePlaybackRuntime {
                 let offset = y * bitmap.bytesPerRow + x * 4
                 guard data[offset + 3] > 96 else { continue }
                 let seed = Float((x &* 73856093) ^ (y &* 19349663))
-                let localX = CGFloat(x) - drawOrigin.x
                 samples.append(RasterSample(
                     x: x,
                     y: y,
                     seed: seed,
-                    glyphOwner: glyphOwner(at: localX, intervals: glyphIntervals)
+                    glyphOwner: glyphOwner(at: NSPoint(x: x, y: y), lineLayouts: lineLayouts)
                 ))
             }
         }
-        let characterCount = max(1, text.count { !$0.isWhitespace })
+        let characterCount = max(1, normalizedText.count { !$0.isWhitespace })
         let requestedNodeCount = min(24_000, max(1, nodesPerCharacter) * characterCount)
         let targetCount = min(requestedNodeCount, samples.count)
         let selectedSamples: [RasterSample]
@@ -395,7 +431,7 @@ final class ProfileHeaderPlaybackRuntime: ParticlePlaybackRuntime {
         )
     }
 
-    private static func makeGlyphIntervals(for line: CTLine) -> [GlyphInterval] {
+    private static func makeGlyphIntervals(for line: CTLine, ownerOffset: Int) -> [GlyphInterval] {
         let runs = CTLineGetGlyphRuns(line) as NSArray
         var intervals: [GlyphInterval] = []
         var owner = 0
@@ -412,7 +448,7 @@ final class ProfileHeaderPlaybackRuntime: ParticlePlaybackRuntime {
                 let start = positions[glyphIndex].x
                 let end = start + advances[glyphIndex].width
                 intervals.append(GlyphInterval(
-                    owner: owner,
+                    owner: ownerOffset + owner,
                     lowerX: min(start, end),
                     upperX: max(start, end)
                 ))
@@ -429,6 +465,15 @@ final class ProfileHeaderPlaybackRuntime: ParticlePlaybackRuntime {
             if leftDistance != rightDistance { return leftDistance < rightDistance }
             return $0.owner < $1.owner
         }?.owner ?? 0
+    }
+
+    private static func glyphOwner(at point: NSPoint, lineLayouts: [TextLineLayout]) -> Int {
+        guard let line = lineLayouts
+            .filter({ !$0.glyphIntervals.isEmpty })
+            .min(by: { abs($0.centerY - point.y) < abs($1.centerY - point.y) }) else {
+            return 0
+        }
+        return glyphOwner(at: point.x - line.origin.x, intervals: line.glyphIntervals)
     }
 
     private static func lineRemainsInsideGlyph(
